@@ -117,7 +117,8 @@ added after the run above.
 
 ## 2026-11-05: skill 0.1.0 on the near-miss case
 
-- **Setup:** as above, `--case no-trigger-spec` only.
+- **Setup:** skill 0.1.0 as committed in `8471a00`; the case as added in
+  `8353a05`; otherwise as above, with `--case no-trigger-spec` only.
 - **Estimated cost:** Sonnet 0.45 USD; Opus 0.74 USD.
 
 | Grader              | Sonnet, without | Sonnet, with | Opus, without | Opus, with |
@@ -127,7 +128,8 @@ added after the run above.
 
 The skill misfired on a question a specification answers: on Sonnet every
 time, on Opus once. The answers stayed right (`invalid_grant`), but the runs
-cost about three times as much (Sonnet 0.34 against 0.11 USD), and most of
+cost about three times as much (Sonnet, over three runs: 0.34 against
+0.11 USD), and most of
 this project's work is questions of this kind. The runs' workspaces were not
 kept, so what the skill did once it fired is unknown.
 
@@ -138,8 +140,8 @@ body says the same. Every case, not only this one, has to be run again.
 
 ## 2026-11-05: skill 0.2.0, with and without
 
-- **Setup:** all nine cases; skill as committed in `8f95246`; otherwise as
-  for 0.1.0.
+- **Setup:** all nine cases, as of `8353a05`; skill as committed in
+  `8f95246`; otherwise as for 0.1.0.
 - **Estimated cost and time of the whole suite:** Sonnet 4.47 USD,
   1,322 s; Opus 8.89 USD, 1,962 s.
 
@@ -156,12 +158,13 @@ Both models again gave the same pattern:
 
 **What changed from 0.1.0.** The skill no longer fires on the question RFC
 7636 settles (0.1.0 misfired there in 3 of 3 runs on Sonnet and 1 of 3 on
-Opus; 0.2.0 in none), and narrowing the description cost nothing elsewhere: it still
-fired on every decision question. Mean delta 0.36 on both.
+Opus; 0.2.0 in none), and narrowing the description cost nothing
+elsewhere: it still fired on every decision question. Mean delta 0.36 on
+both.
 
 **Estimated cost per run of a decision case**, averaged over the four gap
-cases: Sonnet 0.22 USD with the skill against 0.04 without, about five times
-as much; Opus 0.43 against 0.09, about four and a half. Both took about three
+cases: Sonnet 0.22 USD with the skill against 0.05 without; Opus 0.43
+against 0.09. Both about four and a half times as much. Both took about three
 times as long. On the three cases where it must not fire, cost and time were
 unchanged.
 
