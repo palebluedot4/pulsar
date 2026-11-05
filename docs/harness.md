@@ -218,9 +218,11 @@ None yet.
   - The three review controls were listed but nothing told an agent to run
     them; `AGENTS.md` now has a "Before a pull request" section.
   - Added `make spell`: the audit before it had found British spellings in
-    documents that only a Go linter was checking.
+    documents that no gate checked.
   - Node tools now reinstall when `pnpm-workspace.yaml` changes; an override
-    edited alone could have passed locally and failed in CI.
+    edited alone could have passed locally and failed in CI. The changed
+    fingerprint makes every existing clone reinstall once, which the sandbox
+    cannot do: after this lands, run `make tools` outside it.
   - Dropped the `docker compose *` sandbox exclusion until the conformance
     suite needs it (#2).
   - The near-miss eval case is cited at the commit that added it, a cost was
