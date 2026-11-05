@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 // Endpoint paths, relative to the issuer. Every endpoint URL pulsar
@@ -24,23 +23,24 @@ const (
 const discoveryCacheControl = "public, max-age=3600"
 
 // metadata is the OpenID Provider Metadata of OpenID Connect Discovery 1.0
-// §3, with the RFC 8414 and RFC 9207 additions pulsar supports.
+// §3, with the RFC 8414 and RFC 9207 additions pulsar supports. A list with
+// no elements is omitted, as §4.2 requires.
 type metadata struct {
 	Issuer                                     string   `json:"issuer"`
 	AuthorizationEndpoint                      string   `json:"authorization_endpoint"`
 	TokenEndpoint                              string   `json:"token_endpoint"`
 	UserinfoEndpoint                           string   `json:"userinfo_endpoint"`
 	JWKSURI                                    string   `json:"jwks_uri"`
-	ScopesSupported                            []string `json:"scopes_supported"`
-	ResponseTypesSupported                     []string `json:"response_types_supported"`
-	ResponseModesSupported                     []string `json:"response_modes_supported"`
-	GrantTypesSupported                        []string `json:"grant_types_supported"`
-	SubjectTypesSupported                      []string `json:"subject_types_supported"`
-	IDTokenSigningAlgValuesSupported           []string `json:"id_token_signing_alg_values_supported"`
-	TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
-	TokenEndpointAuthSigningAlgValuesSupported []string `json:"token_endpoint_auth_signing_alg_values_supported"`
-	CodeChallengeMethodsSupported              []string `json:"code_challenge_methods_supported"`
-	ClaimsSupported                            []string `json:"claims_supported"`
+	ScopesSupported                            []string `json:"scopes_supported,omitempty"`
+	ResponseTypesSupported                     []string `json:"response_types_supported,omitempty"`
+	ResponseModesSupported                     []string `json:"response_modes_supported,omitempty"`
+	GrantTypesSupported                        []string `json:"grant_types_supported,omitempty"`
+	SubjectTypesSupported                      []string `json:"subject_types_supported,omitempty"`
+	IDTokenSigningAlgValuesSupported           []string `json:"id_token_signing_alg_values_supported,omitempty"`
+	TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported,omitempty"`
+	TokenEndpointAuthSigningAlgValuesSupported []string `json:"token_endpoint_auth_signing_alg_values_supported,omitempty"`
+	CodeChallengeMethodsSupported              []string `json:"code_challenge_methods_supported,omitempty"`
+	ClaimsSupported                            []string `json:"claims_supported,omitempty"`
 	ClaimsParameterSupported                   bool     `json:"claims_parameter_supported"`
 	RequestParameterSupported                  bool     `json:"request_parameter_supported"`
 	// The default is true (Discovery §3), so false must be sent.
@@ -49,17 +49,18 @@ type metadata struct {
 }
 
 // DiscoveryPath returns the path at which the discovery document for issuer
-// is served: the issuer's path, without a terminating slash, followed by
-// /.well-known/openid-configuration (Discovery §4.1).
+// is served: the issuer's path followed by /.well-known/openid-configuration
+// (Discovery §4). The issuer is one config.Load accepted, so it has no
+// terminating slash.
 func DiscoveryPath(issuer *url.URL) string {
-	return strings.TrimSuffix(issuer.EscapedPath(), "/") + discoveryPath
+	return issuer.EscapedPath() + discoveryPath
 }
 
-// HandleDiscovery serves the discovery document for issuer, which must
-// already be a valid Issuer Identifier. The document never changes, so it
-// is encoded once.
+// HandleDiscovery serves the discovery document for issuer, which is one
+// config.Load accepted. The document never changes, so it is encoded
+// once.
 func HandleDiscovery(issuer *url.URL) http.Handler {
-	base := strings.TrimSuffix(issuer.String(), "/")
+	base := issuer.String()
 	body, err := json.Marshal(metadata{
 		Issuer:                            issuer.String(),
 		AuthorizationEndpoint:             base + authorizationPath,
@@ -73,8 +74,9 @@ func HandleDiscovery(issuer *url.URL) http.Handler {
 		SubjectTypesSupported:             []string{"public"},
 		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "private_key_jwt", "none"},
-		// Asymmetric algorithms only, as RFC 8725 §3.1 asks of an
-		// allow-list; never none (Discovery §3).
+		// An allow-list, as RFC 8725 §3.1 requires: no HMAC algorithms,
+		// because client_secret_jwt is not offered, and never none
+		// (Discovery §3).
 		TokenEndpointAuthSigningAlgValuesSupported: []string{"RS256", "PS256", "ES256"},
 		CodeChallengeMethodsSupported:              []string{"S256"},
 		ClaimsSupported: []string{

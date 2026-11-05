@@ -47,6 +47,10 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("PULSAR_TLS_KEY is required when PULSAR_TLS_CERT is set")
 	case cfg.TLSCertFile == "" && cfg.TLSKeyFile != "":
 		return Config{}, errors.New("PULSAR_TLS_CERT is required when PULSAR_TLS_KEY is set")
+	case cfg.TLSCertFile != "" && issuer.Scheme != "https":
+		// Otherwise every endpoint URL pulsar publishes would name a
+		// scheme it does not serve.
+		return Config{}, errors.New("PULSAR_ISSUER must use https when PULSAR_TLS_CERT is set")
 	}
 	return cfg, nil
 }
@@ -74,6 +78,11 @@ func parseIssuer(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("%q must not have a query", raw)
 	case strings.Contains(raw, "#"):
 		return nil, fmt.Errorf("%q must not have a fragment", raw)
+	// Without a terminating slash, the issuer is exactly the discovery URL
+	// minus /.well-known/openid-configuration, which is how Clients
+	// derive it.
+	case strings.HasSuffix(u.Path, "/"):
+		return nil, fmt.Errorf("%q must not end with /", raw)
 	}
 	// The issuer is compared as a string (Discovery §4.3), so the value
 	// pulsar publishes must be the one configured, character for character.
