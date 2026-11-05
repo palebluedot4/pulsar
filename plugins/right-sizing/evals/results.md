@@ -40,3 +40,53 @@ a conceptual explanation, check that its description does not reach too far.
 | `no-trigger-explain`     | Guard: skill must not fire on a conceptual question     |
 
 The cases are fixed before the skill is evaluated, and not tuned after.
+
+## 2026-11-05: skill 0.1.0, with and without
+
+- **Setup:** cases as committed in `d0d09ba`, skill as committed in
+  `6e479ee`; Claude Code 2.1.318; `--ablation with-without`; three runs per
+  arm; agent `claude-sonnet-5-5`, then `claude-opus-5-5`; judge
+  `claude-sonnet-5-5` for both.
+- **Cost and time of the whole suite:** Sonnet 4.32 USD, 1,200 s; Opus
+  7.92 USD, 1,673 s.
+
+Both models gave the same pattern, so one table holds for each:
+
+| Grader                               | Without skill | With skill |
+| ------------------------------------ | ------------- | ---------- |
+| `researched` (fetched sources)       | 0/12          | 12/12      |
+| `research-saved`                     | 0/12          | 12/12      |
+| `dated-sources`                      | 0/12          | 12/12      |
+| `linked-sources`                     | 0/12          | 12/12      |
+| `right-sized`                        | 12/12         | 12/12      |
+| `asks-before-deciding`, `decides`    | 6/6           | 6/6        |
+| `skill-not-fired` (bug, explanation) | 6/6           | 6/6        |
+| `fixes-bug`, `explains`              | 6/6           | 6/6        |
+| `skill-fired` (decision questions)   | —             | 18/18      |
+
+**What changed.** Without the skill, neither model researched a plainly
+asked decision; with it, every run fetched primary sources and saved dated,
+linked research, on both models. Nothing regressed: decisions stayed sized to
+their context, and the skill fired on every decision question and on neither
+the bug fix nor the conceptual question. Mean delta 0.40 on both.
+
+**What it costs, per run of a decision case.** Averages from the four gap
+cases:
+
+| Model  | Without skill          | With skill             |
+| ------ | ---------------------- | ---------------------- |
+| Sonnet | 0.04–0.05 USD, 16–21 s | 0.16–0.29 USD, 52–61 s |
+| Opus   | 0.08–0.12 USD, 19–37 s | 0.24–0.51 USD, 61–91 s |
+
+About four to five times the cost and three times the time of an answer from
+memory. Where it did not fire, the cost was unchanged.
+
+**What was read, not just scored.** An Opus research file for `jobs-small`
+cites PostgreSQL's documentation for `FOR UPDATE SKIP LOCKED`, River's own
+documentation for its retry policy and benchmarks, and River's releases for
+its pre-1.0 status, each with an access date and marked primary, and notes
+that River does not claim exactly-once delivery.
+
+**Limits.** Three runs per arm; eight synthetic cases; one judge model. The
+gap cases check that research happened and was recorded, not that every
+cited fact is right.
