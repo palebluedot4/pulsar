@@ -32,14 +32,14 @@ incident or eval that justified it.
 | `AGENTS.md` (imported by `CLAUDE.md`)            | Guide, inferential    | What an agent cannot discover from the code: authorities, conventions, what not to build                                                                                                                                                                                                                                                                                                 | Hypothesis                                                                                                                                                                                                              |
 | Sandbox (`.claude/settings.json`)                | Guide, computational  | The primary local control: writes and network are confined at the OS level. Apart from the commands listed under Deliberate weakenings, Claude cannot leave it (`allowUnsandboxedCommands: false`)                                                                                                                                                                                       | Hypothesis                                                                                                                                                                                                              |
 | Permission rules                                 | Guide, computational  | Deny secrets; ask before `git push`; allow read-only `gh` commands, which run outside the sandbox and so are not auto-allowed as sandboxed commands are. Bash argument patterns are hints, not enforcement: `git push -f` evades the force-push deny but is still caught by the `git push` ask; `git commit -n` evades the `--no-verify` deny entirely, which is why CI rechecks commits | Hypothesis                                                                                                                                                                                                              |
-| PostToolUse `format.sh`                          | Sensor, computational | Formatting never reaches a gate or a reviewer; Go via golangci-lint, Markdown, YAML and JSON via Prettier, Markdown also via markdownlint, one file at a time                                                                                                                                                                                                                            | Hypothesis                                                                                                                                                                                                              |
+| PostToolUse `format.sh`                          | Sensor, computational | Formatting never reaches a gate or a reviewer; Go via golangci-lint, Markdown, YAML and JSON via Prettier, Markdown also via markdownlint, shell via shfmt, one file at a time                                                                                                                                                                                                           | Hypothesis                                                                                                                                                                                                              |
 | Prettier and `markdownlint-cli2` in `make check` | Sensor, computational | Documents are a primary output here; Prettier formats, markdownlint lints what formatting cannot decide                                                                                                                                                                                                                                                                                  | Incident: editor and gate disagreed                                                                                                                                                                                     |
 | `make setup` / `make tools`                      | Guide, computational  | One definition of the toolchain for a fresh machine and for CI; every tool pinned                                                                                                                                                                                                                                                                                                        | Hypothesis                                                                                                                                                                                                              |
 | `shellcheck` and `shfmt` in `make check`         | Sensor, computational | The harness is itself code; its scripts get the same scrutiny as Go                                                                                                                                                                                                                                                                                                                      | Hypothesis                                                                                                                                                                                                              |
 | Stop `stop-check.sh` → `make check`              | Sensor, computational | An agent may not finish on a red gate; reported once per tree so it cannot loop. Tested in `internal/harness`                                                                                                                                                                                                                                                                            | Incident: silent fingerprint failure                                                                                                                                                                                    |
 | `make check` / `make verify`                     | Sensor, computational | The objective definition of done                                                                                                                                                                                                                                                                                                                                                         | Hypothesis                                                                                                                                                                                                              |
 | `main` ruleset                                   | Sensor, computational | Where enforcement actually lives: a pull request is required, `make verify` and Conventional Commits must pass on an up-to-date branch, review threads must be resolved, and force pushes and deletion are blocked, with no bypass                                                                                                                                                       | Hypothesis                                                                                                                                                                                                              |
-| `repocheck`                                      | Sensor, computational | Every requirement has a test; tests cannot quietly disappear; TODOs name issues                                                                                                                                                                                                                                                                                                          | Hypothesis                                                                                                                                                                                                              |
+| `repocheck`                                      | Sensor, computational | Every requirement has a test, so removing a requirement's last test fails the gate; TODOs name issues. No requirement exists yet, so it guards nothing today                                                                                                                                                                                                                             | Hypothesis                                                                                                                                                                                                              |
 | `golangci-lint` configuration                    | Sensor, computational | Rules a tool can decide live in the tool, not in prose                                                                                                                                                                                                                                                                                                                                   | Hypothesis                                                                                                                                                                                                              |
 | Conventional Commits hook and CI job             | Sensor, computational | One commit format, checked locally and in CI from one script                                                                                                                                                                                                                                                                                                                             | Hypothesis                                                                                                                                                                                                              |
 | `mattpocock-skills:code-review` (spec axis)      | Sensor, inferential   | Fresh-context review of the diff against the spec                                                                                                                                                                                                                                                                                                                                        | Pending ablation                                                                                                                                                                                                        |
@@ -76,6 +76,12 @@ Each loosening of the sandbox, and the need that forced it:
 - **`excludedCommands`: `docker compose *`.** Docker cannot run inside the
   sandbox; needed for the conformance suite (#2).
 - **`network.allowLocalBinding: true`.** Tests start servers on loopback.
+- **`filesystem.allowWrite`: `~/go` and the Go and golangci-lint caches.**
+  The Go toolchain and the linter write their module and build caches there.
+  `~/go/bin` is one place a planted executable could land.
+- **`network.allowedDomains`: `proxy.golang.org`, `sum.golang.org`,
+  `vuln.go.dev`.** Module downloads, checksum verification and govulncheck's
+  vulnerability database.
 - **Hooks run outside the sandbox.** Claude Code runs hooks with the
   maintainer's permissions, and both hooks execute files agents can edit:
   - The Stop hook runs `make check`, which executes the Makefile and every Go
@@ -101,9 +107,10 @@ This repository's own marketplace, `pulsar`, does update itself: it only ever
 moves to what has merged on `main`, and a plugin's new version takes effect
 when its `version` is bumped, which makes the bump the release. Every eval
 result and ExecPlan outcome records the Claude Code version, model IDs and
-plugin commit SHAs, and Claude Code's own updates are frozen
-(`DISABLE_AUTOUPDATER=1`) while a comparison runs. `GOLANGCI_LINT_VERSION` and `SHELLCHECK_VERSION` in
-the Makefile are invisible to Dependabot and are bumped by hand. So are the
+the commits on `main` it ran against; `make eval` sets
+`DISABLE_AUTOUPDATER=1` so Claude Code cannot update during a run.
+`GOLANGCI_LINT_VERSION` and `SHELLCHECK_VERSION` in the Makefile are
+invisible to Dependabot and are bumped by hand. So are the
 Node tools: Dependabot raises alerts from `pnpm-lock.yaml` but cannot update
 a pnpm 12 lockfile. Its first security updates, on 2026-11-05, failed with
 "VulnerabilityAuditor: missing lockfile".
@@ -143,13 +150,13 @@ None yet.
   - The format hook linted and fixed every Markdown file on each edit; it now
     passes `--no-globs` and touches only the edited file.
   - markdownlint ran through `npx` with no lockfile, so its dependencies
-    resolved at run time. It is now pinned by `package-lock.json` and updated
-    by Dependabot.
+    resolved at run time. It was then pinned by `package-lock.json`, later
+    replaced by pnpm (below).
   - Added `shellcheck` and `shfmt` over the harness scripts, and tests for the
     Stop hook's pass, fail-once and unfingerprintable paths.
   - Set `allowUnsandboxedCommands: false`, kept `enableWeakerNetworkIsolation`
     after testing showed Go needs it, and documented every weakening.
-  - Pinned the plugin marketplace with `"autoUpdate": false`.
+  - Froze the plugin marketplace with `"autoUpdate": false`.
 - Replaced npm with pnpm for its default supply-chain protections, and added
   Prettier: markdownlint is a linter, and the most widely adopted formatter
   for Markdown, YAML and JSON is Prettier.
@@ -192,3 +199,11 @@ None yet.
   failed to patch two alerts. re2js is patched with a pnpm override; the
   katex alert is dismissed because markdownlint never loads the code that
   calls katex.
+- From a full audit of every file by an agent that had written none of them:
+  eval results cited commit SHAs that a rebase merge had rewritten; updates
+  were said to be frozen during evals but `make eval` did not freeze them;
+  two sandbox loosenings were unlisted, and one of them,
+  `storage.googleapis.com`, had no recorded need and was removed; the commit
+  check let "feat: A new endpoint" through, now fixed and tested; and a dozen
+  descriptions said more than the files did. Dependabot's npm entry was
+  dropped, since it can only fail.

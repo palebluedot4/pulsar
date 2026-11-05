@@ -4,8 +4,9 @@ A Claude Code skill for technical and project decisions: establish the
 project's real scale, research current practice from dated primary sources,
 keep what fits, decide, and record the research.
 
-It was written evaluation-first. The cases in `evals/` came before the skill,
-and `evals/results.md` records what the baseline did without it and what the
+It was written evaluation-first. Eight of the nine cases in `evals/` came
+before the skill; the ninth was added after a review, and `evals/results.md`
+says so. That file records what the baseline did without it and what the
 skill changes. Without it, models asked a plain "which should we use?"
 answered from training data and did no research.
 

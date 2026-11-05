@@ -7,7 +7,7 @@ with the questions Anthropic asks before leaving a task unattended
 (<https://code.claude.com/docs/en/best-practices>).
 
 Plans being worked live in `active/`; finished ones move to `completed/`
-with their Outcomes filled in. Name a plan after its work:
+with their Outcomes filled in. Both are created with the first plan. Name a plan after its work:
 `active/authorization-code-flow.md`.
 
 A plan is self-contained: a reader who has seen nothing else in the
