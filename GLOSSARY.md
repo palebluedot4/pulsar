@@ -24,8 +24,8 @@ _Avoid_: app
 ## Identity
 
 **Subject**:
-The identifier the OP assigns an End-User: the same for every Client, never
-reassigned, and not the name the End-User types to sign in.
+The locally unique identifier the OP assigns an End-User: never reassigned,
+and not the name the End-User types to sign in.
 _Avoid_: user ID, username, sub (in prose)
 
 ## Authentication and authorization
