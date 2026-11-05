@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -15,26 +16,41 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/pressly/goose/v3/lock"
+
+	"github.com/palebluedot4/pulsar/internal/postgres"
+	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
+
+// loopbackIssuer is an issuer pulsar accepts without TLS, for tests about
+// something else.
+const loopbackIssuer = "http://127.0.0.1"
 
 func TestRun(t *testing.T) {
 	t.Parallel()
 
-	addr, stop := startRun(t, map[string]string{"PULSAR_ISSUER": "http://127.0.0.1"})
-	resp := get(t, http.DefaultClient, "http://"+addr+"/livez")
-	if err := resp.Body.Close(); err != nil {
-		t.Errorf("close body: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET /livez status = %d, want %d", resp.StatusCode, http.StatusOK)
+	p := start(t, map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": postgrestest.NewDatabase(t),
+	})
+	addr := p.waitListening()
+	p.waitMigrated()
+
+	for _, path := range []string{"/livez", "/readyz"} {
+		if got := status(t, "http://"+addr+path); got != http.StatusOK {
+			t.Errorf("GET %s status = %d, want %d", path, got, http.StatusOK)
+		}
 	}
 
-	if err := stop(); err != nil {
+	if err := p.stop(); err != nil {
 		t.Errorf("run() = %v, want nil after cancellation", err)
 	}
 }
@@ -57,11 +73,15 @@ func TestRunPublishesIssuer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.issuer, func(t *testing.T) {
 			t.Parallel()
-			addr, stop := startRun(t, map[string]string{"PULSAR_ISSUER": tt.issuer})
+			p := start(t, map[string]string{
+				"PULSAR_ISSUER":       tt.issuer,
+				"PULSAR_DATABASE_URL": postgrestest.NewDatabase(t),
+			})
+			addr := p.waitListening()
 			if got := discoveredIssuer(t, http.DefaultClient, "http://"+addr+tt.path); got != tt.issuer {
 				t.Errorf("GET %s issuer = %q, want %q", tt.path, got, tt.issuer)
 			}
-			if err := stop(); err != nil {
+			if err := p.stop(); err != nil {
 				t.Errorf("run() = %v, want nil after cancellation", err)
 			}
 		})
@@ -72,18 +92,20 @@ func TestRunServesTLS(t *testing.T) {
 	t.Parallel()
 
 	certFile, keyFile, roots := writeCertificate(t)
-	addr, stop := startRun(t, map[string]string{
-		"PULSAR_ISSUER":   "https://127.0.0.1",
-		"PULSAR_TLS_CERT": certFile,
-		"PULSAR_TLS_KEY":  keyFile,
+	p := start(t, map[string]string{
+		"PULSAR_ISSUER":       "https://127.0.0.1",
+		"PULSAR_DATABASE_URL": postgrestest.NewDatabase(t),
+		"PULSAR_TLS_CERT":     certFile,
+		"PULSAR_TLS_KEY":      keyFile,
 	})
+	addr := p.waitListening()
 	client := &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 	}}
 	if got, want := discoveredIssuer(t, client, "https://"+addr+"/.well-known/openid-configuration"), "https://127.0.0.1"; got != want {
 		t.Errorf("GET /.well-known/openid-configuration over TLS issuer = %q, want %q", got, want)
 	}
-	if err := stop(); err != nil {
+	if err := p.stop(); err != nil {
 		t.Errorf("run() = %v, want nil after cancellation", err)
 	}
 }
@@ -150,6 +172,9 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 			setting: "PULSAR_TLS_CERT",
 		},
 	}
+	// A well-formed database URL, so that no case fails for want of one.
+	// The context below is canceled, so it is never connected to.
+	databaseURL := postgrestest.UnreachableURL(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -159,6 +184,7 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 			cancel()
 			env := maps.Clone(tt.env)
 			env["PULSAR_ADDR"] = "127.0.0.1:0"
+			env["PULSAR_DATABASE_URL"] = databaseURL
 			getenv := func(key string) string { return env[key] }
 			err := run(ctx, nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tt.setting) {
@@ -192,30 +218,296 @@ func TestRunDoesNotEchoIssuerPassword(t *testing.T) {
 	}
 }
 
-// startRun runs the program on a loopback port with env as its whole
-// environment, and returns the address it listens on and a function that
-// stops it and returns run's result.
-func startRun(t *testing.T, env map[string]string) (addr string, stop func() error) {
+// pulsar refuses to start when PULSAR_DATABASE_URL is unusable, with an
+// error that names the setting and never repeats the password in it.
+func TestRunRefusesDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	unreachable, err := url.Parse(postgrestest.UnreachableURL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreachable.User = url.UserPassword("pulsar", "hunter2")
+
+	tests := []struct {
+		name        string
+		databaseURL string
+	}{
+		{name: "unset", databaseURL: ""},
+		{name: "malformed", databaseURL: "not a connection string"},
+		{name: "malformed, with a password", databaseURL: "postgres://pulsar:hunter2@localhost:notaport/pulsar"},
+		{name: "unreachable, with a password", databaseURL: unreachable.String()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := map[string]string{
+				"PULSAR_ADDR":         "127.0.0.1:0",
+				"PULSAR_ISSUER":       loopbackIssuer,
+				"PULSAR_DATABASE_URL": tt.databaseURL,
+			}
+			getenv := func(key string) string { return env[key] }
+			err := run(t.Context(), nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
+			if err == nil {
+				t.Fatal("run() = nil, want an error naming PULSAR_DATABASE_URL")
+			}
+			if !strings.Contains(err.Error(), "PULSAR_DATABASE_URL") {
+				t.Errorf("run() = %q, want an error naming PULSAR_DATABASE_URL", err)
+			}
+			if strings.Contains(err.Error(), "hunter2") {
+				t.Errorf("run() = %q, want an error without the password", err)
+			}
+		})
+	}
+}
+
+// Restarting pulsar against a database it has already migrated applies
+// nothing, and fails nothing.
+func TestRunMigratesOnce(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": postgrestest.NewEmptyDatabase(t),
+	}
+
+	first := start(t, env)
+	applied := first.waitMigrated()
+	if err := first.stop(); err != nil {
+		t.Fatalf("first run() = %v, want nil", err)
+	}
+	if applied == 0 {
+		t.Errorf("first run() applied = %d migrations, want more than 0", applied)
+	}
+
+	second := start(t, env)
+	applied = second.waitMigrated()
+	if err := second.stop(); err != nil {
+		t.Fatalf("second run() = %v, want nil", err)
+	}
+	if applied != 0 {
+		t.Errorf("second run() applied = %d migrations, want 0", applied)
+	}
+}
+
+// Replicas starting together against a new database migrate it once: one
+// applies the migrations and the other, held by the lock, finds none left.
+func TestRunConcurrentStartsMigrateOnce(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": postgrestest.NewEmptyDatabase(t),
+	}
+	replicas := []*pulsar{start(t, env), start(t, env)}
+
+	var applied []int
+	for _, p := range replicas {
+		applied = append(applied, p.waitMigrated())
+	}
+	for _, p := range replicas {
+		if err := p.stop(); err != nil {
+			t.Errorf("run() = %v, want nil", err)
+		}
+	}
+	migrated := 0
+	for _, n := range applied {
+		if n > 0 {
+			migrated++
+		}
+	}
+	if migrated != 1 {
+		t.Errorf("concurrent run() applied = %v migrations, want exactly one run to apply more than 0", applied)
+	}
+}
+
+// While another replica migrates, pulsar waits for it rather than migrating
+// too. The other replica is stood in for by a session holding goose's
+// advisory lock; the lock's ID is part of the contract, since replicas of
+// two releases must exclude each other during a rolling deploy.
+//
+// The wait is on the real clock, not in a testing/synctest bubble. The
+// bubble cannot hold this test: pulsar talks to a real PostgreSQL, and a
+// goroutine waiting on the network is not durably blocked, so the bubble's
+// clock gains nothing; and process-wide state that the bubble initializes
+// first belongs to it. Tried on 2026-11-05, the test binary crashed with
+// "select on synctest channel from outside bubble" when a parallel test
+// resolved localhost after the bubble had started net's resolver.
+//
+// It serves meanwhile: /livez answers at once, so a liveness probe does not
+// kill a replica that is rightly waiting, and /readyz answers 503 until the
+// migrations are applied.
+func TestRunWaitsForMigrationLock(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.NewEmptyDatabase(t)
+	unlock := holdMigrationLock(t, databaseURL)
+
+	p := start(t, map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": databaseURL,
+	})
+	addr := p.waitListening()
+	// Long enough for pulsar to have tried the lock, and retried it once.
+	wait := postgres.LockRetryInterval * 3 / 2
+	select {
+	case b, ok := <-p.lines:
+		if ok {
+			t.Fatalf("run() logged %s while another session held the migration lock, want no log line before it is released", b)
+		}
+		t.Fatalf("run() = %v while another session held the migration lock, want it to wait", <-p.done)
+	case <-time.After(wait):
+	}
+	if got := status(t, "http://"+addr+"/livez"); got != http.StatusOK {
+		t.Errorf("GET /livez while waiting for the migration lock status = %d, want %d", got, http.StatusOK)
+	}
+	if got := status(t, "http://"+addr+"/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("GET /readyz while waiting for the migration lock status = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+
+	unlock()
+	if applied := p.waitMigrated(); applied == 0 {
+		t.Errorf("run() after the lock was released applied = %d migrations, want more than 0", applied)
+	}
+	if got := status(t, "http://"+addr+"/readyz"); got != http.StatusOK {
+		t.Errorf("GET /readyz after migrating status = %d, want %d", got, http.StatusOK)
+	}
+	if err := p.stop(); err != nil {
+		t.Errorf("run() = %v, want nil", err)
+	}
+}
+
+// A signal while pulsar waits to migrate, as when a rolling deploy replaces
+// a replica that is still starting, is a graceful exit like one while it
+// serves, not a database fault.
+func TestRunStopsWhileWaitingForMigrationLock(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.NewEmptyDatabase(t)
+	holdMigrationLock(t, databaseURL)
+
+	p := start(t, map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": databaseURL,
+	})
+	p.waitListening()
+	if err := p.stop(); err != nil {
+		t.Errorf("run() stopped while waiting for the migration lock = %v, want nil", err)
+	}
+}
+
+// holdMigrationLock takes goose's migration lock on databaseURL from a
+// session of the test's own, as another replica migrating would hold it,
+// and returns a function that releases it. The session ends with the test.
+func holdMigrationLock(t *testing.T, databaseURL string) (unlock func()) {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) }) // Closing after use; a failure loses nothing.
+	if _, err := conn.Exec(t.Context(), "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		if _, err := conn.Exec(t.Context(), "SELECT pg_advisory_unlock($1)", lock.DefaultLockID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// pulsar is a running instance of run, observed as an operator would: through
+// its logs, its HTTP address and its exit error.
+type pulsar struct {
+	t      *testing.T
+	cancel context.CancelFunc
+	done   chan error  // receives run's result
+	lines  chan []byte // log lines, closed when run's output ends
+}
+
+// start runs pulsar on a free loopback port with env, and nothing else, as
+// its environment.
+func start(t *testing.T, env map[string]string) *pulsar {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-
 	env = maps.Clone(env)
 	env["PULSAR_ADDR"] = "127.0.0.1:0"
 	getenv := func(key string) string { return env[key] }
 	logs, stdout := io.Pipe()
-	done := make(chan error, 1)
+	p := &pulsar{t: t, cancel: cancel, done: make(chan error, 1), lines: make(chan []byte, 64)}
+
 	go func() {
-		done <- run(ctx, nil, getenv, strings.NewReader(""), stdout, io.Discard)
+		p.done <- run(ctx, nil, getenv, strings.NewReader(""), stdout, io.Discard)
 		_ = stdout.Close() // An io.PipeWriter's Close always returns nil.
 	}()
+	go func() {
+		defer close(p.lines)
+		sc := bufio.NewScanner(logs)
+		for sc.Scan() {
+			p.lines <- bytes.Clone(sc.Bytes())
+		}
+	}()
+	t.Cleanup(cancel)
+	return p
+}
 
-	addr = listenAddr(t, logs)
-	go io.Copy(io.Discard, logs) //nolint:errcheck // Draining the pipe; its errors are irrelevant.
-	return addr, func() error {
-		cancel()
-		return <-done
+// logLine is a JSON log line, with the attributes the tests read.
+type logLine struct {
+	Msg     string `json:"msg"`
+	Addr    string `json:"addr"`
+	Applied int    `json:"applied"`
+}
+
+// logWait bounds how long a test waits for a log line, so that a pulsar
+// that never logs it fails the test instead of hanging it.
+const logWait = 30 * time.Second
+
+// waitFor reads log lines until one has msg, and returns it.
+func (p *pulsar) waitFor(msg string) logLine {
+	p.t.Helper()
+	timeout := time.After(logWait)
+	for {
+		select {
+		case b, ok := <-p.lines:
+			if !ok {
+				p.t.Fatalf("run() = %v before logging %q, want it to log %q", <-p.done, msg, msg)
+			}
+			var line logLine
+			if err := json.Unmarshal(b, &line); err != nil {
+				p.t.Fatalf("log line %q is not JSON: %v", b, err)
+			}
+			if line.Msg == msg {
+				return line
+			}
+		case <-timeout:
+			p.t.Fatalf("run() logged no %q within %v", msg, logWait)
+		}
 	}
+}
+
+// waitListening waits until the instance reports the address it listens
+// on, and returns it.
+func (p *pulsar) waitListening() string {
+	p.t.Helper()
+	return p.waitFor("listening").Addr
+}
+
+// waitMigrated waits until the instance reports its migrations applied, and
+// returns how many it applied.
+func (p *pulsar) waitMigrated() int {
+	p.t.Helper()
+	return p.waitFor("migrated").Applied
+}
+
+// stop cancels the instance and returns run's result.
+func (p *pulsar) stop() error {
+	p.cancel()
+	go func() {
+		for range p.lines {
+		}
+	}()
+	return <-p.done
 }
 
 // get sends a GET request to url and fails the test if none comes back.
@@ -230,6 +522,16 @@ func get(t *testing.T, client *http.Client, url string) *http.Response {
 		t.Fatalf("GET %s: %v", url, err)
 	}
 	return resp
+}
+
+// status sends a GET request to url and returns the response's status code.
+func status(t *testing.T, url string) int {
+	t.Helper()
+	resp := get(t, http.DefaultClient, url)
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("close body: %v", err)
+	}
+	return resp.StatusCode
 }
 
 // discoveredIssuer fetches the discovery document at url and returns its
@@ -303,25 +605,4 @@ func writeCertificate(t *testing.T) (certFile, keyFile string, roots *x509.CertP
 	roots = x509.NewCertPool()
 	roots.AddCert(cert)
 	return certFile, keyFile, roots
-}
-
-// listenAddr reads JSON log lines until the server reports the address it
-// is listening on.
-func listenAddr(t *testing.T, logs io.Reader) string {
-	t.Helper()
-	sc := bufio.NewScanner(logs)
-	for sc.Scan() {
-		var line struct {
-			Msg  string `json:"msg"`
-			Addr string `json:"addr"`
-		}
-		if err := json.Unmarshal(sc.Bytes(), &line); err != nil {
-			t.Fatalf("log line %q is not JSON: %v", sc.Text(), err)
-		}
-		if line.Msg == "listening" {
-			return line.Addr
-		}
-	}
-	t.Fatalf("server exited before listening: %v", sc.Err())
-	return ""
 }
