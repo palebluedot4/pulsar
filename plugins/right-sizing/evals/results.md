@@ -4,6 +4,10 @@ Summaries of eval runs; raw output is in the gitignored `results/`. The
 skill is evaluated on the models it is used with, `claude-opus-5-5` and
 `claude-sonnet-5-5`.
 
+Every cost below is the evaluator's estimate at API list prices. The runs
+used a Claude plan login, not an API key, so they drew on the plan's usage
+rather than being billed; the estimates still compare runs with each other.
+
 ## How the cases were chosen
 
 Exploratory baseline runs on `claude-sonnet-5-5`, with no skill, on
@@ -54,8 +58,8 @@ against; it is not evidence that the description generalizes.
   `6e479ee`; Claude Code 2.1.318; `--ablation with-without`; three runs per
   arm; agent `claude-sonnet-5-5`, then `claude-opus-5-5`; judge
   `claude-sonnet-5-5` for both.
-- **Cost and time of the whole suite:** Sonnet 4.32 USD, 1,200 s; Opus
-  7.92 USD, 1,673 s.
+- **Estimated cost and time of the whole suite:** Sonnet 4.32 USD,
+  1,200 s; Opus 7.92 USD, 1,673 s.
 
 Both models gave the same pattern, so one table holds for each:
 
@@ -110,7 +114,7 @@ added after the run above.
 ## 2026-11-05: skill 0.1.0 on the near-miss case
 
 - **Setup:** as above, `--case no-trigger-spec` only.
-- **Cost:** Sonnet 0.45 USD; Opus 0.74 USD.
+- **Estimated cost:** Sonnet 0.45 USD; Opus 0.74 USD.
 
 | Grader              | Sonnet, without | Sonnet, with | Opus, without | Opus, with |
 | ------------------- | --------------- | ------------ | ------------- | ---------- |
