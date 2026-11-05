@@ -17,6 +17,25 @@ jobs:
     name: make verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    # The real PostgreSQL the tests need. Same major version as Postgres.app
+    # locally; the tag says which release, the digest is what is pulled.
+    # Bumped by hand, with a changelog entry in docs/harness.md.
+    services:
+      postgres:
+        image: postgres:17.11@sha256:653186fe15006c099d2fb3bc1d8461c1dee9d036c43f2e5fdaf4f22e5e601876
+        env:
+          # A throwaway server reachable only from this job, so trust
+          # authentication, and no password in this file.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,6 +59,8 @@ jobs:
       # The same command a developer runs; the Makefile installs every pinned
       # tool it needs, so there is one definition of the toolchain.
       - run: make tools verify
+        env:
+          PULSAR_TEST_DATABASE_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
 
       # zizmor again, with the read-only token for its online audits, such as
       # impostor commits and known-vulnerable actions. Only this step gets the
