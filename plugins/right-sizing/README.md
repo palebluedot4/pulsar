@@ -9,6 +9,17 @@ and `evals/results.md` records what the baseline did without it and what the
 skill changes. Without it, models asked a plain "which should we use?"
 answered from training data and did no research.
 
+This repository is its own plugin marketplace, so another project can use
+the skill as released on `main`:
+
+```text
+/plugin install right-sizing --marketplace palebluedot4/pulsar
+```
+
+Inside this repository it is enabled in `.claude/settings.json`. A new
+version reaches users when `version` in `.claude-plugin/plugin.json` is
+bumped on `main`; until then they keep the version they have.
+
 Run the evals from the repository root with `make eval PLUGIN=right-sizing`.
 
 The interview round borrows its shape, one round of questions each with a
