@@ -39,7 +39,14 @@ a conceptual explanation, check that its description does not reach too far.
 | `no-trigger-bug`         | Guard: skill must not fire on a bug fix                 |
 | `no-trigger-explain`     | Guard: skill must not fire on a conceptual question     |
 
-The cases are fixed before the skill is evaluated, and not tuned after.
+The cases were not changed after the skill was evaluated. The skill was: its
+description now says to use it before answering rather than offer it
+afterwards, and its research step requires fetching the pages a decision
+rests on. Both changes followed earlier runs on these same cases, in which
+Haiku, a model the skill no longer targets, answered from memory and then
+offered the skill, and once searched without reading any page. So the
+trigger rate below was measured on the cases the description was adjusted
+against; it is not evidence that the description generalizes.
 
 ## 2026-11-05: skill 0.1.0, with and without
 
@@ -87,6 +94,15 @@ documentation for its retry policy and benchmarks, and River's releases for
 its pre-1.0 status, each with an access date and marked primary, and notes
 that River does not claim exactly-once delivery.
 
-**Limits.** Three runs per arm; eight synthetic cases; one judge model. The
-gap cases check that research happened and was recorded, not that every
-cited fact is right.
+**Limits.** Three runs per arm; eight synthetic cases; one judge model, whose
+agreement with human judgement has not been measured. The gap cases check
+that research happened and was recorded, not that every cited fact is right.
+The trigger rate comes from cases the description was adjusted against (see
+above).
+
+**Added since.** A review found the two cases where the skill must not fire
+too far from its trigger: the riskiest phrase in the description is "how they
+should build, run or implement something", and most of this project's work
+is questions a specification answers. `no-trigger-spec` asks how a token
+endpoint should respond to a PKCE mismatch, which RFC 7636 settles. It was
+added after the run above and has not yet been run.
