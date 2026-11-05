@@ -90,7 +90,7 @@ shell-lint: $(SHELLCHECK) ## Lint shell scripts and check their formatting
 	$(SHELLCHECK) $(SHELL_SCRIPTS)
 	$(TOOL) shfmt -d $(SHELL_SCRIPTS)
 
-test: ## Unit tests with the race detector
+test: ## Tests with the race detector; needs PostgreSQL at PULSAR_TEST_DATABASE_URL
 	$(GO) test -race -count=1 ./...
 
 tidy-check: ## Fail if go.mod or tools/go.mod is untidy
