@@ -3,7 +3,7 @@
 # Checks a commit message header against Conventional Commits 1.0.0: a known
 # type, an optional scope, an optional "!", a description that does not open
 # with a capitalized word (an acronym such as JWKS is fine) and has no
-# trailing full stop, and at most 72 characters. Used by the commit-msg hook
+# trailing period, and at most 72 characters. Used by the commit-msg hook
 # and by CI, so the rule has one definition.
 
 set -euo pipefail
@@ -46,7 +46,7 @@ if [[ ${description} =~ ^[A-Z]([^A-Z0-9]|$) ]]; then
 	fail "The description starts with a capitalized word."
 fi
 if [[ ${description} == *. ]]; then
-	fail "The description ends with a full stop."
+	fail "The description ends with a period."
 fi
 if ((${#header} > max_header)); then
 	fail "The header is ${#header} characters; the limit is ${max_header}."
