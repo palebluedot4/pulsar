@@ -1,0 +1,8 @@
+# pnpm settings for the repository's Node tools.
+
+overrides:
+  # GHSA-gg6h-894w-4m9c: quadratic-time denial of service in re2js lookbehind
+  # matching, fixed in 2.8.7. markdownlint 0.42.0, the latest, pins 2.8.6 and
+  # runs re2js on every Markdown file it lints, including files a pull request
+  # brings. Remove once markdownlint depends on a patched version.
+  re2js: ^2.8.7

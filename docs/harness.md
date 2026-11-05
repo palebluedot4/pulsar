@@ -103,9 +103,16 @@ when its `version` is bumped, which makes the bump the release. Every eval
 result and ExecPlan outcome records the Claude Code version, model IDs and
 plugin commit SHAs, and Claude Code's own updates are frozen
 (`DISABLE_AUTOUPDATER=1`) while a comparison runs. `GOLANGCI_LINT_VERSION` and `SHELLCHECK_VERSION` in
-the Makefile are invisible to Dependabot and are bumped by hand. Dependabot's
-support for pnpm v11 and later lockfiles is contested; if its first npm
-update fails, the Node tools are bumped by hand too.
+the Makefile are invisible to Dependabot and are bumped by hand. So are the
+Node tools: Dependabot raises alerts from `pnpm-lock.yaml` but cannot update
+a pnpm 12 lockfile. Its first security updates, on 2026-11-05, failed with
+"VulnerabilityAuditor: missing lockfile".
+
+A vulnerable transitive dependency is patched with an override in
+`pnpm-workspace.yaml` when its fixed version is in range, with the advisory
+and the condition for removing the override beside it. When the vulnerable
+code is not reachable from how the tool is used, the alert is dismissed as
+"vulnerable code not actually used", with the evidence in the dismissal.
 
 Tools are installed by the maintainer, outside the sandbox, with `make setup`.
 Inside it, pnpm cannot switch to the version `package.json` pins (it fails to
@@ -181,3 +188,7 @@ None yet.
 - The Conventional Commits check moved to its own workflow, triggered also
   when a pull request is edited. A title that failed the check could not be
   fixed: editing it ran nothing, and a rerun replays the original title.
+- Dependabot cannot update a pnpm 12 lockfile, as first observed when it
+  failed to patch two alerts. re2js is patched with a pnpm override; the
+  katex alert is dismissed because markdownlint never loads the code that
+  calls katex.
