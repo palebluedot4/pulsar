@@ -1,0 +1,19 @@
+# Build and test output
+*.test
+*.out
+coverage.*
+
+# Pinned tools: release binaries from `make tools`, Node tools from pnpm
+/bin/
+/node_modules/
+
+# macOS
+.DS_Store
+
+# Secrets
+.env
+.env.*
+
+# Per-user agent state
+.claude/settings.local.json
+.claude/worktrees/
