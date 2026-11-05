@@ -2,14 +2,13 @@ package server
 
 import (
 	"net/http"
-	"net/url"
 
 	"github.com/palebluedot4/pulsar/internal/oidc"
 )
 
 // addRoutes maps pulsar's entire HTTP surface. The protocol endpoints sit
 // under the issuer's path; the operational ones at the root.
-func addRoutes(mux *http.ServeMux, issuer *url.URL) {
+func addRoutes(mux *http.ServeMux, issuer *oidc.Issuer) {
 	mux.Handle("GET /livez", handleLive())
 	mux.Handle("GET "+oidc.DiscoveryPath(issuer), oidc.HandleDiscovery(issuer))
 }

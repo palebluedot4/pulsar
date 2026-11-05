@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 // Endpoint paths, relative to the issuer. Every endpoint URL pulsar
@@ -50,23 +49,20 @@ type metadata struct {
 
 // DiscoveryPath returns the path at which the discovery document for issuer
 // is served: the issuer's path followed by /.well-known/openid-configuration
-// (Discovery §4). The issuer is one config.Load accepted, so it has no
-// terminating slash.
-func DiscoveryPath(issuer *url.URL) string {
-	return issuer.EscapedPath() + discoveryPath
+// (Discovery §4).
+func DiscoveryPath(issuer *Issuer) string {
+	return issuer.route(discoveryPath)
 }
 
-// HandleDiscovery serves the discovery document for issuer, which is one
-// config.Load accepted. The document never changes, so it is encoded
-// once.
-func HandleDiscovery(issuer *url.URL) http.Handler {
-	base := issuer.String()
+// HandleDiscovery serves the discovery document for issuer. The document
+// never changes, so it is encoded once.
+func HandleDiscovery(issuer *Issuer) http.Handler {
 	body, err := json.Marshal(metadata{
 		Issuer:                            issuer.String(),
-		AuthorizationEndpoint:             base + authorizationPath,
-		TokenEndpoint:                     base + tokenPath,
-		UserinfoEndpoint:                  base + userinfoPath,
-		JWKSURI:                           base + jwksPath,
+		AuthorizationEndpoint:             issuer.endpointURL(authorizationPath),
+		TokenEndpoint:                     issuer.endpointURL(tokenPath),
+		UserinfoEndpoint:                  issuer.endpointURL(userinfoPath),
+		JWKSURI:                           issuer.endpointURL(jwksPath),
 		ScopesSupported:                   []string{"openid", "profile", "email", "address", "phone"},
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},

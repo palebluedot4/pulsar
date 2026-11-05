@@ -3,12 +3,13 @@ package server
 
 import (
 	"net/http"
-	"net/url"
+
+	"github.com/palebluedot4/pulsar/internal/oidc"
 )
 
 // New returns the handler that serves every pulsar endpoint for the OP
 // whose Issuer Identifier is issuer.
-func New(issuer *url.URL) http.Handler {
+func New(issuer *oidc.Issuer) http.Handler {
 	mux := http.NewServeMux()
 	addRoutes(mux, issuer)
 	return mux

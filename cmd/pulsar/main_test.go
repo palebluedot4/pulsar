@@ -110,6 +110,14 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 		{name: "issuer with query", env: map[string]string{"PULSAR_ISSUER": "https://op.example?tenant=a"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer with empty query", env: map[string]string{"PULSAR_ISSUER": "https://op.example?"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer with userinfo", env: map[string]string{"PULSAR_ISSUER": "https://user@op.example"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with empty port", env: map[string]string{"PULSAR_ISSUER": "https://op.example:"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with default https port", env: map[string]string{"PULSAR_ISSUER": "https://op.example:443"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with default http port", env: map[string]string{"PULSAR_ISSUER": "http://localhost:80"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with uppercase host", env: map[string]string{"PULSAR_ISSUER": "https://OP.example"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with dot segment", env: map[string]string{"PULSAR_ISSUER": "https://op.example/."}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with encoded dot segment", env: map[string]string{"PULSAR_ISSUER": "https://op.example/%2e"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with dot-dot segment", env: map[string]string{"PULSAR_ISSUER": "https://op.example/a/../b"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with empty segment", env: map[string]string{"PULSAR_ISSUER": "https://op.example//tenant"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer not in canonical form", env: map[string]string{"PULSAR_ISSUER": "HTTPS://op.example"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer ending with slash", env: map[string]string{"PULSAR_ISSUER": "https://op.example/"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer path ending with slash", env: map[string]string{"PULSAR_ISSUER": "https://op.example/tenant/"}, setting: "PULSAR_ISSUER"},
@@ -155,6 +163,30 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 			err := run(ctx, nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tt.setting) {
 				t.Errorf("run() = %v, want an error naming %s", err, tt.setting)
+			}
+		})
+	}
+}
+
+func TestRunDoesNotEchoIssuerPassword(t *testing.T) {
+	t.Parallel()
+
+	const password = "hunter2"
+	issuers := []string{
+		"https://user:" + password + "@op.example",
+		"https://user:" + password + "@op.example:abc", // fails to parse
+		"https://user:" + password + "@/tenant",        // has no host
+	}
+	for _, issuer := range issuers {
+		t.Run(issuer, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel() // As in TestRunRefusesInvalidConfig.
+			env := map[string]string{"PULSAR_ADDR": "127.0.0.1:0", "PULSAR_ISSUER": issuer}
+			getenv := func(key string) string { return env[key] }
+			err := run(ctx, nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "PULSAR_ISSUER") || strings.Contains(err.Error(), password) {
+				t.Errorf("run() = %v, want an error naming PULSAR_ISSUER without the password", err)
 			}
 		})
 	}
@@ -227,8 +259,10 @@ func discoveredIssuer(t *testing.T, client *http.Client, url string) string {
 func writeCertificate(t *testing.T) (certFile, keyFile string, roots *x509.CertPool) {
 	t.Helper()
 	// Not cryptotest.SetGlobalRandom: the key need not be reproducible, and
-	// resetting the process-wide source at cleanup races with the TLS
-	// connections the HTTP client closes in the background.
+	// resetting the process-wide source at cleanup races with TLS
+	// connections that close in the background. Closing the client's
+	// connections first is not enough: the server's connection goroutines
+	// send their own close_notify after Shutdown returns.
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
