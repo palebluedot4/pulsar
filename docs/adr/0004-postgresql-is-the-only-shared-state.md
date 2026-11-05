@@ -3,10 +3,10 @@
 pulsar keeps every piece of state that replicas share in PostgreSQL. It has
 no Redis and no in-process cache library. Self-hosted providers do not treat
 Redis as required: Zitadel's Redis cache is optional and off by default,
-Authelia's documentation (as of 2024) recommends Redis for sessions because
+Authelia's documentation recommends Redis for sessions because
 its default session store is in memory, and authentik removed Redis in
 2025.10 in favor of PostgreSQL. A reader may still expect a cache in front of
-an identity provider, so the reasons are recorded here; the evidence is in
+an OP, so the reasons are recorded here; the evidence is in
 [docs/research/shared-state.md](../research/shared-state.md).
 
 ## Consequences

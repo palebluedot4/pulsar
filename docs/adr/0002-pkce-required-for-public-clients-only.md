@@ -10,7 +10,9 @@ with neither a nonce nor PKCE. Requiring PKCE of every client would therefore
 fail the Basic OP plan (suite `release-v5.3.4`, `OIDCCBasicTestPlan.java` and
 `AbstractOIDCCServerTest.java`).
 
-pulsar supports only `S256`. Whenever an authorization request carries a
+pulsar supports only `S256`. A `code_challenge` without a
+`code_challenge_method` means `plain` (RFC 7636 §4.3), so it is refused at
+the authorization endpoint like any other unsupported method. Whenever an authorization request carries a
 `code_challenge`, the token request must present a matching verifier. A
 token request that sends a `code_verifier` for a code issued without a
 challenge is rejected, which RFC 9700 §2.1.1 requires as a defense against

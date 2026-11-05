@@ -4,7 +4,8 @@ pulsar generates an RSA-2048 key for RS256 on first start and stores it in
 PostgreSQL, with the private key encrypted by AES-256-GCM under a key taken
 from the required `PULSAR_SECRET`. Keycloak, Ory Hydra, Dex and Zitadel also
 generate their keys and keep them in their own storage; Hydra and Zitadel
-encrypt them with an application secret, as OWASP advises. Loading keys from
+encrypt them with an application secret, in line with OWASP's advice
+against plaintext keys. Loading keys from
 files, as Authelia does, was rejected because pulsar would then need a way to
 distribute and rotate those files across replicas. The evidence is in
 [docs/research/signing-keys.md](../research/signing-keys.md).
@@ -15,9 +16,11 @@ distribute and rotate those files across replicas. The evidence is in
 - Every replica reloads the key set from PostgreSQL once a minute.
   `pulsar keys rotate` stores a new key that replicas publish in their JWKS
   at their next reload, and that none signs with until a reload interval
-  plus the JWKS cache lifetime has passed. By then every replica publishes
-  it and no cached JWKS can lack it. Auth0 likewise publishes its next key
-  before signing with it.
+  plus the JWKS cache lifetime has passed. Provided every replica reloads on
+  time and Clients honor `Cache-Control`, every JWKS a Client holds then
+  has the key. A replica that cannot reach PostgreSQL fails its readiness
+  check and stops receiving traffic, so it does not serve a stale JWKS for
+  long. Auth0 likewise publishes its next key before signing with it.
 - A retired key's public half stays in the JWKS until every token it signed
   has expired. OpenID Connect Core 1.0 §10.1.1 asks only for "a reasonable
   period"; this is pulsar's reading of it.
