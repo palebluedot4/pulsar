@@ -1,0 +1,69 @@
+# OpenID Connect Discovery 1.0
+
+Clauses of [OpenID Connect Discovery 1.0 incorporating errata set 2](https://openid.net/specs/openid-connect-discovery-1_0.html)
+that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
+(§2) is not offered, so its clauses are not listed.
+
+## Provider metadata (§3)
+
+- REQ-DISC-1 (§3, `issuer`): "REQUIRED. URL using the https scheme with no
+  query or fragment components that the OP asserts as its Issuer
+  Identifier."
+
+  Departure: pulsar also accepts an `http` issuer whose host is `localhost`
+  or a loopback IP address, so that it can run on a developer's machine
+  without a certificate. Every endpoint URL is derived from the issuer, so
+  REQ-DISC-2 to REQ-DISC-5 share this exception. No other host can reach a
+  loopback issuer, so a deployment that serves Clients cannot rely on it.
+
+- REQ-DISC-2 (§3, `authorization_endpoint`): "REQUIRED. URL of the OP's
+  OAuth 2.0 Authorization Endpoint [OpenID.Core]. This URL MUST use the
+  https scheme and MAY contain port, path, and query parameter components."
+- REQ-DISC-3 (§3, `token_endpoint`): "This is REQUIRED unless only the
+  Implicit Flow is used. This URL MUST use the https scheme and MAY contain
+  port, path, and query parameter components."
+- REQ-DISC-4 (§3, `userinfo_endpoint`): "RECOMMENDED. URL of the OP's
+  UserInfo Endpoint [OpenID.Core]. This URL MUST use the https scheme and
+  MAY contain port, path, and query parameter components."
+- REQ-DISC-5 (§3, `jwks_uri`): "REQUIRED. URL of the OP's JWK Set [JWK]
+  document, which MUST use the https scheme."
+- REQ-DISC-6 (§3, `scopes_supported`): "RECOMMENDED. JSON array containing
+  a list of the OAuth 2.0 [RFC6749] scope values that this server
+  supports. [...] Servers MAY choose not to advertise some supported scope
+  values even when this parameter is used, although those defined in
+  [OpenID.Core] SHOULD be listed, if supported."
+- REQ-DISC-7 (§3, `response_types_supported`): "REQUIRED. JSON array
+  containing a list of the OAuth 2.0 response_type values that this OP
+  supports."
+- REQ-DISC-8 (§3, `subject_types_supported`): "REQUIRED. JSON array
+  containing a list of the Subject Identifier types that this OP supports."
+- REQ-DISC-9 (§3, `id_token_signing_alg_values_supported`): "REQUIRED.
+  [...] The algorithm RS256 MUST be included."
+- REQ-DISC-10 (§3, `token_endpoint_auth_signing_alg_values_supported`):
+  "Servers SHOULD support RS256. The value none MUST NOT be used."
+- REQ-DISC-11 (§3, `claims_supported`): "RECOMMENDED. JSON array
+  containing a list of the Claim Names of the Claims that the OpenID
+  Provider MAY be able to supply values for."
+
+## Obtaining the configuration (§4)
+
+- REQ-DISC-12 (§4): "OpenID Providers supporting Discovery MUST make a JSON
+  document available at the path formed by concatenating the string
+  /.well-known/openid-configuration to the Issuer."
+- REQ-DISC-13 (§4.1): "If the Issuer value contains a path component, any
+  terminating / MUST be removed before appending
+  /.well-known/openid-configuration."
+- REQ-DISC-14 (§4): "The openid-configuration endpoint SHOULD support the
+  use of Cross-Origin Resource Sharing (CORS) [CORS] and/or other methods
+  as appropriate to enable JavaScript Clients and other Browser-Based
+  Clients to access it."
+- REQ-DISC-15 (§4.2): "A successful response MUST use the 200 OK HTTP
+  status code and return a JSON object using the application/json content
+  type that contains a set of Claims as its members that are a subset of
+  the Metadata values defined in Section 3."
+- REQ-DISC-16 (§4.2): "Claims with zero elements MUST be omitted from the
+  response."
+- REQ-DISC-17 (§4.3): "The issuer value returned MUST be identical to the
+  Issuer URL that was used as the prefix to
+  /.well-known/openid-configuration to retrieve the configuration
+  information."

@@ -3,14 +3,20 @@
 An OpenID Connect Provider in Go, built by AI agents under a harness that has
 to prove it helps. The provider is the artifact; the method is the subject.
 It is a reference implementation, not for production use. So far it serves
-a liveness check; the OpenID endpoints are next.
+a liveness check and its discovery document; the other OpenID endpoints are
+next.
 
 ## Running it
 
 ```sh
-go run ./cmd/pulsar            # listens on :8080; PULSAR_ADDR overrides
-curl -i localhost:8080/livez
+# Listens on :8080; PULSAR_ADDR overrides. The issuer must be https, except
+# on a loopback host.
+PULSAR_ISSUER=http://localhost:8080 go run ./cmd/pulsar
+curl -i localhost:8080/.well-known/openid-configuration
 ```
+
+To serve TLS itself, pulsar takes a PEM certificate and key in
+`PULSAR_TLS_CERT` and `PULSAR_TLS_KEY`; give both or neither.
 
 ## Verifying it
 

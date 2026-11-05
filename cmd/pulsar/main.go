@@ -6,10 +6,14 @@
 // Configuration is read from the environment:
 //
 //	PULSAR_ADDR	address to listen on (default ":8080")
+//	PULSAR_ISSUER	the Issuer Identifier, an https URL; http only on a loopback host (required)
+//	PULSAR_TLS_CERT	PEM certificate chain to serve TLS with (with PULSAR_TLS_KEY)
+//	PULSAR_TLS_KEY	PEM private key for PULSAR_TLS_CERT
 package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -59,13 +63,26 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 
+	var tlsConfig *tls.Config
+	if cfg.TLSCertFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return fmt.Errorf("load PULSAR_TLS_CERT and PULSAR_TLS_KEY: %w", err)
+		}
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+	}
+
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	srv := &http.Server{
-		Handler:           server.New(),
+		Handler:           server.New(cfg.Issuer),
+		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -74,8 +91,15 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	}
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve(ln) }()
-	logger.InfoContext(ctx, "listening", "addr", ln.Addr().String())
+	go func() {
+		if tlsConfig != nil {
+			// The certificate is already in srv.TLSConfig.
+			serveErr <- srv.ServeTLS(ln, "", "")
+			return
+		}
+		serveErr <- srv.Serve(ln)
+	}()
+	logger.InfoContext(ctx, "listening", "addr", ln.Addr().String(), "tls", tlsConfig != nil)
 
 	select {
 	case err := <-serveErr:

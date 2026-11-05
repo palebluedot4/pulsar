@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -9,6 +10,7 @@ import (
 func TestLoad(t *testing.T) {
 	t.Parallel()
 
+	issuer := &url.URL{Scheme: "https", Host: "op.example"}
 	tests := []struct {
 		name string
 		env  map[string]string
@@ -16,13 +18,18 @@ func TestLoad(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			env:  nil,
-			want: Config{Addr: ":8080"},
+			env:  map[string]string{"PULSAR_ISSUER": "https://op.example"},
+			want: Config{Addr: ":8080", Issuer: issuer},
 		},
 		{
-			name: "address from environment",
-			env:  map[string]string{"PULSAR_ADDR": "127.0.0.1:9000"},
-			want: Config{Addr: "127.0.0.1:9000"},
+			name: "every setting from environment",
+			env: map[string]string{
+				"PULSAR_ADDR":     "127.0.0.1:9000",
+				"PULSAR_ISSUER":   "https://op.example",
+				"PULSAR_TLS_CERT": "cert.pem",
+				"PULSAR_TLS_KEY":  "key.pem",
+			},
+			want: Config{Addr: "127.0.0.1:9000", Issuer: issuer, TLSCertFile: "cert.pem", TLSKeyFile: "key.pem"},
 		},
 	}
 	for _, tt := range tests {
