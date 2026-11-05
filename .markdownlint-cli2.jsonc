@@ -1,0 +1,41 @@
+// markdownlint-cli2 runs the same engine as the markdownlint editor extension,
+// so the editor and the gate report the same problems. Prettier formats;
+// markdownlint lints what formatting cannot decide.
+{
+  "config": {
+    "default": true,
+    // Prose is wrapped by hand; tables, links and code blocks cannot be.
+    "MD013": false,
+    // The rules markdownlint's own style/prettier.json disables because
+    // Prettier owns them. Copied rather than extended: pnpm does not hoist
+    // markdownlint, so its style files cannot be resolved from here.
+    "blanks-around-fences": false,
+    "blanks-around-headings": false,
+    "blanks-around-lists": false,
+    "code-fence-style": false,
+    "emphasis-style": false,
+    "heading-start-left": false,
+    "heading-style": false,
+    "hr-style": false,
+    "list-indent": false,
+    "list-marker-space": false,
+    "no-blanks-blockquote": false,
+    "no-hard-tabs": false,
+    "no-missing-space-atx": false,
+    "no-missing-space-closed-atx": false,
+    "no-multiple-blanks": false,
+    "no-multiple-space-atx": false,
+    "no-multiple-space-blockquote": false,
+    "no-multiple-space-closed-atx": false,
+    "no-trailing-spaces": false,
+    "ol-prefix": false,
+    "strong-style": false,
+    "ul-indent": false,
+  },
+  "globs": ["**/*.md"],
+  // Skip what git ignores, node_modules above all.
+  "gitignore": true,
+  // CLAUDE.md is a single import line, as Claude Code documents it. LICENSE
+  // is the license's own plain text, which editors sometimes treat as Markdown.
+  "ignores": ["CLAUDE.md", "LICENSE"],
+}

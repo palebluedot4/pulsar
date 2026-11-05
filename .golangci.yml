@@ -1,0 +1,83 @@
+version: "2"
+
+# Enabling is an allowlist, never `enable-all`: a linter set that grows on its
+# own turns a green build red without anyone changing a line, and a gate that
+# is not deterministic is not a gate.
+
+linters:
+  default: standard
+  enable:
+    # Context discipline (Go Code Review Comments, Google Go Style Guide).
+    - containedctx
+    - contextcheck
+    - fatcontext
+    - noctx
+
+    # Errors.
+    - errname
+    - errorlint
+    - nilerr
+    - nilnil
+
+    # Correctness where an identity provider lives.
+    - bodyclose
+    - errchkjson
+    - exhaustive
+    - gosec
+    - sloglint
+
+    # Idiom and modern usage.
+    - copyloopvar
+    - exptostd
+    - gocritic
+    - intrange
+    - modernize
+    - perfsprint
+    - predeclared
+    - reassign
+    - revive
+    - unconvert
+    - usestdlibvars
+
+    # Tests (Go Test Comments: no assertion libraries, no reflect.DeepEqual).
+    - depguard
+    - forbidigo
+    - paralleltest
+    - thelper
+    - tparallel
+    - usetesting
+
+    # Housekeeping.
+    - durationcheck
+    - misspell
+    - nakedret
+    - nolintlint
+
+  settings:
+    depguard:
+      rules:
+        assertions:
+          deny:
+            - pkg: github.com/stretchr/testify
+              desc: compare with github.com/google/go-cmp; see AGENTS.md
+    forbidigo:
+      forbid:
+        - pattern: ^reflect\.DeepEqual$
+          msg: use cmp.Diff from github.com/google/go-cmp
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    sloglint:
+      no-global: all
+      context: scope
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/palebluedot4/pulsar
