@@ -15,13 +15,16 @@ GO ?= go
 # docs/harness.md.
 GOLANGCI_LINT_VERSION ?= v2.15.0
 SHELLCHECK_VERSION ?= v0.11.0
+ZIZMOR_VERSION ?= v1.32.0
 GOLANGCI_LINT := bin/golangci-lint-$(GOLANGCI_LINT_VERSION)
 SHELLCHECK := bin/shellcheck-$(SHELLCHECK_VERSION)
+ZIZMOR := bin/zizmor-$(ZIZMOR_VERSION)
 
 OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 ARCH := $(shell uname -m)
 GOLANGCI_ARCH := $(patsubst x86_64,amd64,$(patsubst aarch64,arm64,$(ARCH)))
 SHELLCHECK_ARCH := $(patsubst arm64,aarch64,$(ARCH))
+ZIZMOR_TARGET := $(patsubst arm64,aarch64,$(ARCH))-$(patsubst darwin,apple-darwin,$(patsubst linux,unknown-linux-gnu,$(OS)))
 
 # Go tools live in their own module, tools/go.mod, so the server's dependency
 # graph stays the server's alone and Dependabot still updates them.
@@ -50,7 +53,7 @@ help: ## Show the available targets
 setup: tools hooks ## Once per clone: tools, git hooks, and the plugin that needs an install
 	claude plugin install mattpocock-skills@claude-plugins-official --scope project
 
-tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(NODE_TOOLS) ## Install every pinned tool
+tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(ZIZMOR) $(NODE_TOOLS) ## Install every pinned tool
 	$(GO) -C tools mod download
 
 check: tidy-check lint format-check markdown-lint shell-lint spell repocheck workflow-check test ## Fast gate
@@ -97,8 +100,15 @@ tidy-check: ## Fail if go.mod or tools/go.mod is untidy
 repocheck: ## Requirement traceability and TODO(#N) form
 	$(GO) run ./internal/cmd/repocheck
 
-workflow-check: ## Lint GitHub Actions workflows, if there are any
-	$(if $(wildcard .github/workflows/*.yml),$(TOOL) actionlint,@echo "no workflows to lint")
+# actionlint checks that workflows are well formed; zizmor checks them, and
+# the Dependabot configuration, for security problems such as template
+# injection, excessive permissions and unpinned actions. It runs offline
+# unless ZIZMOR_GITHUB_TOKEN is set, as CI sets it; then it also runs the
+# audits that query GitHub, such as impostor commits. A GH_TOKEN or
+# GITHUB_TOKEN already in a developer's shell is not used.
+workflow-check: $(ZIZMOR) ## Lint GitHub Actions workflows for errors and security problems
+	$(TOOL) actionlint
+	$(ZIZMOR) $(if $(ZIZMOR_GITHUB_TOKEN),,--offline) .
 
 vulncheck: ## Vulnerabilities reachable from this code
 	$(TOOL) govulncheck ./...
@@ -142,6 +152,25 @@ $(SHELLCHECK):
 	echo "$$sum  $$archive" | (cd "$$tmp" && shasum -a 256 -c - >/dev/null); \
 	tar -xJf "$$tmp/$$archive" -C "$$tmp"; \
 	mv "$$tmp/$$name/shellcheck" $@
+	@echo "installed $@"
+
+# zizmor publishes no checksum file either; these are the sha256 digests
+# GitHub reports for each release asset. Bump them with the version.
+ZIZMOR_SHA256_aarch64-apple-darwin := 6efed18c4539a663fd3c851a2be9533fd8456c4e646d9416206da059154a0d3c
+ZIZMOR_SHA256_x86_64-apple-darwin := 6983143c719ada6845a69cc4dd2bacc215f971662fecd8bbd2678388e5ce5969
+ZIZMOR_SHA256_aarch64-unknown-linux-gnu := cb152b207f815116d7fa1c1ee4614f61578803351395052908095e79adfd9fd0
+ZIZMOR_SHA256_x86_64-unknown-linux-gnu := bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
+
+$(ZIZMOR):
+	@mkdir -p bin
+	@set -e; archive=zizmor-$(ZIZMOR_TARGET).tar.gz; \
+	sum=$(ZIZMOR_SHA256_$(ZIZMOR_TARGET)); \
+	if [ -z "$$sum" ]; then echo "no pinned checksum for $$archive" >&2; exit 1; fi; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	curl -fsSL -o "$$tmp/$$archive" "https://github.com/zizmorcore/zizmor/releases/download/$(ZIZMOR_VERSION)/$$archive"; \
+	echo "$$sum  $$archive" | (cd "$$tmp" && shasum -a 256 -c - >/dev/null); \
+	tar -xzf "$$tmp/$$archive" -C "$$tmp"; \
+	mv "$$tmp/zizmor" $@
 	@echo "installed $@"
 
 node-tools:

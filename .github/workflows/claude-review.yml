@@ -9,11 +9,7 @@ on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: read
-  id-token: write
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -23,6 +19,11 @@ jobs:
   review:
     if: vars.AGENT_CI_ENABLED == 'true' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
