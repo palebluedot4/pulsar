@@ -3,17 +3,18 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
+
+	"github.com/palebluedot4/pulsar/internal/oidc"
 )
 
-func mustParse(t *testing.T, raw string) *url.URL {
+func mustParse(t *testing.T, raw string) *oidc.Issuer {
 	t.Helper()
-	u, err := url.Parse(raw)
+	issuer, err := oidc.ParseIssuer(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return u
+	return issuer
 }
 
 func TestLive(t *testing.T) {

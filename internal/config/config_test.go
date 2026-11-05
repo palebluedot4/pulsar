@@ -1,16 +1,22 @@
 package config
 
 import (
-	"net/url"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/palebluedot4/pulsar/internal/oidc"
 )
 
 func TestLoad(t *testing.T) {
 	t.Parallel()
 
-	issuer := &url.URL{Scheme: "https", Host: "op.example"}
+	issuer, err := oidc.ParseIssuer("https://op.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An Issuer is its string; its URL is not exported.
+	byString := cmp.Comparer(func(a, b *oidc.Issuer) bool { return a.String() == b.String() })
 	tests := []struct {
 		name string
 		env  map[string]string
@@ -40,7 +46,7 @@ func TestLoad(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
+			if diff := cmp.Diff(tt.want, got, byString); diff != "" {
 				t.Errorf("Load() mismatch (-want +got):\n%s", diff)
 			}
 		})
