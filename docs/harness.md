@@ -42,10 +42,10 @@ it, because `claude plugin eval` evaluates only plugins.
 | `shellcheck` and `shfmt` in `make check`             | Sensor, computational | The harness is itself code; its scripts get the same scrutiny as Go                                                                                                                                                                                                                                                                                                                      | Hypothesis                                                                                                                                                                                                                |
 | `zizmor` in `make check` (`make workflow-check`)     | Sensor, computational | Agent workflows are the first here to handle a secret and untrusted pull request text; zizmor finds template injection, over-broad permissions and unpinned or impostor actions before they merge. Offline in `make check`; CI also runs its online audits, with a read-only token                                                                                                       | Hypothesis                                                                                                                                                                                                                |
 | `misspell -locale US` in `make check` (`make spell`) | Sensor, computational | American English in prose and config, which golangci-lint's misspell does not read. It catches common British spellings, not every one ("judgement" passes)                                                                                                                                                                                                                              | Incident: an audit found British spellings in two documents that no gate had checked                                                                                                                                      |
-| Stop `stop-check.sh` → `make check`                  | Sensor, computational | An agent may not finish on a red gate; reported once per tree so it cannot loop. Tested in `internal/harness`                                                                                                                                                                                                                                                                            | Incident: silent fingerprint failure                                                                                                                                                                                      |
+| Stop `stop-check.sh` → `make check`                  | Sensor, computational | An agent may not finish on a red gate; reported once per tree so it cannot loop. Tested in `internal/harness`. Since #12 the gate's tests need a running PostgreSQL, named by `PULSAR_TEST_DATABASE_URL` in the environment Claude Code starts with; without either, they fail, and so does the hook                                                                                     | Incident: silent fingerprint failure                                                                                                                                                                                      |
 | `make check` / `make verify`                         | Sensor, computational | The objective definition of done                                                                                                                                                                                                                                                                                                                                                         | Hypothesis                                                                                                                                                                                                                |
 | `main` ruleset                                       | Sensor, computational | Where enforcement actually lives: a pull request is required, `make verify` and Conventional Commits must pass on an up-to-date branch, review threads must be resolved, and force pushes and deletion are blocked, with no bypass                                                                                                                                                       | Hypothesis                                                                                                                                                                                                                |
-| `repocheck`                                          | Sensor, computational | Every requirement has a test, so removing a requirement's last test fails the gate; TODOs name issues. No requirement exists yet, so only the TODO check is active today                                                                                                                                                                                                                 | Hypothesis                                                                                                                                                                                                                |
+| `repocheck`                                          | Sensor, computational | Every requirement has a test, so removing a requirement's last test fails the gate; TODOs name issues. Active on requirements since #14 added the first ones                                                                                                                                                                                                                             | Hypothesis                                                                                                                                                                                                                |
 | `golangci-lint` configuration                        | Sensor, computational | Rules a tool can decide live in the tool, not in prose                                                                                                                                                                                                                                                                                                                                   | Hypothesis                                                                                                                                                                                                                |
 | Conventional Commits hook and CI job                 | Sensor, computational | One commit format, checked locally and in CI from one script                                                                                                                                                                                                                                                                                                                             | Hypothesis                                                                                                                                                                                                                |
 | `mattpocock-skills:code-review` (spec axis)          | Sensor, inferential   | Fresh-context review of the diff against the spec; step 1 of "Before a pull request" in `AGENTS.md`                                                                                                                                                                                                                                                                                      | Pending ablation                                                                                                                                                                                                          |
@@ -102,6 +102,30 @@ Each loosening of the sandbox, and the need that forced it:
   `main`, not the machine: by the time a pull request is read, the hooks have
   already run.
 
+## The test database
+
+The gate's tests need a real PostgreSQL (#11, Testing Decisions). Two
+consequences follow; neither is a sandbox setting.
+
+- **What sandboxed code reaches.** Sandboxed tests reached Postgres.app on
+  `localhost:5432` with no setting of their own (observed 2026-11-05). The
+  role in `PULSAR_TEST_DATABASE_URL` needs `CREATEDB`, and an agent can use
+  it on every database that role may open on that server, not only the
+  test databases; a role used for nothing but these tests limits that.
+- **What the tests leave behind.** Each test's database is dropped when the
+  test ends, unless its test binary is killed first. Template databases,
+  `pulsar_template_<hash>`, are kept between runs, one per distinct set of
+  migrations, so they accumulate as migrations change. While no tests run,
+  list what is left and drop what is not wanted:
+
+  ```sh
+  psql "$PULSAR_TEST_DATABASE_URL" -Atc \
+    "SELECT datname FROM pg_database WHERE datname LIKE 'pulsar\_template\_%' OR datname LIKE 'pulsar\_test\_%'"
+  psql "$PULSAR_TEST_DATABASE_URL" -c 'DROP DATABASE pulsar_template_<hash> WITH (FORCE)'
+  ```
+
+  A template dropped this way is rebuilt by the next test that needs it.
+
 ## Versions
 
 The official marketplace is frozen with `"autoUpdate": false`: plugins stay
@@ -114,7 +138,9 @@ result and ExecPlan outcome records the Claude Code version, model IDs and
 the commits on `main` it ran against; `make eval` sets
 `DISABLE_AUTOUPDATER=1` so Claude Code cannot update during a run.
 `GOLANGCI_LINT_VERSION`, `SHELLCHECK_VERSION` and `ZIZMOR_VERSION` in the
-Makefile are invisible to Dependabot and are bumped by hand. So are the Node
+Makefile are invisible to Dependabot and are bumped by hand. CI's
+PostgreSQL service image, pinned by tag and digest in
+`.github/workflows/ci.yml`, is bumped by hand too. So are the Node
 tools: Dependabot raises alerts from `pnpm-lock.yaml` but cannot update
 a pnpm 12 lockfile. Its first security updates, on 2026-11-05, failed with
 "VulnerabilityAuditor: missing lockfile".
@@ -240,3 +266,11 @@ None yet.
   write permissions moved from the workflow to its job, as zizmor's
   `excessive-permissions` remediation recommends. Existing clones run
   `make tools` once, outside the sandbox, to install zizmor.
+- The spec's testing decisions (#11), implemented in #12: tests run against
+  a real PostgreSQL named by `PULSAR_TEST_DATABASE_URL`, and fail, not skip,
+  when it is unset, so a gate without a database cannot pass by testing
+  less. The Stop hook's `make check` therefore needs PostgreSQL running and
+  the variable set where Claude Code starts. A missing database fails the
+  hook like any red gate, reported once per tree, so it cannot trap an
+  agent; the hook's own tests fake `make` and need no database. CI runs
+  PostgreSQL as a service container, pinned by digest.
