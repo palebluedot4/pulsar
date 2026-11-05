@@ -70,6 +70,7 @@ it changes (sandbox settings, for example, in `docs/harness.md`).
 ## Conventions a tool does not fully check
 
 - American English, as in the Go standard library and OAuth's own names.
+  `make spell` catches common British spellings, not all of them.
 - Tests are table-driven with `t.Run` where cases share a shape, and
   sequential scenarios where each step depends on the last. They compare with
   `cmp.Diff` and report `Func(args) = got, want`. Clocks use
@@ -84,6 +85,13 @@ it changes (sandbox settings, for example, in `docs/harness.md`).
   OpenID conformance suite for Basic OP" is a claim; "certified" or
   "compliant" is not, until it is.
 - Commits follow Conventional Commits. A `TODO` names its issue: `TODO(#12)`.
+
+## Before a pull request
+
+1. Review the diff against its spec with `/mattpocock-skills:code-review`.
+2. Run `/security-review`.
+3. After opening it, review the pull request with
+   `/code-review:code-review --comment`, and resolve every thread it opens.
 
 ## Unattended runs
 
@@ -121,5 +129,4 @@ The five canonical triage roles use their default label names. See
 ### Domain docs
 
 Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root, each
-created with its first entry. See
-`docs/agents/domain.md`.
+created with its first entry. See `docs/agents/domain.md`.

@@ -7,8 +7,8 @@ with the questions Anthropic asks before leaving a task unattended
 (<https://code.claude.com/docs/en/best-practices>).
 
 Plans being worked live in `active/`; finished ones move to `completed/`
-with their Outcomes filled in. Both are created with the first plan. Name a plan after its work:
-`active/authorization-code-flow.md`.
+with their Outcomes filled in. Both are created with the first plan. Name a
+plan after its work: `active/authorization-code-flow.md`.
 
 A plan is self-contained: a reader who has seen nothing else in the
 repository can follow it. The agent keeps it current as it works and
@@ -29,6 +29,7 @@ Issue: #<n>
 - **Stops at:** `--max-turns <n>`, `--max-budget-usd <n>`, or <condition>
 - **Signed off by:** <who reviews the result>
 - **Versions:** Claude Code <version>; model <id>; plugins <name@sha, …>
+- **Ran against:** <the commit on `main` the outcome below was measured on>
 
 ## Purpose
 
