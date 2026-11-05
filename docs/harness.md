@@ -40,6 +40,7 @@ it, because `claude plugin eval` evaluates only plugins.
 | Prettier and `markdownlint-cli2` in `make check`     | Sensor, computational | Documents are a primary output here; Prettier formats, markdownlint lints what formatting cannot decide                                                                                                                                                                                                                                                                                  | Incident: editor and gate disagreed                                                                                                                                                                                       |
 | `make setup` / `make tools`                          | Guide, computational  | One definition of the toolchain for a fresh machine and for CI; every tool pinned                                                                                                                                                                                                                                                                                                        | Hypothesis                                                                                                                                                                                                                |
 | `shellcheck` and `shfmt` in `make check`             | Sensor, computational | The harness is itself code; its scripts get the same scrutiny as Go                                                                                                                                                                                                                                                                                                                      | Hypothesis                                                                                                                                                                                                                |
+| `zizmor` in `make check` (`make workflow-check`)     | Sensor, computational | Agent workflows are the first here to handle a secret and untrusted pull request text; zizmor finds template injection, over-broad permissions and unpinned or impostor actions before they merge. Offline locally; in CI a read-only token adds its online audits                                                                                                                       | Hypothesis                                                                                                                                                                                                                |
 | `misspell -locale US` in `make check` (`make spell`) | Sensor, computational | American English in prose and config, which golangci-lint's misspell does not read. It catches common British spellings, not every one ("judgement" passes)                                                                                                                                                                                                                              | Incident: an audit found British spellings in two documents that no gate had checked                                                                                                                                      |
 | Stop `stop-check.sh` → `make check`                  | Sensor, computational | An agent may not finish on a red gate; reported once per tree so it cannot loop. Tested in `internal/harness`                                                                                                                                                                                                                                                                            | Incident: silent fingerprint failure                                                                                                                                                                                      |
 | `make check` / `make verify`                         | Sensor, computational | The objective definition of done                                                                                                                                                                                                                                                                                                                                                         | Hypothesis                                                                                                                                                                                                                |
@@ -112,9 +113,9 @@ when its `version` is bumped, which makes the bump the release. Every eval
 result and ExecPlan outcome records the Claude Code version, model IDs and
 the commits on `main` it ran against; `make eval` sets
 `DISABLE_AUTOUPDATER=1` so Claude Code cannot update during a run.
-`GOLANGCI_LINT_VERSION` and `SHELLCHECK_VERSION` in the Makefile are
-invisible to Dependabot and are bumped by hand. So are the
-Node tools: Dependabot raises alerts from `pnpm-lock.yaml` but cannot update
+`GOLANGCI_LINT_VERSION`, `SHELLCHECK_VERSION` and `ZIZMOR_VERSION` in the
+Makefile are invisible to Dependabot and are bumped by hand. So are the Node
+tools: Dependabot raises alerts from `pnpm-lock.yaml` but cannot update
 a pnpm 12 lockfile. Its first security updates, on 2026-11-05, failed with
 "VulnerabilityAuditor: missing lockfile".
 
@@ -228,3 +229,11 @@ None yet.
   - The near-miss eval case is cited at the commit that added it, a cost was
     rounded wrongly, and several changelog entries now name what justified
     them.
+- Maintainer's decision, and a step toward #1: added zizmor to
+  `make workflow-check`, installed as a release binary verified against a
+  pinned sha256, as ShellCheck is. #1 planned `zizmorcore/zizmor-action`
+  instead; the Makefile keeps one definition of the toolchain, so the Stop
+  hook and CI run the same check. CI gives zizmor a read-only token for its
+  online audits; elsewhere it runs offline. The review workflow's write permissions moved from the
+  workflow to its job, as zizmor's `excessive-permissions` remediation
+  recommends.
