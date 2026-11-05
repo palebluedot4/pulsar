@@ -1,4 +1,5 @@
-// Package harness tests the scripts that make up the agent harness in
-// .claude/hooks. It has no code of its own: the scripts are the subject, and
-// Go's test runner is what keeps them honest.
+// Package harness tests the harness scripts that have failed before: the Stop
+// hook in .claude/hooks and the commit message check in scripts. It has no
+// code of its own: the scripts are the subject, and Go's test runner is what
+// keeps them honest.
 package harness
