@@ -33,7 +33,7 @@ TOOL = $(GO) tool -modfile=tools/go.mod
 # their timestamps: a git checkout rewrites timestamps, and inside the sandbox
 # pnpm cannot install.
 NODE_TOOLS := node-tools
-NODE_LOCK_SUM = $(shell cat package.json pnpm-lock.yaml pnpm-workspace.yaml | shasum -a 256 | cut -d' ' -f1)
+NODE_LOCK_SUM := $(shell cat package.json pnpm-lock.yaml pnpm-workspace.yaml | shasum -a 256 | cut -d' ' -f1)
 PRETTIER := node_modules/.bin/prettier
 MARKDOWNLINT := node_modules/.bin/markdownlint-cli2
 
@@ -74,10 +74,13 @@ markdown-lint: $(NODE_TOOLS) ## Lint Markdown
 	$(MARKDOWNLINT)
 
 # golangci-lint checks Go's spelling; this checks the prose and config around
-# it, so the common British spellings fail the gate. File names go through -z
-# and xargs -0, so no name is ever read by the shell.
+# it, so the common British spellings fail the gate. Untracked files count, as
+# they do for Prettier and markdownlint, so the Stop hook sees a new document;
+# pnpm-lock.yaml is generated and skipped. File names go through -z and
+# xargs -0, so no name is ever read by the shell.
 spell: ## Catch British spellings and common misspellings outside Go
-	git ls-files -z -- '*.md' '*.sh' '*.yml' '*.yaml' '*.json' '*.jsonc' Makefile .githooks \
+	git ls-files -z --cached --others --exclude-standard -- \
+		'*.md' '*.sh' '*.yml' '*.yaml' '*.json' '*.jsonc' Makefile .githooks ':!pnpm-lock.yaml' \
 		| xargs -0 $(TOOL) misspell -locale US -error
 
 shell-lint: $(SHELLCHECK) ## Lint shell scripts and check their formatting
