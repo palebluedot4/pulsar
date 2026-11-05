@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "description": "Pinned Node tools for the repository's gate; not part of the provider.",
+  "packageManager": "pnpm@12.16.1",
+  "devDependencies": {
+    "markdownlint-cli2": "0.24.0",
+    "prettier": "3.9.10"
+  }
+}
