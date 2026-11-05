@@ -102,13 +102,14 @@ repocheck: ## Requirement traceability and TODO(#N) form
 
 # actionlint checks that workflows are well formed; zizmor checks them, and
 # the Dependabot configuration, for security problems such as template
-# injection, excessive permissions and unpinned actions. It runs offline
-# unless ZIZMOR_GITHUB_TOKEN is set, as CI sets it; then it also runs the
-# audits that query GitHub, such as impostor commits. A GH_TOKEN or
-# GITHUB_TOKEN already in a developer's shell is not used.
+# injection, excessive permissions and unpinned actions, and fails on a file
+# it cannot parse, since actionlint does not read dependabot.yml. It runs
+# offline, ignoring any GitHub token in a developer's shell, unless
+# ZIZMOR_GITHUB_TOKEN is set, as CI sets it in a step of its own; then it
+# also runs the audits that query GitHub, such as impostor commits.
 workflow-check: $(ZIZMOR) ## Lint GitHub Actions workflows for errors and security problems
 	$(TOOL) actionlint
-	$(ZIZMOR) $(if $(ZIZMOR_GITHUB_TOKEN),,--offline) .
+	$(ZIZMOR) --strict-collection $(if $(ZIZMOR_GITHUB_TOKEN),,--offline) .
 
 vulncheck: ## Vulnerabilities reachable from this code
 	$(TOOL) govulncheck ./...

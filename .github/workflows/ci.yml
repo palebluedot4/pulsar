@@ -38,9 +38,12 @@ jobs:
           cache: pnpm
 
       # The same command a developer runs; the Makefile installs every pinned
-      # tool it needs, so there is one definition of the toolchain. The token,
-      # read-only here, lets zizmor also run its online audits, such as
-      # impostor commits and known-vulnerable actions.
+      # tool it needs, so there is one definition of the toolchain.
       - run: make tools verify
+
+      # zizmor again, with the read-only token for its online audits, such as
+      # impostor commits and known-vulnerable actions. Only this step gets the
+      # token, so the tests and other tools above never see it.
+      - run: make workflow-check
         env:
           ZIZMOR_GITHUB_TOKEN: ${{ github.token }}
