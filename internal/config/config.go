@@ -70,6 +70,10 @@ func parseIssuer(raw string) (*url.URL, error) {
 	switch {
 	case !u.IsAbs() || u.Host == "":
 		return nil, fmt.Errorf("%q is not an absolute URL", raw)
+	case u.User != nil:
+		// The issuer is published to every Client; it must carry no
+		// credentials. The value is not echoed, since it may hold some.
+		return nil, errors.New("must not contain a user name or password")
 	case u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())):
 		return nil, fmt.Errorf("%q must use https, or http on a loopback host", raw)
 	// The raw value is checked, because url.Parse does not record an empty

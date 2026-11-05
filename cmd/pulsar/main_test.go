@@ -109,6 +109,7 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 		{name: "issuer with empty fragment", env: map[string]string{"PULSAR_ISSUER": "https://op.example#"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer with query", env: map[string]string{"PULSAR_ISSUER": "https://op.example?tenant=a"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer with empty query", env: map[string]string{"PULSAR_ISSUER": "https://op.example?"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer with userinfo", env: map[string]string{"PULSAR_ISSUER": "https://user@op.example"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer not in canonical form", env: map[string]string{"PULSAR_ISSUER": "HTTPS://op.example"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer ending with slash", env: map[string]string{"PULSAR_ISSUER": "https://op.example/"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer path ending with slash", env: map[string]string{"PULSAR_ISSUER": "https://op.example/tenant/"}, setting: "PULSAR_ISSUER"},
