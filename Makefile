@@ -138,8 +138,11 @@ node-tools:
 		pnpm install --frozen-lockfile && echo "$(NODE_LOCK_SUM)" > node_modules/.lock-sum; \
 	fi
 
-# Plugin evals call the Anthropic API and cost money, so they are never part
-# of a gate; the maintainer runs them. Models are pinned so results compare.
+# Plugin evals run full Claude sessions on the logged-in credential: they draw
+# on the plan's usage, or bill API credit if ANTHROPIC_API_KEY is set. So they
+# are never part of a gate; the maintainer runs them. EVAL_MAX_COST_USD caps
+# the evaluator's list-price estimate; it is not a bill. Models are pinned so
+# results compare.
 PLUGIN ?= right-sizing
 EVAL_ABLATION ?= with-without
 EVAL_MODEL ?= claude-sonnet-5-5
@@ -149,7 +152,7 @@ EVAL_MAX_COST_USD ?= 30
 # go before --allow-tools, which takes every word after it as a tool.
 EVAL_FLAGS ?=
 
-eval: ## Run a plugin's evals (PLUGIN=right-sizing); costs API credit
+eval: ## Run a plugin's evals (PLUGIN=right-sizing); uses plan usage or API credit
 	claude plugin eval plugins/$(PLUGIN) --ablation $(EVAL_ABLATION) \
 		--model $(EVAL_MODEL) --judge-model $(EVAL_JUDGE_MODEL) \
 		--max-cost-usd $(EVAL_MAX_COST_USD) --no-publish $(EVAL_FLAGS) \
