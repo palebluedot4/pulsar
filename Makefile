@@ -28,11 +28,12 @@ SHELLCHECK_ARCH := $(patsubst arm64,aarch64,$(ARCH))
 TOOL = $(GO) tool -modfile=tools/go.mod
 
 # Node tools are pinned, with their whole dependency tree, by pnpm-lock.yaml;
-# package.json pins pnpm itself. They are reinstalled when the content of
-# those two files changes, not their timestamps: a git checkout rewrites
-# timestamps, and inside the sandbox pnpm cannot install.
+# package.json pins pnpm itself and pnpm-workspace.yaml holds its overrides.
+# They are reinstalled when the content of those three files changes, not
+# their timestamps: a git checkout rewrites timestamps, and inside the sandbox
+# pnpm cannot install.
 NODE_TOOLS := node-tools
-NODE_LOCK_SUM = $(shell cat package.json pnpm-lock.yaml | shasum -a 256 | cut -d' ' -f1)
+NODE_LOCK_SUM = $(shell cat package.json pnpm-lock.yaml pnpm-workspace.yaml | shasum -a 256 | cut -d' ' -f1)
 PRETTIER := node_modules/.bin/prettier
 MARKDOWNLINT := node_modules/.bin/markdownlint-cli2
 
@@ -40,8 +41,8 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh)
 
 .DEFAULT_GOAL := help
 .PHONY: help setup tools node-tools check verify fmt lint format-check \
-	markdown-lint shell-lint test tidy-check repocheck workflow-check \
-	vulncheck build hooks eval print-%
+	markdown-lint shell-lint spell test tidy-check repocheck workflow-check \
+	vulncheck build hooks eval
 
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -52,7 +53,7 @@ setup: tools hooks ## Once per clone: tools, git hooks, and the plugin that need
 tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(NODE_TOOLS) ## Install every pinned tool
 	$(GO) -C tools mod download
 
-check: tidy-check lint format-check markdown-lint shell-lint repocheck workflow-check test ## Fast gate
+check: tidy-check lint format-check markdown-lint shell-lint spell repocheck workflow-check test ## Fast gate
 
 verify: check vulncheck build ## Full gate: check, reachable vulnerabilities, build
 
@@ -71,6 +72,11 @@ format-check: $(NODE_TOOLS) ## Check Markdown, YAML and JSON formatting
 
 markdown-lint: $(NODE_TOOLS) ## Lint Markdown
 	$(MARKDOWNLINT)
+
+# golangci-lint checks Go's spelling; this checks the prose and config around
+# it, so AGENTS.md's American English is a gate, not a request.
+spell: ## Catch British spellings and common misspellings outside Go
+	$(TOOL) misspell -locale US -error $(shell git ls-files '*.md' '*.sh' '*.yml' '*.yaml' '*.json' '*.jsonc' Makefile .githooks)
 
 shell-lint: $(SHELLCHECK) ## Lint shell scripts and check their formatting
 	$(SHELLCHECK) $(SHELL_SCRIPTS)

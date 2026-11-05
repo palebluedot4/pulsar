@@ -122,9 +122,9 @@ Settled conventions:
   `minmax`, `rangeint`, `slicescontains`, `stringscut`, `bloop`, …); Go 1.27
   adds more and makes `go mod tidy` enforce two require blocks. Run
   `go fix ./...` after each toolchain upgrade.
-- **Spelling:** the Go project writes American English. Measured in `src/`:
-  behavior 434 vs behaviour 20; initialize 141 vs initialise 0; canceled 127
-  vs cancelled 8. The public API is American (`context.Canceled`,
+- **Spelling:** the Go project writes American English. Measured in `src/`,
+  American against British spellings: behavior 434 to 20; initialize 141 to
+  0; canceled 127 to 8. The public API is American (`context.Canceled`,
   `image/color`), and so are the OAuth wire identifiers
   (`authorization_endpoint`). No written policy found (UNVERIFIED absence).
 - **Commit messages:** the Go project uses `pkg/path: summary`; Conventional
