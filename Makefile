@@ -46,7 +46,7 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh)
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-setup: tools hooks ## Once per clone: tools, git hooks and the Claude Code plugins
+setup: tools hooks ## Once per clone: tools, git hooks, and the plugin that needs an install
 	claude plugin install mattpocock-skills@claude-plugins-official --scope project
 
 tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(NODE_TOOLS) ## Install every pinned tool
@@ -141,8 +141,8 @@ node-tools:
 # Plugin evals run full Claude sessions on the logged-in credential: they draw
 # on the plan's usage, or bill API credit if ANTHROPIC_API_KEY is set. So they
 # are never part of a gate; the maintainer runs them. EVAL_MAX_COST_USD caps
-# the evaluator's list-price estimate; it is not a bill. Models are pinned so
-# results compare.
+# the evaluator's list-price estimate; it is not a bill. Models are pinned and
+# Claude Code's auto-updates are off during a run, so results compare.
 PLUGIN ?= right-sizing
 EVAL_ABLATION ?= with-without
 EVAL_MODEL ?= claude-sonnet-5-5
@@ -153,7 +153,7 @@ EVAL_MAX_COST_USD ?= 30
 EVAL_FLAGS ?=
 
 eval: ## Run a plugin's evals (PLUGIN=right-sizing); uses plan usage or API credit
-	claude plugin eval plugins/$(PLUGIN) --ablation $(EVAL_ABLATION) \
+	DISABLE_AUTOUPDATER=1 claude plugin eval plugins/$(PLUGIN) --ablation $(EVAL_ABLATION) \
 		--model $(EVAL_MODEL) --judge-model $(EVAL_JUDGE_MODEL) \
 		--max-cost-usd $(EVAL_MAX_COST_USD) --no-publish $(EVAL_FLAGS) \
 		--allow-tools Write WebSearch WebFetch

@@ -9,11 +9,11 @@ This file is a map. Detail lives where it is linked.
 
 ## Commands
 
-| Command       | What it does                                                                                        |
-| ------------- | --------------------------------------------------------------------------------------------------- |
-| `make check`  | Tidy, lint and formatting, requirement traceability, workflow lint, unit tests. Runs on every Stop. |
-| `make verify` | `check`, plus reachable vulnerabilities and a build. CI runs this.                                  |
-| `make fmt`    | Formats Go, Markdown, YAML, JSON and shell in place.                                                |
+| Command       | What it does                                                                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make check`  | Tidy, lint and formatting, requirement traceability, workflow lint, unit tests. Runs when an agent stops, unless that working tree was already checked. |
+| `make verify` | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                      |
+| `make fmt`    | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                    |
 
 Work is not done until `make verify` passes. Run `make help` for the rest.
 Tools are installed by `make setup`, which the maintainer runs outside the
@@ -26,7 +26,7 @@ sandbox; if one is missing, say so rather than installing it.
 | `cmd/pulsar/`                  | `main` and `run`; wiring, signals, shutdown. Tests drive `run`.                                     |
 | `internal/`                    | Packages split by domain, never by layer, never `util`.                                             |
 | `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                                 |
-| `internal/harness/`            | Tests for the hook scripts in `.claude/hooks/`.                                                     |
+| `internal/harness/`            | Tests for the harness scripts that have failed before: the Stop hook and the commit check.          |
 | `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                              |
 | `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                             |
 | `examples/`                    | Planned: consumers, a separate Go module that must not require pulsar; they reach it over the wire. |
@@ -35,7 +35,7 @@ sandbox; if one is missing, say so rather than installing it.
 | `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                             |
 | `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                                    |
 | `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                                     |
-| `evals/`                       | Evaluations of skills and harness controls.                                                         |
+| `evals/`                       | How evals are run. Skill evals live with each plugin; evals of harness controls are planned (#3).   |
 | `docs/agents/`                 | Configuration read by the engineering skills.                                                       |
 
 ## Requirements and tests
@@ -120,5 +120,6 @@ The five canonical triage roles use their default label names. See
 
 ### Domain docs
 
-Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root, each
+created with its first entry. See
 `docs/agents/domain.md`.

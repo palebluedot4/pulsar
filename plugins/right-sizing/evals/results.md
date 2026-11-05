@@ -8,6 +8,10 @@ Every cost below is the evaluator's estimate at API list prices. The runs
 used a Claude plan login, not an API key, so they drew on the plan's usage
 rather than being billed; the estimates still compare runs with each other.
 
+Commits are cited as they landed on `main`. Claude Code's auto-updates were
+not frozen for the runs below; every one of them reports version 2.1.318.
+`make eval` now sets `DISABLE_AUTOUPDATER=1`.
+
 ## How the cases were chosen
 
 Exploratory baseline runs on `claude-sonnet-5-5`, with no skill, on
@@ -54,8 +58,8 @@ against; it is not evidence that the description generalizes.
 
 ## 2026-11-05: skill 0.1.0, with and without
 
-- **Setup:** cases as committed in `d0d09ba`, skill as committed in
-  `6e479ee`; Claude Code 2.1.318; `--ablation with-without`; three runs per
+- **Setup:** cases as committed in `6d8f719`, skill as committed in
+  `8471a00`; Claude Code 2.1.318; `--ablation with-without`; three runs per
   arm; agent `claude-sonnet-5-5`, then `claude-opus-5-5`; judge
   `claude-sonnet-5-5` for both.
 - **Estimated cost and time of the whole suite:** Sonnet 4.32 USD,
@@ -99,7 +103,7 @@ its pre-1.0 status, each with an access date and marked primary, and notes
 that River does not claim exactly-once delivery.
 
 **Limits.** Three runs per arm; eight synthetic cases; one judge model, whose
-agreement with human judgement has not been measured. The gap cases check
+agreement with human judgment has not been measured. The gap cases check
 that research happened and was recorded, not that every cited fact is right.
 The trigger rate comes from cases the description was adjusted against (see
 above).
@@ -134,7 +138,7 @@ body says the same. Every case, not only this one, has to be run again.
 
 ## 2026-11-05: skill 0.2.0, with and without
 
-- **Setup:** all nine cases; skill as committed in `f76c7fa`; otherwise as
+- **Setup:** all nine cases; skill as committed in `8f95246`; otherwise as
   for 0.1.0.
 - **Estimated cost and time of the whole suite:** Sonnet 4.47 USD,
   1,322 s; Opus 8.89 USD, 1,962 s.
