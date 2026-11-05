@@ -131,3 +131,35 @@ kept, so what the skill did once it fired is unknown.
 choose between real options, and excludes questions a specification,
 standard or existing code already answers, and conceptual explanations; the
 body says the same. Every case, not only this one, has to be run again.
+
+## 2026-11-05: skill 0.2.0, with and without
+
+- **Setup:** all nine cases; skill as committed in `f76c7fa`; otherwise as
+  for 0.1.0.
+- **Estimated cost and time of the whole suite:** Sonnet 4.47 USD,
+  1,322 s; Opus 8.89 USD, 1,962 s.
+
+Both models again gave the same pattern:
+
+| Grader                                           | Without skill | With skill |
+| ------------------------------------------------ | ------------- | ---------- |
+| Research graders (fetched, saved, dated, linked) | 0/48          | 48/48      |
+| `right-sized`                                    | 12/12         | 12/12      |
+| `asks-before-deciding`, `decides`                | 6/6           | 6/6        |
+| `skill-fired` (decision questions)               | —             | 18/18      |
+| `skill-not-fired` (bug, explanation, spec)       | 9/9           | 9/9        |
+| `fixes-bug`, `explains`, `answers-from-spec`     | 9/9           | 9/9        |
+
+**What changed from 0.1.0.** The skill no longer fires on the question RFC
+7636 settles (0.1.0 misfired there in 3 of 3 runs on Sonnet and 1 of 3 on
+Opus; 0.2.0 in none), and narrowing the description cost nothing elsewhere: it still
+fired on every decision question. Mean delta 0.36 on both.
+
+**Estimated cost per run of a decision case**, averaged over the four gap
+cases: Sonnet 0.22 USD with the skill against 0.04 without, about five times
+as much; Opus 0.43 against 0.09, about four and a half. Both took about three
+times as long. On the three cases where it must not fire, cost and time were
+unchanged.
+
+**Limits.** As for 0.1.0. The near-miss case shaped this description, so it,
+too, now measures a description adjusted against it.
