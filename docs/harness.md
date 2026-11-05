@@ -45,7 +45,7 @@ incident or eval that justified it.
 | `mattpocock-skills:code-review` (spec axis)      | Sensor, inferential   | Fresh-context review of the diff against the spec                                                                                                                                                                                                                                                                                                                                        | Pending ablation                                                                                                                        |
 | `/security-review` before a PR                   | Sensor, inferential   | Anthropic runs it on its own pull requests                                                                                                                                                                                                                                                                                                                                               | Pending ablation                                                                                                                        |
 | `code-review@claude-plugins-official` on PRs     | Sensor, inferential   | Parallel reviewers, each finding validated separately                                                                                                                                                                                                                                                                                                                                    | Pending ablation                                                                                                                        |
-| `right-sizing` skill (`plugins/right-sizing/`)   | Guide, inferential    | Asked a decision plainly, models answered from training data without researching; the skill makes them fetch dated primary sources, size the decision and record the research                                                                                                                                                                                                            | Eval: research graders 0/12 → 12/12 on Sonnet and Opus, no regression, 4–5× cost per decision (`plugins/right-sizing/evals/results.md`) |
+| `right-sizing` skill (`plugins/right-sizing/`)   | Guide, inferential    | Asked a decision plainly, models answered from training data without researching; the skill makes them fetch dated primary sources, size the decision and record the research. Enabled from `main` through this repository's own marketplace (`.claude-plugin/marketplace.json`), so sessions use the released version, not the working copy                                             | Eval: research graders 0/12 → 12/12 on Sonnet and Opus, no regression, 4–5× cost per decision (`plugins/right-sizing/evals/results.md`) |
 | The maintainer merges every pull request         | Sensor, inferential   | Auth is where unsupervised agents are least trusted                                                                                                                                                                                                                                                                                                                                      | —                                                                                                                                       |
 
 The three review controls are kept only if the ablation shows each one finds
@@ -94,11 +94,15 @@ Each loosening of the sandbox, and the need that forced it:
 
 ## Versions
 
-The official marketplace is pinned with `"autoUpdate": false`; plugins change
-only when updated on purpose, with a changelog entry. Every eval result and
-ExecPlan outcome records the Claude Code version, model IDs and plugin commit
-SHAs, and Claude Code's own updates are frozen (`DISABLE_AUTOUPDATER=1`)
-while a comparison runs. `GOLANGCI_LINT_VERSION` and `SHELLCHECK_VERSION` in
+The official marketplace is frozen with `"autoUpdate": false`: plugins stay
+at whatever version was last installed, which is not a pin to a recorded
+version, and change only when updated on purpose, with a changelog entry.
+This repository's own marketplace, `pulsar`, does update itself: it only ever
+moves to what has merged on `main`, and a plugin's new version takes effect
+when its `version` is bumped, which makes the bump the release. Every eval
+result and ExecPlan outcome records the Claude Code version, model IDs and
+plugin commit SHAs, and Claude Code's own updates are frozen
+(`DISABLE_AUTOUPDATER=1`) while a comparison runs. `GOLANGCI_LINT_VERSION` and `SHELLCHECK_VERSION` in
 the Makefile are invisible to Dependabot and are bumped by hand. Dependabot's
 support for pnpm v11 and later lockfiles is contested; if its first npm
 update fails, the Node tools are bumped by hand too.
@@ -171,4 +175,6 @@ None yet.
   rest, and the format hook turned the tabs in a Go code block into spaces.
 - Added the `right-sizing` skill, the first custom control, written after
   baseline evals showed the gap it closes and kept on the strength of its
-  with-and-without results.
+  with-and-without results. A review caught that it was evaluated but never
+  enabled; the repository is now its own marketplace, and the skill is
+  enabled in `.claude/settings.json` from `main`.

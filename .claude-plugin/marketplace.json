@@ -1,0 +1,14 @@
+{
+  "name": "pulsar",
+  "owner": {
+    "name": "palebluedot4"
+  },
+  "description": "Plugins developed and evaluated in the pulsar repository.",
+  "plugins": [
+    {
+      "name": "right-sizing",
+      "source": "./plugins/right-sizing",
+      "description": "Decide by the project's real scale from current, dated primary sources, and record the research."
+    }
+  ]
+}

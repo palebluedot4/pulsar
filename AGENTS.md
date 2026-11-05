@@ -21,22 +21,22 @@ sandbox; if one is missing, say so rather than installing it.
 
 ## Where things live
 
-| Path                           | Contents                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------ |
-| `cmd/pulsar/`                  | `main` and `run`; wiring, signals, shutdown. Tests drive `run`.                            |
-| `internal/`                    | Packages split by domain, never by layer, never `util`.                                    |
-| `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                        |
-| `internal/harness/`            | Tests for the hook scripts in `.claude/hooks/`.                                            |
-| `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                     |
-| `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                    |
-| `examples/`                    | Consumers, a separate Go module that must not require pulsar: they reach it over the wire. |
-| `docs/research/`               | Dated surveys with sources. Decisions cite them.                                           |
-| `docs/adr/`                    | Decisions, written through `/grill-with-docs`.                                             |
-| `docs/requirements/`           | Requirement IDs; see below.                                                                |
-| `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                           |
-| `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                            |
-| `evals/`                       | Evaluations of skills and harness controls.                                                |
-| `docs/agents/`                 | Configuration read by the engineering skills.                                              |
+| Path                           | Contents                                                                                            |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `cmd/pulsar/`                  | `main` and `run`; wiring, signals, shutdown. Tests drive `run`.                                     |
+| `internal/`                    | Packages split by domain, never by layer, never `util`.                                             |
+| `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                                 |
+| `internal/harness/`            | Tests for the hook scripts in `.claude/hooks/`.                                                     |
+| `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                              |
+| `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                             |
+| `examples/`                    | Planned: consumers, a separate Go module that must not require pulsar; they reach it over the wire. |
+| `docs/research/`               | Dated surveys with sources. Decisions cite them.                                                    |
+| `docs/adr/`                    | Decisions, written through `/grill-with-docs`; created with the first one.                          |
+| `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                             |
+| `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                                    |
+| `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                                     |
+| `evals/`                       | Evaluations of skills and harness controls.                                                         |
+| `docs/agents/`                 | Configuration read by the engineering skills.                                                       |
 
 ## Requirements and tests
 

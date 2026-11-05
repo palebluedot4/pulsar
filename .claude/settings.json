@@ -73,10 +73,18 @@
         "repo": "anthropics/claude-plugins-official"
       },
       "autoUpdate": false
+    },
+    "pulsar": {
+      "source": {
+        "source": "github",
+        "repo": "palebluedot4/pulsar"
+      },
+      "autoUpdate": true
     }
   },
   "enabledPlugins": {
     "code-review@claude-plugins-official": true,
-    "mattpocock-skills@claude-plugins-official": true
+    "mattpocock-skills@claude-plugins-official": true,
+    "right-sizing@pulsar": true
   }
 }
