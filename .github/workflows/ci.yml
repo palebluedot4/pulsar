@@ -40,29 +40,3 @@ jobs:
       # The same command a developer runs; the Makefile installs every pinned
       # tool it needs, so there is one definition of the toolchain.
       - run: make tools verify
-
-  commits:
-    name: Conventional Commits
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      # Untrusted text reaches the script through the environment, never by
-      # expression interpolation into the shell.
-      - name: Check the pull request title and every commit
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          msg=$(mktemp)
-          printf '%s\n' "$TITLE" > "$msg"
-          scripts/check-commit-msg.sh "$msg"
-          for sha in $(git rev-list --no-merges "$BASE_SHA..HEAD"); do
-            git log -1 --format=%B "$sha" > "$msg"
-            scripts/check-commit-msg.sh "$msg"
-          done

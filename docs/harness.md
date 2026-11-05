@@ -178,3 +178,6 @@ None yet.
   with-and-without results. A review caught that it was evaluated but never
   enabled; the repository is now its own marketplace, and the skill is
   enabled in `.claude/settings.json` from `main`.
+- The Conventional Commits check moved to its own workflow, triggered also
+  when a pull request is edited. A title that failed the check could not be
+  fixed: editing it ran nothing, and a rerun replays the original title.
