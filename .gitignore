@@ -10,6 +10,9 @@ coverage.*
 # macOS
 .DS_Store
 
+# Plugin eval runs; summaries worth keeping go in results.md beside them
+/plugins/*/evals/results/
+
 # Secrets
 .env
 .env.*
