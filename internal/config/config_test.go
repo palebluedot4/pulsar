@@ -17,7 +17,7 @@ func TestLoad(t *testing.T) {
 		want Config
 	}{
 		{
-			name: "defaults",
+			name: "defaults for optional settings",
 			env:  map[string]string{"PULSAR_ISSUER": "https://op.example"},
 			want: Config{Addr: ":8080", Issuer: issuer},
 		},

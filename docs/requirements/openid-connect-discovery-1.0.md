@@ -53,6 +53,11 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
 - REQ-DISC-13 (§4.1): "If the Issuer value contains a path component, any
   terminating / MUST be removed before appending
   /.well-known/openid-configuration."
+
+  pulsar refuses an issuer that ends with `/`, so there is never one to
+  remove, and the issuer is exactly the discovery URL without its
+  well-known suffix.
+
 - REQ-DISC-14 (§4): "The openid-configuration endpoint SHOULD support the
   use of Cross-Origin Resource Sharing (CORS) [CORS] and/or other methods
   as appropriate to enable JavaScript Clients and other Browser-Based

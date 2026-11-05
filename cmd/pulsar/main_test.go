@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -48,7 +49,7 @@ func TestRunPublishesIssuer(t *testing.T) {
 		path   string
 	}{
 		{issuer: "https://op.example", path: "/.well-known/openid-configuration"},
-		{issuer: "https://op.example:8443/tenant/", path: "/tenant/.well-known/openid-configuration"},
+		{issuer: "https://op.example:8443/tenant", path: "/tenant/.well-known/openid-configuration"},
 		{issuer: "http://127.0.0.1:8080", path: "/.well-known/openid-configuration"},
 		{issuer: "http://[::1]", path: "/.well-known/openid-configuration"},
 		{issuer: "http://localhost", path: "/.well-known/openid-configuration"},
@@ -88,7 +89,8 @@ func TestRunServesTLS(t *testing.T) {
 }
 
 // REQ-DISC-1: the issuer must be an https URL with no query or fragment; the
-// loopback exception is the departure recorded beside it.
+// loopback exception is the departure recorded beside it. REQ-DISC-13: an
+// issuer never has a terminating slash to remove.
 func TestRunRefusesInvalidConfig(t *testing.T) {
 	t.Parallel()
 
@@ -108,6 +110,17 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 		{name: "issuer with query", env: map[string]string{"PULSAR_ISSUER": "https://op.example?tenant=a"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer with empty query", env: map[string]string{"PULSAR_ISSUER": "https://op.example?"}, setting: "PULSAR_ISSUER"},
 		{name: "issuer not in canonical form", env: map[string]string{"PULSAR_ISSUER": "HTTPS://op.example"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer ending with slash", env: map[string]string{"PULSAR_ISSUER": "https://op.example/"}, setting: "PULSAR_ISSUER"},
+		{name: "issuer path ending with slash", env: map[string]string{"PULSAR_ISSUER": "https://op.example/tenant/"}, setting: "PULSAR_ISSUER"},
+		{
+			name: "TLS with http issuer",
+			env: map[string]string{
+				"PULSAR_ISSUER":   "http://127.0.0.1",
+				"PULSAR_TLS_CERT": "cert.pem",
+				"PULSAR_TLS_KEY":  "key.pem",
+			},
+			setting: "PULSAR_ISSUER",
+		},
 		{
 			name:    "certificate without key",
 			env:     map[string]string{"PULSAR_ISSUER": "https://op.example", "PULSAR_TLS_CERT": "cert.pem"},
@@ -135,8 +148,9 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 			// wrongly accepted makes run return at once instead of serving.
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
-			tt.env["PULSAR_ADDR"] = "127.0.0.1:0"
-			getenv := func(key string) string { return tt.env[key] }
+			env := maps.Clone(tt.env)
+			env["PULSAR_ADDR"] = "127.0.0.1:0"
+			getenv := func(key string) string { return env[key] }
 			err := run(ctx, nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tt.setting) {
 				t.Errorf("run() = %v, want an error naming %s", err, tt.setting)
@@ -153,6 +167,7 @@ func startRun(t *testing.T, env map[string]string) (addr string, stop func() err
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
+	env = maps.Clone(env)
 	env["PULSAR_ADDR"] = "127.0.0.1:0"
 	getenv := func(key string) string { return env[key] }
 	logs, stdout := io.Pipe()
@@ -210,10 +225,15 @@ func discoveredIssuer(t *testing.T, client *http.Client, url string) string {
 // key, to PEM files, and returns their names and a pool that trusts it.
 func writeCertificate(t *testing.T) (certFile, keyFile string, roots *x509.CertPool) {
 	t.Helper()
+	// Not cryptotest.SetGlobalRandom: the key need not be reproducible, and
+	// resetting the process-wide source at cleanup races with the TLS
+	// connections the HTTP client closes in the background.
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The client checks the validity period against the wall clock, so
+	// this cannot run in a synctest bubble.
 	now := time.Now()
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
