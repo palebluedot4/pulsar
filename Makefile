@@ -74,9 +74,11 @@ markdown-lint: $(NODE_TOOLS) ## Lint Markdown
 	$(MARKDOWNLINT)
 
 # golangci-lint checks Go's spelling; this checks the prose and config around
-# it, so AGENTS.md's American English is a gate, not a request.
+# it, so the common British spellings fail the gate. File names go through -z
+# and xargs -0, so no name is ever read by the shell.
 spell: ## Catch British spellings and common misspellings outside Go
-	$(TOOL) misspell -locale US -error $(shell git ls-files '*.md' '*.sh' '*.yml' '*.yaml' '*.json' '*.jsonc' Makefile .githooks)
+	git ls-files -z -- '*.md' '*.sh' '*.yml' '*.yaml' '*.json' '*.jsonc' Makefile .githooks \
+		| xargs -0 $(TOOL) misspell -locale US -error
 
 shell-lint: $(SHELLCHECK) ## Lint shell scripts and check their formatting
 	$(SHELLCHECK) $(SHELL_SCRIPTS)

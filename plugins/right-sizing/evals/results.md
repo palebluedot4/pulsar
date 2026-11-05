@@ -129,9 +129,9 @@ added after the run above.
 The skill misfired on a question a specification answers: on Sonnet every
 time, on Opus once. The answers stayed right (`invalid_grant`), but the runs
 cost about three times as much (Sonnet, over three runs: 0.34 against
-0.11 USD), and most of
-this project's work is questions of this kind. The runs' workspaces were not
-kept, so what the skill did once it fired is unknown.
+0.11 USD), and most of this project's work is questions of this kind. The
+runs' workspaces were not kept, so what the skill did once it fired is
+unknown.
 
 **Change, skill 0.2.0.** The description now applies when the user must
 choose between real options, and excludes questions a specification,
@@ -164,9 +164,9 @@ both.
 
 **Estimated cost per run of a decision case**, averaged over the four gap
 cases: Sonnet 0.22 USD with the skill against 0.05 without; Opus 0.43
-against 0.09. Both about four and a half times as much. Both took about three
-times as long. On the three cases where it must not fire, cost and time were
-unchanged.
+against 0.09. On both models a decision cost about four and a half times as
+much and took about three times as long. On the three cases where it must
+not fire, cost and time were unchanged.
 
 **Limits.** As for 0.1.0. The near-miss case shaped this description, so it,
 too, now measures a description adjusted against it.

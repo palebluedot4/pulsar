@@ -24,8 +24,10 @@ Only when a trigger appears (Anthropic, `docs/research/ai-development.md`):
 
 Every addition gets a row below and an entry in the changelog naming what
 justified it: an incident, an eval, a review finding or the maintainer's
-decision. One departure: `right-sizing` became a plugin before a second
-repository needed it, because `claude plugin eval` evaluates only plugins.
+decision. A custom skill, subagent or hook needs more: a recorded failure
+and an eval that can measure it (`AGENTS.md`, "Deliberately not doing"). One
+departure: `right-sizing` became a plugin before a second repository needed
+it, because `claude plugin eval` evaluates only plugins.
 
 ## Controls
 
@@ -173,7 +175,7 @@ None yet.
     golangci-lint's already was; the installed binary was compared and
     matched the verified release.
   - Dependabot waits a seven-day cooldown before proposing version updates,
-    the review's response to the 2025 npm supply-chain worms.
+    so a compromised release has time to be caught first.
   - Recorded that the format hook, like the Stop hook, runs agent-writable
     files outside the sandbox.
   - Trimmed the allow list to read-only `gh` commands; the rest were
@@ -218,7 +220,7 @@ None yet.
   - Added `make spell`: the audit before it had found British spellings in
     documents that only a Go linter was checking.
   - Node tools now reinstall when `pnpm-workspace.yaml` changes; an override
-    edited alone would have passed locally and failed in CI.
+    edited alone could have passed locally and failed in CI.
   - Dropped the `docker compose *` sandbox exclusion until the conformance
     suite needs it (#2).
   - The near-miss eval case is cited at the commit that added it, a cost was
