@@ -1,12 +1,16 @@
 ---
 name: right-sizing
-description: Makes a technical or project decision from current, dated primary sources, sized to the project's real scale, and records the research. Use it before answering, not as an offer afterwards, whenever the user asks which technology, tool, library, architecture or practice to use, how they should build, run or implement something, or what the best practice or industry standard is, even when the question is short and the answer seems familiar; also when starting a project or a major technical decision.
+description: Makes a technical or project decision from current, dated primary sources, sized to the project's real scale, and records the research. Use it before answering, not as an offer afterwards, whenever the user must choose between real options - which technology, tool, library, architecture or practice to adopt, how to build or run a system, or what the best practice or industry standard is - even when the question is short and the answer seems familiar; also when starting a project. Not for questions a specification, standard or existing code already answers, such as protocol behavior, error codes or a bug's fix, nor for explaining a concept.
 ---
 
 # Right-sizing
 
 Training data goes stale and "best practice" is always best for some scale.
 Decide from what is true now, for this project's size.
+
+This is for choosing between real options. When a specification, standard or
+the existing code already settles the question, answer from it and cite it
+instead; that is not a decision.
 
 ## 1. Establish the context
 
