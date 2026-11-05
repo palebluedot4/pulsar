@@ -27,6 +27,7 @@ sandbox; if one is missing, say so rather than installing it.
 | `internal/`                    | Packages split by domain, never by layer, never `util`.                                    |
 | `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                        |
 | `internal/harness/`            | Tests for the hook scripts in `.claude/hooks/`.                                            |
+| `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                     |
 | `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                    |
 | `examples/`                    | Consumers, a separate Go module that must not require pulsar: they reach it over the wire. |
 | `docs/research/`               | Dated surveys with sources. Decisions cite them.                                           |
