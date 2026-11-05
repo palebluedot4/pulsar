@@ -164,3 +164,7 @@ None yet.
 - Node tools are reinstalled when the content of `package.json` or
   `pnpm-lock.yaml` changes, not their timestamps. A git checkout rewrote the
   timestamps, the gate tried to reinstall inside the sandbox, and failed.
+- markdownlint's rules moved into `.markdownlint.jsonc`, which a directory's
+  own config extends. A nearer config replaces the root one rather than
+  merging with it: a directory that relaxed one rule silently re-enabled the
+  rest, and the format hook turned the tabs in a Go code block into spaces.

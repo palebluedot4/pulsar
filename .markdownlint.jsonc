@@ -1,0 +1,33 @@
+// markdownlint rules for the repository. A directory that needs a different
+// rule keeps its own .markdownlint.jsonc that extends this file: a nearer
+// config replaces this one rather than merging with it.
+{
+  "default": true,
+  // Prose is wrapped by hand; tables, links and code blocks cannot be.
+  "MD013": false,
+  // The rules markdownlint's own style/prettier.json disables because Prettier
+  // owns them. Copied rather than extended: pnpm does not hoist markdownlint,
+  // so its style files cannot be resolved from here.
+  "blanks-around-fences": false,
+  "blanks-around-headings": false,
+  "blanks-around-lists": false,
+  "code-fence-style": false,
+  "emphasis-style": false,
+  "heading-start-left": false,
+  "heading-style": false,
+  "hr-style": false,
+  "list-indent": false,
+  "list-marker-space": false,
+  "no-blanks-blockquote": false,
+  "no-hard-tabs": false,
+  "no-missing-space-atx": false,
+  "no-missing-space-closed-atx": false,
+  "no-multiple-blanks": false,
+  "no-multiple-space-atx": false,
+  "no-multiple-space-blockquote": false,
+  "no-multiple-space-closed-atx": false,
+  "no-trailing-spaces": false,
+  "ol-prefix": false,
+  "strong-style": false,
+  "ul-indent": false,
+}
