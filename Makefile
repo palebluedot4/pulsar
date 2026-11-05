@@ -41,7 +41,7 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh)
 .DEFAULT_GOAL := help
 .PHONY: help setup tools node-tools check verify fmt lint format-check \
 	markdown-lint shell-lint test tidy-check repocheck workflow-check \
-	vulncheck build hooks print-%
+	vulncheck build hooks eval print-%
 
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -137,6 +137,23 @@ node-tools:
 	@if [ "$$(cat node_modules/.lock-sum 2>/dev/null)" != "$(NODE_LOCK_SUM)" ]; then \
 		pnpm install --frozen-lockfile && echo "$(NODE_LOCK_SUM)" > node_modules/.lock-sum; \
 	fi
+
+# Plugin evals call the Anthropic API and cost money, so they are never part
+# of a gate; the maintainer runs them. Models are pinned so results compare.
+PLUGIN ?= right-sizing
+EVAL_ABLATION ?= with-without
+EVAL_MODEL ?= claude-sonnet-5-5
+EVAL_JUDGE_MODEL ?= claude-sonnet-5-5
+EVAL_MAX_COST_USD ?= 30
+# Extra flags, e.g. --keep-temp to read each run's workspace afterwards. They
+# go before --allow-tools, which takes every word after it as a tool.
+EVAL_FLAGS ?=
+
+eval: ## Run a plugin's evals (PLUGIN=right-sizing); costs API credit
+	claude plugin eval plugins/$(PLUGIN) --ablation $(EVAL_ABLATION) \
+		--model $(EVAL_MODEL) --judge-model $(EVAL_JUDGE_MODEL) \
+		--max-cost-usd $(EVAL_MAX_COST_USD) --no-publish $(EVAL_FLAGS) \
+		--allow-tools Write WebSearch WebFetch
 
 print-%: ## Print a variable, e.g. make print-GOLANGCI_LINT
 	@echo $($*)

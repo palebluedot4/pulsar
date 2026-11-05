@@ -20,5 +20,14 @@ The method follows Anthropic's guidance
 Every result records the date, Claude Code version, model IDs and plugin
 commit SHAs, with auto-updates frozen during the run (`docs/harness.md`).
 
-Layout: one directory per skill or control under evaluation, holding its
-scenarios, its runs and a short `results.md`.
+## Where evals live
+
+- **Skills** are packaged as plugins under `plugins/`, and their cases live in
+  the plugin's own `evals/`, because `claude plugin eval` loads only the
+  plugin under test. Run them with `make eval PLUGIN=<name>`, which pins the
+  models and a cost ceiling and compares runs with and without the plugin.
+  Raw runs land in the gitignored `evals/results/`; a short `results.md`
+  beside the cases records what each run showed.
+- **Repository controls** (`AGENTS.md`, hooks, gates) cannot be evaluated
+  that way, since the plugin evaluator loads no project configuration. Their
+  ablation runner is #3.

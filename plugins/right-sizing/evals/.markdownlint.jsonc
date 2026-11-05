@@ -1,0 +1,6 @@
+{
+  "extends": "../../../.markdownlint.jsonc",
+  // Eval prompts reach Claude verbatim and graders are judge rubrics; neither
+  // is a document, so neither starts with a heading.
+  "first-line-heading": false,
+}
