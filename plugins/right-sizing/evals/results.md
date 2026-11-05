@@ -105,4 +105,25 @@ too far from its trigger: the riskiest phrase in the description is "how they
 should build, run or implement something", and most of this project's work
 is questions a specification answers. `no-trigger-spec` asks how a token
 endpoint should respond to a PKCE mismatch, which RFC 7636 settles. It was
-added after the run above and has not yet been run.
+added after the run above.
+
+## 2026-11-05: skill 0.1.0 on the near-miss case
+
+- **Setup:** as above, `--case no-trigger-spec` only.
+- **Cost:** Sonnet 0.45 USD; Opus 0.74 USD.
+
+| Grader              | Sonnet, without | Sonnet, with | Opus, without | Opus, with |
+| ------------------- | --------------- | ------------ | ------------- | ---------- |
+| `answers-from-spec` | 3/3             | 3/3          | 3/3           | 3/3        |
+| `skill-not-fired`   | 3/3             | **0/3**      | 3/3           | **2/3**    |
+
+The skill misfired on a question a specification answers: on Sonnet every
+time, on Opus once. The answers stayed right (`invalid_grant`), but the runs
+cost about three times as much (Sonnet 0.34 against 0.11 USD), and most of
+this project's work is questions of this kind. The runs' workspaces were not
+kept, so what the skill did once it fired is unknown.
+
+**Change, skill 0.2.0.** The description now applies when the user must
+choose between real options, and excludes questions a specification,
+standard or existing code already answers, and conceptual explanations; the
+body says the same. Every case, not only this one, has to be run again.
