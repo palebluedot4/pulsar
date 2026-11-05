@@ -1,8 +1,8 @@
 # Version updates wait out a cooldown, so a compromised release has time to be
 # caught and pulled before it is proposed here; security updates are exempt.
-# It also keeps pnpm's own one-day minimumReleaseAge (the default since pnpm
-# v11.0.0, per its release notes) from failing CI on a release Dependabot
-# found too early.
+# There is no npm entry: Dependabot cannot update a pnpm 12 lockfile, so the
+# Node tools are bumped by hand. Alerts for them still come from the
+# dependency graph (docs/harness.md).
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -27,18 +27,6 @@ updates:
       prefix: build
     groups:
       tools:
-        patterns: ["*"]
-
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
-    commit-message:
-      prefix: build
-    groups:
-      npm:
         patterns: ["*"]
 
   - package-ecosystem: github-actions

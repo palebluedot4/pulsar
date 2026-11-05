@@ -33,12 +33,7 @@
     },
     "network": {
       "allowLocalBinding": true,
-      "allowedDomains": [
-        "proxy.golang.org",
-        "sum.golang.org",
-        "vuln.go.dev",
-        "storage.googleapis.com"
-      ]
+      "allowedDomains": ["proxy.golang.org", "sum.golang.org", "vuln.go.dev"]
     }
   },
   "hooks": {
