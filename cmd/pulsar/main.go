@@ -1,14 +1,18 @@
 // Pulsar is an OpenID Provider.
 //
-// It serves HTTP until it receives an interrupt or SIGTERM, then shuts down
-// gracefully.
+// It serves HTTP from the start, and meanwhile applies any pending database
+// migrations, holding a lock so that replicas starting together migrate
+// once; /readyz answers 503 until they are applied, and pulsar exits if
+// they fail. It serves until it receives an interrupt or SIGTERM, and then
+// shuts down gracefully.
 //
 // Configuration is read from the environment:
 //
-//	PULSAR_ADDR	address to listen on (default ":8080")
-//	PULSAR_ISSUER	the Issuer Identifier, an https URL; http only on a loopback host (required)
-//	PULSAR_TLS_CERT	PEM certificate chain to serve TLS with (with PULSAR_TLS_KEY)
-//	PULSAR_TLS_KEY	PEM private key for PULSAR_TLS_CERT
+//	PULSAR_ADDR		address to listen on (default ":8080")
+//	PULSAR_ISSUER		the Issuer Identifier, an https URL; http only on a loopback host (required)
+//	PULSAR_DATABASE_URL	PostgreSQL connection string (required)
+//	PULSAR_TLS_CERT		PEM certificate chain to serve TLS with (with PULSAR_TLS_KEY)
+//	PULSAR_TLS_KEY		PEM private key for PULSAR_TLS_CERT
 package main
 
 import (
@@ -25,7 +29,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/postgres"
 	"github.com/palebluedot4/pulsar/internal/server"
 )
 
@@ -63,6 +70,8 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 
+	// The certificate is loaded before the database is touched, so that a
+	// local mistake is reported as such rather than after a connection.
 	var tlsConfig *tls.Config
 	if cfg.TLSCertFile != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -75,13 +84,28 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 		}
 	}
 
+	// Errors name the setting, so an operator knows where to look. pgx's
+	// connection errors give the user, database and host, never the
+	// password; config.Load has already parsed the string, so pgxpool.New
+	// cannot fail with a parse error that would quote it. The pool
+	// connects only when first used.
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("open the database at PULSAR_DATABASE_URL: %w", err)
+	}
+
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
 	if err != nil {
+		pool.Close()
 		return fmt.Errorf("listen: %w", err)
 	}
+	// pulsar serves before it migrates, which may wait minutes for another
+	// replica's lock: /livez answers meanwhile, and /readyz answers 503
+	// until migrated is closed.
+	migrated := make(chan struct{})
 	srv := &http.Server{
-		Handler:           server.New(cfg.Issuer),
+		Handler:           server.New(cfg.Issuer, pool, migrated),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
@@ -101,20 +125,64 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	}()
 	logger.InfoContext(ctx, "listening", "addr", ln.Addr().String(), "tls", tlsConfig != nil)
 
-	select {
-	case err := <-serveErr:
-		return fmt.Errorf("serve: %w", err)
-	case <-ctx.Done():
+	migrateCtx, cancelMigrate := context.WithCancel(ctx)
+	defer cancelMigrate()
+	migrateErr := make(chan error, 1)
+	go func() {
+		applied, err := postgres.Migrate(migrateCtx, pool)
+		if err == nil {
+			logger.InfoContext(ctx, "migrated", "applied", applied)
+			close(migrated)
+		}
+		migrateErr <- err
+	}()
+
+	// Serve until a signal, a failed migration or a failed server. A
+	// migration that fails because a signal canceled it is a graceful
+	// exit, as a signal while serving is.
+	var runErr error
+	serving := true
+wait:
+	for {
+		select {
+		case err := <-serveErr:
+			serving = false
+			runErr = fmt.Errorf("serve: %w", err)
+			break wait
+		case err := <-migrateErr:
+			migrateErr = nil // Received; a nil channel is never ready again.
+			if err != nil && ctx.Err() == nil {
+				runErr = fmt.Errorf("migrate the database at PULSAR_DATABASE_URL: %w", err)
+				break wait
+			}
+		case <-ctx.Done():
+			break wait
+		}
+	}
+	cancelMigrate()
+	if migrateErr != nil {
+		// Wait until the migration has stopped and released its connection.
+		// The run is already ending for another reason; only a failure
+		// that is not the cancellation itself is worth reporting with it.
+		if err := <-migrateErr; err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+			runErr = errors.Join(runErr, fmt.Errorf("migrate the database at PULSAR_DATABASE_URL: %w", err))
+		}
 	}
 
-	logger.InfoContext(ctx, "shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	if serving {
+		logger.InfoContext(ctx, "shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			// Handlers still running may hold pooled connections, and
+			// pool.Close would wait for them; the process's exit closes
+			// them instead.
+			return errors.Join(runErr, fmt.Errorf("shutdown: %w", err))
+		}
+		if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
+			runErr = errors.Join(runErr, fmt.Errorf("serve: %w", err))
+		}
 	}
-	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve: %w", err)
-	}
-	return nil
+	pool.Close()
+	return runErr
 }

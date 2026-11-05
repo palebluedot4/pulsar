@@ -31,7 +31,7 @@ func TestDiscovery(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, http.NoBody)
-			New(mustParse(t, tt.issuer)).ServeHTTP(rec, req)
+			newHandlerWithoutDatabase(t, tt.issuer).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("GET %s status = %d, want %d", tt.path, rec.Code, http.StatusOK)
@@ -107,7 +107,7 @@ func TestNotFound(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
-			New(mustParse(t, "https://op.example/tenant")).ServeHTTP(rec, req)
+			newHandlerWithoutDatabase(t, "https://op.example/tenant").ServeHTTP(rec, req)
 			if rec.Code != http.StatusNotFound {
 				t.Errorf("GET %s status = %d, want %d", path, rec.Code, http.StatusNotFound)
 			}

@@ -1,15 +1,24 @@
 package server
 
 import (
+	"context"
 	"net/http"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/oidc"
 )
 
+// readyTimeout bounds the readiness check, so that a database that hangs
+// makes the replica unready rather than the request hang.
+const readyTimeout = 2 * time.Second
+
 // addRoutes maps pulsar's entire HTTP surface. The protocol endpoints sit
 // under the issuer's path; the operational ones at the root.
-func addRoutes(mux *http.ServeMux, issuer *oidc.Issuer) {
+func addRoutes(mux *http.ServeMux, issuer *oidc.Issuer, pool *pgxpool.Pool, migrated <-chan struct{}) {
 	mux.Handle("GET /livez", handleLive())
+	mux.Handle("GET /readyz", handleReady(pool, migrated))
 	mux.Handle("GET "+oidc.DiscoveryPath(issuer), oidc.HandleDiscovery(issuer))
 }
 
@@ -17,6 +26,33 @@ func addRoutes(mux *http.ServeMux, issuer *oidc.Issuer) {
 // dependencies; readiness is a separate question.
 func handleLive() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+// handleReady reports whether this replica can serve, so that a load
+// balancer sends traffic elsewhere when it cannot: 503 until migrated is
+// closed; after that 200 when a ping through the pool succeeds within
+// readyTimeout, and 503 otherwise.
+//
+// A ping first acquires a pool connection, so 503 means either that
+// PostgreSQL did not answer or that every pooled connection stayed busy for
+// readyTimeout. Both are deliberate: a replica whose pool is saturated
+// cannot serve requests that need the database either.
+func handleReady(pool *pgxpool.Pool, migrated <-chan struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-migrated:
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
+		defer cancel()
+		if err := pool.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 }
