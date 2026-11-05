@@ -9,11 +9,11 @@ This file is a map. Detail lives where it is linked.
 
 ## Commands
 
-| Command       | What it does                                                                                                                                            |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `make check`  | Tidy, lint and formatting, requirement traceability, workflow lint, unit tests. Runs when an agent stops, unless that working tree was already checked. |
-| `make verify` | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                      |
-| `make fmt`    | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                    |
+| Command       | What it does                                                                                                                                                      |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make check`  | Tidy, lint and formatting, spelling, requirement traceability, workflow lint, unit tests. Runs when an agent stops, unless that working tree was already checked. |
+| `make verify` | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                                |
+| `make fmt`    | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                              |
 
 Work is not done until `make verify` passes. Run `make help` for the rest.
 Tools are installed by `make setup`, which the maintainer runs outside the
