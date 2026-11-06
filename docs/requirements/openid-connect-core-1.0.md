@@ -345,3 +345,22 @@ are those of `private_key_jwt`.
   client_assertion_type parameter MUST be
   "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", per
   [OAuth.JWT]."
+
+## Signing keys (§10.1)
+
+- REQ-CORE-50 (§10.1): "The private key used to sign the content MUST be
+  associated with a public key used for signature verification published
+  by the sender in its JWK Set document. If there are multiple keys in the
+  referenced JWK Set document, a kid value MUST be provided in the JOSE
+  Header."
+
+  A rotated key signs only once every replica that reloads on time, and
+  every JWK Set a Client cached, publishes it (ADR 0003).
+
+- REQ-CORE-51 (§10.1.1): "The JWK Set document at the jwks_uri SHOULD
+  retain recently decommissioned signing keys for a reasonable period of
+  time to facilitate a smooth transition."
+
+  pulsar reads "a reasonable period" as until every token the key signed
+  has expired: one reload interval plus the token lifetime after the next
+  key's time to sign (ADR 0003).

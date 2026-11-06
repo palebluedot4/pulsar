@@ -1,13 +1,11 @@
 package signing_test
 
 import (
-	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -197,85 +195,34 @@ func TestSignatureVerifiesAgainstJWKS(t *testing.T) {
 	}
 }
 
-// storedKey is a row of the signing_keys table.
-type storedKey struct {
-	kid       string
-	sealed    []byte
-	createdAt time.Time
-}
-
-// generateElsewhere loads a key set, under the same secret, on a database
-// of its own, so that it generates a key there, and returns the stored
-// row.
-func generateElsewhere(t *testing.T) storedKey {
-	t.Helper()
-	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
-	load(t, pool)
-	var key storedKey
-	err := pool.QueryRow(t.Context(), "SELECT kid, sealed_private_key, created_at FROM signing_keys").
-		Scan(&key.kid, &key.sealed, &key.createdAt)
-	if err != nil {
-		t.Fatalf("read the key stored elsewhere: %v", err)
-	}
-	return key
-}
-
-// REQ-JWK-2: a key that another replica stores appears in this replica's
-// JWK Set after one reload interval, not before, under a kid of its own.
-//
-// Until rotation (#23), a replica stores a key only in an empty database,
-// so the other replica's key is generated in a database of its own, under
-// the same secret, and its row copied into this replica's database, as the
-// other replica's insert would put it there.
-//
-// The pool is opened inside the bubble, so that its connections and
-// timers belong to it, on an address rather than a host name, so that it
-// never touches net's resolver (see postgrestest.ResolveHost). Requests go
-// to the handler directly: a server's listener, blocked in the network,
-// would keep the bubble's clock from advancing.
+// REQ-JWK-2: a key that another process stores, as `pulsar keys rotate`
+// does, appears in this replica's JWK Set after one reload interval, not
+// before, under a kid of its own.
 func TestJWKSReloadsKeyFromAnotherReplica(t *testing.T) {
 	t.Parallel()
 
-	added := generateElsewhere(t)
 	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		pool, err := pgxpool.New(ctx, databaseURL)
+		r := startReplica(t, databaseURL)
+		before := sortedKids(decodeJWKS(t, getJWKS(t, r.KeySet)))
+		added, err := signing.New(r.pool, secret).Rotate(t.Context())
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("Rotate() error = %v", err)
 		}
-		defer pool.Close()
-		replica := load(t, pool)
-		before := sortedKids(decodeJWKS(t, getJWKS(t, replica)))
-		if slices.Contains(before, added.kid) {
-			t.Fatalf("GET /jwks before the copy has kids %q, want none of them %q", before, added.kid)
-		}
-
-		reloading := make(chan struct{})
-		go func() {
-			defer close(reloading)
-			replica.Run(ctx, slog.New(slog.NewTextHandler(t.Output(), nil)))
-		}()
-		defer func() {
-			cancel()
-			<-reloading
-		}()
-		_, err = pool.Exec(ctx, "INSERT INTO signing_keys (kid, sealed_private_key, created_at) VALUES ($1, $2, $3)",
-			added.kid, added.sealed, added.createdAt)
-		if err != nil {
-			t.Fatalf("copy the key stored elsewhere: %v", err)
+		if slices.Contains(before, added.KID) {
+			t.Fatalf("GET /jwks before Rotate() has kids %q, want none of them %q", before, added.KID)
 		}
 
 		time.Sleep(signing.ReloadInterval - time.Nanosecond)
 		synctest.Wait()
-		if diff := cmp.Diff(before, sortedKids(decodeJWKS(t, getJWKS(t, replica)))); diff != "" {
+		if diff := cmp.Diff(before, sortedKids(decodeJWKS(t, getJWKS(t, r.KeySet)))); diff != "" {
 			t.Errorf("GET /jwks just before one reload interval kids mismatch (-want +got):\n%s", diff)
 		}
 
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
-		want := slices.Sorted(slices.Values(append(slices.Clone(before), added.kid)))
-		if diff := cmp.Diff(want, sortedKids(decodeJWKS(t, getJWKS(t, replica)))); diff != "" {
+		want := slices.Sorted(slices.Values(append(slices.Clone(before), added.KID)))
+		if diff := cmp.Diff(want, sortedKids(decodeJWKS(t, getJWKS(t, r.KeySet)))); diff != "" {
 			t.Errorf("GET /jwks after one reload interval kids mismatch (-want +got):\n%s", diff)
 		}
 	})

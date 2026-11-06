@@ -2,6 +2,11 @@
 // generates the first key, stores every key in PostgreSQL with its private
 // half encrypted under PULSAR_SECRET, reloads them once a minute, signs
 // through the active one and publishes their public halves as a JWK Set.
+//
+// A rotation stores a new key that every replica publishes at its next
+// reload and that signs only after [ActivationDelay]. The key it replaces
+// stays published until every token it signed has expired, and then
+// leaves the JWK Set.
 package signing
 
 import (
@@ -20,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -28,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/signing/internal/queries"
 )
 
@@ -35,12 +42,28 @@ import (
 // so that a key another replica stores is published here too.
 const ReloadInterval = time.Minute
 
-// jwksCacheControl lets Clients cache the JWK Set for one reload interval.
-// Rotation (#23) waits for a reload interval plus this lifetime before a
-// new key signs, so that every JWK Set a Client holds by then has it; at
-// 60 seconds that wait is two minutes, a fifth of the 10-minute token
-// lifetime, and a Client fetches the set at most once a minute.
-const jwksCacheControl = "public, max-age=60"
+// jwksCacheLifetime is how long Clients may cache the JWK Set: one reload
+// interval. [ActivationDelay] includes it, so that every JWK Set a Client
+// holds by the time a new key signs has it; at a minute that delay is two,
+// a fifth of the token lifetime, and a Client fetches the set at most once
+// a minute.
+const jwksCacheLifetime = time.Minute
+
+// jwksCacheControl is the Cache-Control of the JWK Set.
+var jwksCacheControl = "public, max-age=" + strconv.Itoa(int(jwksCacheLifetime/time.Second))
+
+// ActivationDelay is how long after [KeySet.Rotate] stores a key it starts
+// signing: one reload interval, by which every replica that reloads on
+// time publishes it, plus the JWK Set's cache lifetime, by which every
+// JWK Set a Client cached before then has expired.
+const ActivationDelay = ReloadInterval + jwksCacheLifetime
+
+// retention is how long a key stays published once the next key's time to
+// sign has come. A replica goes on signing with the old key until its
+// first reload after that, at most one reload interval later, and a token
+// it signs then is valid for at most the token lifetime; so by the end of
+// retention every token the old key signed has expired.
+const retention = ReloadInterval + oidc.TokenLifetime
 
 // algorithm is the JWS algorithm every key signs with: RS256, which
 // OpenID Connect Core 1.0 §15.1 requires an OP to support.
@@ -68,6 +91,9 @@ const encryptionKeySize = 32
 
 // errNotLoaded is returned by [KeySet.Active] before the key set is loaded.
 var errNotLoaded = errors.New("signing: the key set is not loaded yet")
+
+// errNoKey is returned by [KeySet.Rotate] when there is no key to rotate.
+var errNoKey = errors.New("the database holds no signing key to rotate; start pulsar against it first, which generates one")
 
 // Key is a signing key: a [crypto.Signer] that signs with RS256, and the
 // kid that names its public half in the JWK Set.
@@ -142,8 +168,46 @@ func (s *KeySet) Run(ctx context.Context, logger *slog.Logger) {
 	}
 }
 
-// Active returns the key to sign with: the last by generation time, ties
-// broken by kid. It returns an error before the key set is loaded.
+// Rotated is a key that [KeySet.Rotate] stored.
+type Rotated struct {
+	KID string
+	// SignsFrom is when the key starts signing, by the clock of the
+	// process that stored it.
+	SignsFrom time.Time
+}
+
+// Rotate generates and stores a new key, which every replica publishes at
+// its next reload and which signs from [ActivationDelay] after now. The
+// key set need not be loaded; Rotate loads it.
+//
+// It fails if the database holds no key yet, since pulsar has then never
+// started against it, and if a published key cannot be decrypted, since
+// PULSAR_SECRET is then not the secret the keys were stored under, and no
+// replica could decrypt a key stored under it.
+func (s *KeySet) Rotate(ctx context.Context) (Rotated, error) {
+	has, err := s.queries.HasSigningKey(ctx)
+	if err != nil {
+		return Rotated{}, fmt.Errorf("look up signing keys: %w", err)
+	}
+	if !has {
+		return Rotated{}, errNoKey
+	}
+	if err := s.reload(ctx); err != nil {
+		return Rotated{}, err
+	}
+	key, err := s.generate(ActivationDelay)
+	if err != nil {
+		return Rotated{}, err
+	}
+	if err := s.queries.InsertSigningKey(ctx, key); err != nil {
+		return Rotated{}, fmt.Errorf("store signing key: %w", err)
+	}
+	return Rotated{KID: key.Kid, SignsFrom: key.ActivatesAt}, nil
+}
+
+// Active returns the key to sign with: of the keys whose time to sign had
+// come at the last reload, the last to start, ties broken by kid. It
+// returns an error before the key set is loaded.
 func (s *KeySet) Active() (Key, error) {
 	snap := s.loaded.Load()
 	if snap == nil {
@@ -235,7 +299,9 @@ func (s *KeySet) ensureKey(ctx context.Context) error {
 	// The key is generated before the lock is taken, so that the lock is
 	// held for two queries rather than a key generation. A replica that
 	// finds a key stored once it holds the lock discards its own.
-	key, err := s.generate()
+	// The first key signs at once: no JWK Set has been published, so
+	// there is none for it to be missing from.
+	key, err := s.generate(0)
 	if err != nil {
 		return err
 	}
@@ -261,9 +327,9 @@ func (s *KeySet) ensureKey(ctx context.Context) error {
 	return nil
 }
 
-// generate generates a key and returns it as a row to store, sealed and
-// dated now.
-func (s *KeySet) generate() (queries.InsertSigningKeyParams, error) {
+// generate generates a key and returns it as a row to store, sealed,
+// dated now and signing from delay after now.
+func (s *KeySet) generate(delay time.Duration) (queries.InsertSigningKeyParams, error) {
 	key, err := rsa.GenerateKey(rand.Reader, keyBits)
 	if err != nil {
 		return queries.InsertSigningKeyParams{}, fmt.Errorf("generate signing key: %w", err)
@@ -276,17 +342,26 @@ func (s *KeySet) generate() (queries.InsertSigningKeyParams, error) {
 	if err != nil {
 		return queries.InsertSigningKeyParams{}, fmt.Errorf("encode signing key: %w", err)
 	}
+	now := time.Now()
 	return queries.InsertSigningKeyParams{
 		Kid: kid,
 		// The nonce is nil because the AEAD draws a random one itself and
 		// prepends it to the ciphertext ([cipher.NewGCMWithRandomNonce]).
 		SealedPrivateKey: s.aead.Seal(nil, nil, der, []byte(kid)), //nolint:gosec // G407: see above; no nonce is hardcoded.
-		CreatedAt:        time.Now(),
+		CreatedAt:        now,
+		ActivatesAt:      now.Add(delay),
 	}, nil
 }
 
 // reload reads every stored key and replaces the snapshot. A key already
 // loaded is not decrypted again: a row is never updated.
+//
+// The active key is the last whose time to sign has come; if none's has,
+// as when the clock of the replica that generated the first key runs
+// ahead of this one's, it is the first to start. A key before the active
+// one is retired once [retention] has passed since the next key's time to
+// sign came: it is then neither decrypted, nor published, nor accepted.
+// Its row stays.
 func (s *KeySet) reload(ctx context.Context) error {
 	rows, err := s.queries.ListSigningKeys(ctx)
 	if err != nil {
@@ -295,14 +370,27 @@ func (s *KeySet) reload(ctx context.Context) error {
 	if len(rows) == 0 {
 		return errors.New("read signing keys: the database holds none")
 	}
+	now := time.Now()
+	active := 0
+	for i, row := range rows {
+		if !row.ActivatesAt.After(now) {
+			active = i
+		}
+	}
+	// Rows come in the order they start signing, so the retired keys come
+	// first.
+	first := 0
+	for first < active && !now.Before(rows[first+1].ActivatesAt.Add(retention)) {
+		first++
+	}
 	var previous map[string]*rsa.PrivateKey
 	if snap := s.loaded.Load(); snap != nil {
 		previous = snap.keys
 	}
 
-	keys := make(map[string]*rsa.PrivateKey, len(rows))
-	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(rows))}
-	for _, row := range rows {
+	keys := make(map[string]*rsa.PrivateKey, len(rows)-first)
+	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(rows)-first)}
+	for _, row := range rows[first:] {
 		key, ok := previous[row.Kid]
 		if !ok {
 			key, err = s.open(row.Kid, row.SealedPrivateKey)
@@ -322,10 +410,10 @@ func (s *KeySet) reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("encode JWK Set: %w", err)
 	}
-	newest := rows[len(rows)-1].Kid
+	kid := rows[active].Kid
 	s.loaded.Store(&snapshot{
 		keys:   keys,
-		active: Key{KID: newest, Signer: keys[newest]},
+		active: Key{KID: kid, Signer: keys[kid]},
 		jwks:   jwks,
 	})
 	return nil

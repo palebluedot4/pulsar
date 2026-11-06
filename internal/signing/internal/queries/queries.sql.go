@@ -22,33 +22,41 @@ func (q *Queries) HasSigningKey(ctx context.Context) (bool, error) {
 }
 
 const insertSigningKey = `-- name: InsertSigningKey :exec
-INSERT INTO signing_keys (kid, sealed_private_key, created_at)
-VALUES ($1, $2, $3)
+INSERT INTO signing_keys (kid, sealed_private_key, created_at, activates_at)
+VALUES ($1, $2, $3, $4)
 `
 
 type InsertSigningKeyParams struct {
 	Kid              string
 	SealedPrivateKey []byte
 	CreatedAt        time.Time
+	ActivatesAt      time.Time
 }
 
 func (q *Queries) InsertSigningKey(ctx context.Context, arg InsertSigningKeyParams) error {
-	_, err := q.db.Exec(ctx, insertSigningKey, arg.Kid, arg.SealedPrivateKey, arg.CreatedAt)
+	_, err := q.db.Exec(ctx, insertSigningKey,
+		arg.Kid,
+		arg.SealedPrivateKey,
+		arg.CreatedAt,
+		arg.ActivatesAt,
+	)
 	return err
 }
 
 const listSigningKeys = `-- name: ListSigningKeys :many
-SELECT kid, sealed_private_key
+SELECT kid, sealed_private_key, activates_at
 FROM signing_keys
-ORDER BY created_at, kid
+ORDER BY activates_at, kid
 `
 
 type ListSigningKeysRow struct {
 	Kid              string
 	SealedPrivateKey []byte
+	ActivatesAt      time.Time
 }
 
-// Oldest first, so that the newest key comes last.
+// In the order they start signing, so that the key signing now is the last
+// whose activates_at has passed.
 func (q *Queries) ListSigningKeys(ctx context.Context) ([]ListSigningKeysRow, error) {
 	rows, err := q.db.Query(ctx, listSigningKeys)
 	if err != nil {
@@ -58,7 +66,7 @@ func (q *Queries) ListSigningKeys(ctx context.Context) ([]ListSigningKeysRow, er
 	var items []ListSigningKeysRow
 	for rows.Next() {
 		var i ListSigningKeysRow
-		if err := rows.Scan(&i.Kid, &i.SealedPrivateKey); err != nil {
+		if err := rows.Scan(&i.Kid, &i.SealedPrivateKey, &i.ActivatesAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

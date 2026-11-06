@@ -256,7 +256,7 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // the signing keys are loaded, when the endpoint is not served.
 func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI, challenge string) (*tokenResponse, error) {
 	now := time.Now()
-	exp := now.Add(tokenLifetime)
+	exp := now.Add(TokenLifetime)
 	hash := hashCode(code)
 	jti := rand.Text()
 	var row queries.RedeemAuthorizationCodeRow
@@ -366,7 +366,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	return &tokenResponse{
 		AccessToken: accessToken,
 		TokenType:   "Bearer",
-		ExpiresIn:   int64(tokenLifetime / time.Second),
+		ExpiresIn:   int64(TokenLifetime / time.Second),
 		IDToken:     idToken,
 		Scope:       scope,
 	}, nil

@@ -747,15 +747,7 @@ type pulsar struct {
 func start(t *testing.T, env map[string]string) *pulsar {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
-	env = maps.Clone(env)
-	env["PULSAR_ADDR"] = "127.0.0.1:0"
-	if _, ok := env["PULSAR_SECRET"]; !ok {
-		env["PULSAR_SECRET"] = testSecret
-	}
-	if _, ok := env["PULSAR_REGISTRY"]; !ok {
-		env["PULSAR_REGISTRY"] = testRegistry
-	}
-	getenv := func(key string) string { return env[key] }
+	getenv := environment(env)
 	logs, stdout := io.Pipe()
 	p := &pulsar{t: t, cancel: cancel, done: make(chan error, 1), lines: make(chan []byte, 64)}
 
@@ -774,11 +766,27 @@ func start(t *testing.T, env map[string]string) *pulsar {
 	return p
 }
 
+// environment returns a getenv for env, and nothing else, with
+// PULSAR_ADDR a free loopback port, and PULSAR_SECRET testSecret and
+// PULSAR_REGISTRY testRegistry unless env sets them.
+func environment(env map[string]string) func(string) string {
+	env = maps.Clone(env)
+	env["PULSAR_ADDR"] = "127.0.0.1:0"
+	if _, ok := env["PULSAR_SECRET"]; !ok {
+		env["PULSAR_SECRET"] = testSecret
+	}
+	if _, ok := env["PULSAR_REGISTRY"]; !ok {
+		env["PULSAR_REGISTRY"] = testRegistry
+	}
+	return func(key string) string { return env[key] }
+}
+
 // logLine is a JSON log line, with the attributes the tests read.
 type logLine struct {
 	Msg     string `json:"msg"`
 	Addr    string `json:"addr"`
 	Applied int    `json:"applied"`
+	KID     string `json:"kid"`
 }
 
 // logWait bounds how long a test waits for a log line, so that a pulsar
