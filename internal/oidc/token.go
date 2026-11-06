@@ -242,12 +242,17 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // verifier of the form RFC 7636 §4.1 allows can be tried against a code,
 // and a weak one cannot be guessed in the code's lifetime.
 //
-// A code that cannot be redeemed revokes the access tokens issued from it,
-// if it was redeemed before (RFC 6749 §4.1.2): their records are deleted,
-// so that UserInfo refuses them. They are found by the code's hash, which
-// only one who holds the code can present, so they are revoked whichever
-// Client presents it, and also after the code has expired, until they
-// expire themselves.
+// A code that was redeemed before, presented again, revokes the access
+// tokens issued from it (RFC 6749 §4.1.2): their records are deleted, so
+// that UserInfo refuses them. It does so only if the request is otherwise
+// valid: client is the code's Client, which has authenticated by its
+// registered method before this is called, redirectURI is the code's, and
+// challenge is the code's. A replay with any other parameters revokes
+// nothing, as OAuth 2.1 draft -17 §7.5.3 has it, so that one who has only
+// seen a code cannot end the End-User's access with another Client
+// (docs/research/refresh-tokens.md). The code's expiry is not checked: a
+// valid replay after the code has expired revokes too, for as long as the
+// code's record is kept.
 //
 // The code is redeemed and the access token recorded in one transaction,
 // so that a code is redeemed at most once, and only when its token is
@@ -278,12 +283,26 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			refused = true
-			// A redemption whose Client or redirect URI does not match
-			// does not wait for one in progress, so the code's row is
-			// locked first: the tokens are then looked up after any
-			// redemption in progress has recorded its own.
-			if err := q.LockAuthorizationCode(ctx, hash); err != nil {
+			// A redemption of an expired code, or one whose Client or
+			// redirect URI does not match, does not wait for one in
+			// progress, so the code's row is locked first: it is then
+			// read, and the tokens looked up, after any redemption in
+			// progress has recorded its own.
+			var issued queries.LockAuthorizationCodeRow
+			issued, err = q.LockAuthorizationCode(ctx, hash)
+			// A code no longer kept cannot show that the request's
+			// parameters are its own, and one never redeemed has issued
+			// no tokens: neither revokes anything, nor does a replay with
+			// parameters other than the code's (OAuth 2.1 draft -17
+			// §7.5.3).
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
 				return err
+			}
+			if !issued.Redeemed || issued.ClientID != client.ID || issued.RedirectUri != redirectURI || issued.CodeChallenge != challenge {
+				return nil
 			}
 			return q.DeleteAccessTokensOfCode(ctx, hash)
 		}
