@@ -56,7 +56,7 @@ var authorizationParams = []string{
 	"client_id", "redirect_uri", "response_type", "response_mode",
 	"scope", "state", "nonce", "request", "request_uri",
 	"prompt", "max_age", "login_hint", "id_token_hint",
-	"code_challenge", "code_challenge_method",
+	"code_challenge", "code_challenge_method", "claims",
 }
 
 // Error codes of an authorization error response (RFC 6749 §4.1.2.1,
@@ -220,11 +220,12 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	}
 	// A login the request asks for is one made on the login page for this
 	// request (see login.Interaction and needsLogin). An End-User other
-	// than the one id_token_hint names is sent to log in once; if that
-	// login is not the named End-User's either, the request fails (OpenID
-	// Connect Core 1.0 §3.1.2.1).
+	// than one the request names, by id_token_hint or by a sub Claim
+	// requested with a value, is sent to log in once; if that login is not
+	// a named End-User's either, the request fails (OpenID Connect Core 1.0
+	// §3.1.2.1, §3.1.2.2).
 	subject := auth.EndUser.Subject
-	otherEndUser := req.hintSubject != "" && req.hintSubject != subject
+	otherEndUser := req.subjects != nil && !slices.Contains(req.subjects, subject)
 	fresh := inter.SignedInForRequest()
 	decided := inter.Decision() != login.Undecided
 	if (otherEndUser && !fresh) || req.needsLogin(auth.Time, time.Now(), fresh, fresh && decided) {
@@ -234,14 +235,18 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	if otherEndUser {
 		inter.Finish()
 		respond(func() {
-			resp.redirectError(w, r, errLoginRequired, "The End-User signed in is not the one id_token_hint names.")
+			resp.redirectError(w, r, errLoginRequired, "The End-User signed in is not one the request names.")
 		})
 		return
 	}
 
 	// An authorization decision, before anything is released (OpenID
 	// Connect Core 1.0 §3.1.2.4): the one the End-User just made on the
-	// consent page for this request, or else their Consent.
+	// consent page for this request, or else their Consent. It covers the
+	// scopes requested, and those that request the claims the claims
+	// parameter asks for, so that no claim is released without the
+	// End-User's Consent to its scope.
+	consentScopes := req.consentScopes()
 	switch inter.Decision() {
 	case login.Denied:
 		inter.Finish()
@@ -251,7 +256,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		// A public Client's Consent is never consulted (see below), so it
 		// is not kept.
 		if !req.client.Public() {
-			if err := p.consents.Allow(ctx, subject, req.client.ID, req.scopes); err != nil {
+			if err := p.consents.Allow(ctx, subject, req.client.ID, consentScopes); err != nil {
 				fail(err)
 				return
 			}
@@ -265,7 +270,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		// §8.6).
 		covered := false
 		if !req.prompts("consent") && !req.client.Public() {
-			covered, err = p.consents.Covers(ctx, subject, req.client.ID, req.scopes)
+			covered, err = p.consents.Covers(ctx, subject, req.client.ID, consentScopes)
 			if err != nil {
 				fail(err)
 				return
@@ -279,8 +284,8 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 					Username: auth.EndUser.Username,
 					Action:   paths.consent + "?" + query,
 				}
-				for _, s := range req.scopes {
-					scope, _ := supportedScope(s) // req.scopes holds supported scopes only.
+				for _, s := range consentScopes {
+					scope, _ := supportedScope(s) // consentScopes holds supported scopes only.
 					page.Scopes = append(page.Scopes, scope)
 				}
 				if err := login.WriteConsentPage(w, page); err != nil {
@@ -311,7 +316,24 @@ type authorizationRequest struct {
 	challenge   string   // the S256 code_challenge (RFC 7636 §4.3), or "" if it was not sent
 	prompt      []string // the values of the prompt parameter (OpenID Connect Core 1.0 §3.1.2.1)
 	maxAge      int64    // the max_age parameter, in seconds, or -1 if it sets no limit
-	hintSubject string   // the Subject that id_token_hint names, if it was sent
+	// subjects are the Subjects of the End-Users a positive response may be
+	// about, as id_token_hint and a sub Claim requested in the ID token
+	// with a value name them; nil if the request names none.
+	subjects []string
+	claims   claimsRequest // the claims parameter (OpenID Connect Core 1.0 §5.5)
+}
+
+// consentScopes returns the scopes the End-User's Consent must cover for
+// the request: those it requests, and those that request the claims its
+// claims parameter asks for (OpenID Connect Core 1.0 §5.4).
+func (req authorizationRequest) consentScopes() []string {
+	scopes := slices.Clone(req.scopes)
+	for _, s := range req.claims.scopes() {
+		if !slices.Contains(scopes, s) {
+			scopes = append(scopes, s)
+		}
+	}
+	return scopes
 }
 
 // parseAuthorizationRequest checks the parameters of an authorization
@@ -389,11 +411,32 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 		}
 	}
 
-	var hintSubject string
+	var subjects []string
 	if v := params.Get("id_token_hint"); v != "" {
-		var ok bool
-		if hintSubject, ok = idTokenSubject(v, issuer); !ok {
+		hintSubject, ok := idTokenSubject(v, issuer)
+		if !ok {
 			return req, errInvalidRequest, "The id_token_hint is not a JWT that names this OP as its issuer and an End-User as its subject."
+		}
+		subjects = []string{hintSubject}
+	}
+
+	var claims claimsRequest
+	if v := params.Get("claims"); v != "" {
+		var claimed []string
+		var err error
+		if claims, claimed, err = parseClaimsParameter(v); err != nil {
+			return req, errInvalidRequest, "The parameter claims is not a JSON object of the form OpenID Connect Core 1.0 §5.5 gives."
+		}
+		// A request may name End-Users by both id_token_hint and the sub
+		// Claim; a response may be about one that both name.
+		if claimed != nil && subjects != nil {
+			claimed = slices.DeleteFunc(claimed, func(s string) bool { return !slices.Contains(subjects, s) })
+		}
+		if claimed != nil {
+			if len(claimed) == 0 {
+				return req, errInvalidRequest, "The request names no End-User that id_token_hint and the sub Claim both allow."
+			}
+			subjects = claimed
 		}
 	}
 
@@ -405,7 +448,8 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 		challenge:   challenge,
 		prompt:      prompt,
 		maxAge:      maxAge,
-		hintSubject: hintSubject,
+		subjects:    subjects,
+		claims:      claims,
 	}, "", ""
 }
 
@@ -474,10 +518,15 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 	if err := p.queries.DeleteExpiredAuthorizationCodes(ctx, now); err != nil {
 		p.logger.ErrorContext(ctx, "delete expired authorization codes", "error", err)
 	}
+	claims, err := req.claims.encode()
+	if err != nil {
+		return "", err
+	}
 	code, hash := newCode()
-	// The code challenge is stored with the code, so that the token
-	// endpoint can verify the code_verifier against it (RFC 7636 §4.4).
-	err := p.queries.InsertAuthorizationCode(ctx, queries.InsertAuthorizationCodeParams{
+	// The code challenge and the claims requested are stored with the
+	// code, so that the token endpoint can verify the code_verifier against
+	// the one (RFC 7636 §4.4) and release the other.
+	err = p.queries.InsertAuthorizationCode(ctx, queries.InsertAuthorizationCodeParams{
 		CodeHash:      hash,
 		ClientID:      req.client.ID,
 		RedirectUri:   req.redirectURI,
@@ -485,6 +534,7 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 		Scopes:        req.scopes,
 		Nonce:         req.nonce,
 		CodeChallenge: req.challenge,
+		Claims:        claims,
 		AuthTime:      auth.Time,
 		Expiry:        now.Add(codeLifetime),
 	})

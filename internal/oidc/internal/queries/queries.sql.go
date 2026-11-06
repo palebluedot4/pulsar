@@ -40,26 +40,53 @@ func (q *Queries) DeleteExpiredClientAssertions(ctx context.Context, now time.Ti
 	return err
 }
 
+const findAccessToken = `-- name: FindAccessToken :one
+SELECT userinfo_claims
+FROM access_tokens
+WHERE jti = $1
+    AND expiry > $2
+`
+
+type FindAccessTokenParams struct {
+	Jti string
+	Now time.Time
+}
+
+// Returns the claims requested from UserInfo with the access token whose
+// jti this is, if it has not expired.
+func (q *Queries) FindAccessToken(ctx context.Context, arg FindAccessTokenParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, findAccessToken, arg.Jti, arg.Now)
+	var userinfo_claims []byte
+	err := row.Scan(&userinfo_claims)
+	return userinfo_claims, err
+}
+
 const insertAccessToken = `-- name: InsertAccessToken :exec
-INSERT INTO access_tokens (jti, code_hash, expiry)
-VALUES ($1, $2, $3)
+INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
+VALUES ($1, $2, $3, $4)
 `
 
 type InsertAccessTokenParams struct {
-	Jti      string
-	CodeHash []byte
-	Expiry   time.Time
+	Jti            string
+	CodeHash       []byte
+	UserinfoClaims []byte
+	Expiry         time.Time
 }
 
 func (q *Queries) InsertAccessToken(ctx context.Context, arg InsertAccessTokenParams) error {
-	_, err := q.db.Exec(ctx, insertAccessToken, arg.Jti, arg.CodeHash, arg.Expiry)
+	_, err := q.db.Exec(ctx, insertAccessToken,
+		arg.Jti,
+		arg.CodeHash,
+		arg.UserinfoClaims,
+		arg.Expiry,
+	)
 	return err
 }
 
 const insertAuthorizationCode = `-- name: InsertAuthorizationCode :exec
 
-INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, auth_time, expiry)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 
 type InsertAuthorizationCodeParams struct {
@@ -70,6 +97,7 @@ type InsertAuthorizationCodeParams struct {
 	Scopes        []string
 	Nonce         string
 	CodeChallenge string
+	Claims        []byte
 	AuthTime      time.Time
 	Expiry        time.Time
 }
@@ -85,6 +113,7 @@ func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthori
 		arg.Scopes,
 		arg.Nonce,
 		arg.CodeChallenge,
+		arg.Claims,
 		arg.AuthTime,
 		arg.Expiry,
 	)
@@ -132,7 +161,7 @@ WHERE code_hash = $1
     AND redirect_uri = $3
     AND expiry > $4
     AND NOT redeemed
-RETURNING subject, scopes, nonce, code_challenge, auth_time
+RETURNING subject, scopes, nonce, code_challenge, claims, auth_time
 `
 
 type RedeemAuthorizationCodeParams struct {
@@ -147,6 +176,7 @@ type RedeemAuthorizationCodeRow struct {
 	Scopes        []string
 	Nonce         string
 	CodeChallenge string
+	Claims        []byte
 	AuthTime      time.Time
 }
 
@@ -169,6 +199,7 @@ func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthori
 		&i.Scopes,
 		&i.Nonce,
 		&i.CodeChallenge,
+		&i.Claims,
 		&i.AuthTime,
 	)
 	return i, err

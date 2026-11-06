@@ -2,8 +2,8 @@
 -- so that tests control it.
 
 -- name: InsertAuthorizationCode :exec
-INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, auth_time, expiry)
-VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_challenge, @auth_time, @expiry);
+INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry)
+VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_challenge, @claims, @auth_time, @expiry);
 
 -- name: RedeemAuthorizationCode :one
 -- Marks the code redeemed and returns what it was issued for, if it was
@@ -19,15 +19,15 @@ WHERE code_hash = @code_hash
     AND redirect_uri = @redirect_uri
     AND expiry > @now
     AND NOT redeemed
-RETURNING subject, scopes, nonce, code_challenge, auth_time;
+RETURNING subject, scopes, nonce, code_challenge, claims, auth_time;
 
 -- name: DeleteExpiredAuthorizationCodes :exec
 DELETE FROM authorization_codes
 WHERE expiry <= @now;
 
 -- name: InsertAccessToken :exec
-INSERT INTO access_tokens (jti, code_hash, expiry)
-VALUES (@jti, @code_hash, @expiry);
+INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
+VALUES (@jti, @code_hash, @userinfo_claims, @expiry);
 
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
@@ -48,3 +48,11 @@ WHERE client_assertions.expiry <= @now;
 -- name: DeleteExpiredClientAssertions :exec
 DELETE FROM client_assertions
 WHERE expiry <= @now;
+
+-- name: FindAccessToken :one
+-- Returns the claims requested from UserInfo with the access token whose
+-- jti this is, if it has not expired.
+SELECT userinfo_claims
+FROM access_tokens
+WHERE jti = @jti
+    AND expiry > @now;
