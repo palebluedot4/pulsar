@@ -161,9 +161,6 @@ func (s *KeySet) HandleJWKS() http.Handler {
 		}
 		h.Set("Content-Type", "application/json")
 		h.Set("Cache-Control", jwksCacheControl)
-		// The keys are public; a browser-based Client verifying an ID
-		// Token needs them as much as the discovery document.
-		h.Set("Access-Control-Allow-Origin", "*")
 		_, _ = w.Write(snap.jwks) // A failed write means the Client has gone.
 	})
 }
