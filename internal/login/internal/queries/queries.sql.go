@@ -47,6 +47,24 @@ func (q *Queries) DeleteLoginSession(ctx context.Context, token string) error {
 	return err
 }
 
+const findConsent = `-- name: FindConsent :one
+SELECT scopes
+FROM consents
+WHERE subject = $1 AND client_id = $2
+`
+
+type FindConsentParams struct {
+	Subject  string
+	ClientID string
+}
+
+func (q *Queries) FindConsent(ctx context.Context, arg FindConsentParams) ([]string, error) {
+	row := q.db.QueryRow(ctx, findConsent, arg.Subject, arg.ClientID)
+	var scopes []string
+	err := row.Scan(&scopes)
+	return scopes, err
+}
+
 const findLoginSession = `-- name: FindLoginSession :one
 
 SELECT data
@@ -66,4 +84,24 @@ func (q *Queries) FindLoginSession(ctx context.Context, arg FindLoginSessionPara
 	var data []byte
 	err := row.Scan(&data)
 	return data, err
+}
+
+const grantConsent = `-- name: GrantConsent :exec
+INSERT INTO consents (subject, client_id, scopes)
+VALUES ($1, $2, $3::text[])
+ON CONFLICT (subject, client_id) DO UPDATE
+SET scopes = ARRAY(SELECT DISTINCT unnest(consents.scopes || excluded.scopes))
+`
+
+type GrantConsentParams struct {
+	Subject  string
+	ClientID string
+	Scopes   []string
+}
+
+// Adds scopes to the Consent of the End-User for the Client, creating it if
+// there is none, in one statement, so that two grants at once both count.
+func (q *Queries) GrantConsent(ctx context.Context, arg GrantConsentParams) error {
+	_, err := q.db.Exec(ctx, grantConsent, arg.Subject, arg.ClientID, arg.Scopes)
+	return err
 }

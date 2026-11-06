@@ -44,6 +44,133 @@ that pulsar, as an OP, must or should meet.
   pulsar serves only OpenID Connect requests, so it answers a request
   without `openid` with `invalid_scope`.
 
+### `prompt`, `max_age` and hints (§3.1.2.1)
+
+- REQ-CORE-14 (§3.1.2.1, `prompt=none`): "The Authorization Server MUST
+  NOT display any authentication or consent user interface pages. An error
+  is returned if an End-User is not already authenticated or the Client
+  does not have pre-configured consent for the requested Claims or does not
+  fulfill other conditions for processing the request."
+
+  pulsar asks for nothing but a login and a Consent, so it answers
+  `login_required` or `consent_required`, never `interaction_required`.
+
+- REQ-CORE-15 (§3.1.2.3): "The Authentication Request contains the prompt
+  parameter with the value login. In this case, the Authorization Server
+  MUST reauthenticate the End-User even if the End-User is already
+  authenticated."
+
+  Only a login on the login page for that request counts; one made before
+  it, or for another request, does not.
+
+- REQ-CORE-16 (§3.1.2.1, `prompt=consent`): "The Authorization Server
+  SHOULD prompt the End-User for consent before returning information to
+  the Client."
+- REQ-CORE-17 (§3.1.2.1, `prompt=select_account`): "The Authorization
+  Server SHOULD prompt the End-User to select a user account."
+
+  A Login Session holds one End-User, so pulsar has no list of accounts to
+  choose from; the login page is where an End-User chooses one, by signing
+  in as it. `select_account` sends the End-User there, as `login` does.
+
+- REQ-CORE-18 (§3.1.2.1, `prompt`): "If this parameter contains none with
+  any other value, an error is returned."
+
+  The error is `invalid_request`.
+
+- REQ-CORE-19 (§3.1.2.1, `prompt`): "If an OP receives a prompt value
+  outside the set defined above that it does not understand, it MAY return
+  an error or it MAY ignore it; in practice, not returning errors for
+  not-understood values will help facilitate phasing in extensions using
+  new prompt values."
+
+  pulsar ignores such a value, as the clause advises, except that `none`
+  with it is still an error (REQ-CORE-18).
+
+- REQ-CORE-20 (§3.1.2.1, `max_age`): "If the elapsed time is greater than
+  this value, the OP MUST attempt to actively re-authenticate the End-User.
+  ... Note that max_age=0 is equivalent to prompt=login."
+
+  The elapsed time is counted in whole seconds, as `auth_time` is. A value
+  that is not a non-negative integer is `invalid_request`; one too large
+  for 64 bits sets no limit.
+
+- REQ-CORE-21 (§3.1.2.1, `display`): "If an OP receives a display value
+  outside the set defined above that it does not understand, it MAY return
+  an error or it MAY ignore it"
+
+  pulsar ignores `display` and serves every value the same page: plain HTML
+  without script, with a viewport meta tag. This departs from the SHOULDs
+  that ask for a popup, touch or feature-phone variant; the pages have no
+  layout to vary, and #11 leaves presentation beyond them out of scope.
+
+- REQ-CORE-22 (§3.1.2.1, `ui_locales`): "An error SHOULD NOT result if some
+  or all of the requested locales are not supported by the OpenID
+  Provider."
+
+  The pages are in English only; #11 leaves localization out of scope.
+
+- REQ-CORE-23 (§5.2, `claims_locales`): "An error SHOULD NOT result if some
+  or all of the requested locales are not supported by the OpenID
+  Provider."
+- REQ-CORE-24 (§3.1.2.1, `id_token_hint`): "If the End-User identified by
+  the ID Token is already logged in or is logged in as a result of the
+  request (...), then the Authorization Server returns a positive response;
+  otherwise, it MUST return an error, such as login_required."
+
+  An End-User other than the one the hint names is sent to the login page
+  once, unless `prompt=none`; if the login there is not the named
+  End-User's either, the error is `login_required`. A hint that is not a
+  JWT naming pulsar as its issuer and a subject is `invalid_request`. Its
+  signature is not verified: whatever a hint names, a positive response is
+  about the End-User signed in.
+
+- REQ-CORE-25 (§3.1.2.1, `login_hint`): "Hint to the Authorization Server
+  about the login identifier the End-User might use to log in (if
+  necessary)."
+
+  pulsar fills the login form's username field with it.
+
+- REQ-CORE-26 (§3.1.2.1, `acr_values`; §5.5.1): "The acr Claim is requested
+  as a Voluntary Claim by this parameter." and "the Authorization Server
+  MUST NOT generate an error when Claims are not returned, whether they are
+  Essential or Voluntary, unless otherwise specified in the description of
+  the specific claim."
+
+  pulsar has one authentication level and never returns `acr` (#11).
+
+### Authentication and consent (§3.1.2.3, §3.1.2.4)
+
+- REQ-CORE-27 (§3.1.2.3): "When interacting with the End-User, the
+  Authorization Server MUST employ appropriate measures against Cross-Site
+  Request Forgery and Clickjacking as, described in Sections 10.12 and
+  10.13 of OAuth 2.0 [RFC6749]."
+
+  The login and consent forms refuse cross-origin submissions, and no page
+  may be framed (REQ-BCP-2).
+
+- REQ-CORE-28 (§3.1.2.4): "Once the End-User is authenticated, the
+  Authorization Server MUST obtain an authorization decision before
+  releasing information to the Relying Party."
+
+  The decision is the End-User's, on the consent page, which names the
+  Client by its `client_id` and lists the scopes it asks for. It is
+  remembered as a Consent per End-User and Client, which a later request
+  for no other scopes reuses.
+
+### Error codes (§3.1.2.6)
+
+- REQ-CORE-29 (§3.1.2.6, `login_required`): "The Authorization Server
+  requires End-User authentication. This error MAY be returned when the
+  prompt parameter value in the Authentication Request is none, but the
+  Authentication Request cannot be completed without displaying a user
+  interface for End-User authentication."
+- REQ-CORE-30 (§3.1.2.6, `consent_required`): "The Authorization Server
+  requires End-User consent. This error MAY be returned when the prompt
+  parameter value in the Authentication Request is none, but the
+  Authentication Request cannot be completed without displaying a user
+  interface for End-User consent."
+
 ## ID Token for the Authorization Code Flow (§3.1.3.6)
 
 - REQ-CORE-7 (§3.1.3.6, `at_hash`): "Its value is the base64url encoding of

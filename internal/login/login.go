@@ -1,5 +1,6 @@
-// Package login serves the login page and keeps the Login Session that a
-// successful login starts, for the authorization endpoint to read.
+// Package login serves the login and consent pages, and keeps the Login
+// Session that a successful login starts and the Consents End-Users give,
+// for the authorization endpoint to read.
 //
 // A Login Session is kept by scs, server-side in PostgreSQL. Its cookie
 // has the __Host- prefix and is Secure and HttpOnly, and SameSite=Lax
@@ -9,8 +10,8 @@
 // whichever comes first, and its token is replaced at each login, so that
 // a token planted in a browser beforehand is worthless afterward.
 //
-// The login form refuses cross-origin submissions, through
-// [http.CrossOriginProtection], and the page may not be framed.
+// The login and consent forms refuse cross-origin submissions, through
+// [http.CrossOriginProtection], and neither page may be framed.
 package login
 
 import (
@@ -68,7 +69,7 @@ var pageHeaders = map[string]string{
 }
 
 // SetPageHeaders sets on h the headers of every page pulsar serves: the
-// login page, and the authorization endpoint's error page.
+// login and consent pages, and the authorization endpoint's error page.
 func SetPageHeaders(h http.Header) {
 	for k, v := range pageHeaders {
 		h.Set(k, v)
@@ -152,28 +153,6 @@ type Authentication struct {
 	Time    time.Time // when the End-User authenticated
 }
 
-// Authenticated returns the authentication that r's Login Session
-// records, if r has one. r counts as activity of the Login Session, which
-// moves its idle expiry, so Authenticated writes the Login Session's
-// cookie to w and must be called before anything of the response is
-// written. A Login Session for a Subject the registry no longer lists
-// records no authentication.
-func (s *Sessions) Authenticated(w http.ResponseWriter, r *http.Request) (Authentication, bool, error) {
-	r, err := s.load(r)
-	if err != nil {
-		return Authentication{}, false, err
-	}
-	if err := s.save(w, r); err != nil {
-		return Authentication{}, false, err
-	}
-	u, ok := s.endUser(r)
-	if !ok {
-		return Authentication{}, false, nil
-	}
-	authTime := s.manager.GetInt64(r.Context(), authTimeKey)
-	return Authentication{EndUser: u, Time: time.Unix(authTime, 0)}, true, nil
-}
-
 // load returns r with its Login Session, if it has one, or a new empty
 // one, in its context.
 func (s *Sessions) load(r *http.Request) (*http.Request, error) {
@@ -221,9 +200,12 @@ func (s *Sessions) endUser(r *http.Request) (*registry.EndUser, bool) {
 // by POST, at path. A login from a page whose URL has a query sends the
 // browser on to continuePath with the same query: that is how an
 // authorization request, sent to the login page with its parameters,
-// resumes after login. So does a visit to such a page by a browser already
-// signed in. Any other login sends it back to the page. It logs
-// to logger any error that ends a request.
+// resumes after login, and the login is recorded as made for that request
+// (see [Interaction]). A visit to such a page by a browser already signed
+// in goes straight on too, unless the authorization endpoint asked for a
+// new login for that request. The form's username is filled with the
+// request's login_hint. Any other login sends the browser back to the
+// page. It logs to logger any error that ends a request.
 func (s *Sessions) Handler(path, continuePath string, logger *slog.Logger) http.Handler {
 	h := &handler{path: path, continuePath: continuePath, sessions: s, logger: logger}
 	return http.NewCrossOriginProtection().Handler(h)
@@ -255,17 +237,24 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.login(w, r)
 		return
 	}
-	var p page
+	query := r.URL.RawQuery
+	// The username the authorization request suggests, if any (OpenID
+	// Connect Core 1.0 §3.1.2.1).
+	p := page{Username: r.URL.Query().Get("login_hint")}
 	if u, ok := h.sessions.endUser(r); ok {
-		if r.URL.RawQuery != "" {
+		switch {
+		case query != "" && !h.sessions.loginAsked(r, query):
 			// An authorization request reached the login page without the
 			// Login Session cookie, as one a Client sends by POST from
 			// its own site does, since the cookie is SameSite=Lax. The
 			// browser has sent it now, so the request goes back.
 			h.continueAfterLogin(w, r)
 			return
+		case query == "":
+			p.SignedInAs = u.Username
 		}
-		p.SignedInAs = u.Username
+		// Otherwise the authorization endpoint asked for a new login for
+		// this request, and the form is shown.
 	}
 	h.render(w, r, p)
 }
@@ -298,6 +287,12 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	m.Put(ctx, subjectKey, u.Subject)
 	m.Put(ctx, authTimeKey, time.Now().Unix())
+	if r.URL.RawQuery != "" {
+		// The login is for the authorization request the page was shown
+		// for, which counts it as the new login it may ask for (see
+		// Interaction).
+		m.Put(ctx, loginForKey, requestKey(r.URL.RawQuery))
+	}
 	// A login is rare next to the requests a Login Session serves, so it
 	// is when Login Sessions that have ended are deleted. A failure leaves
 	// them for the next login and does not fail this one.

@@ -42,11 +42,14 @@ const (
 	postSecret         = "post secret"
 )
 
-// aliceSubject is alice's Subject in flowRegistry.
-const aliceSubject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+// The Subjects of alice and bob in flowRegistry.
+const (
+	aliceSubject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+	bobSubject   = "0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b"
+)
 
-// flowRegistry returns a registry of three Clients and the End-User alice:
-// rp and other authenticate with client_secret_basic, post with
+// flowRegistry returns a registry of three Clients and the End-Users alice
+// and bob: rp and other authenticate with client_secret_basic, post with
 // client_secret_post.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
@@ -60,7 +63,8 @@ func flowRegistry(tb testing.TB) *registry.Registry {
 			 "redirect_uris": ["https://post.example/callback"]}
 		],
 		"end_users": [
-			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `"}
+			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `"},
+			{"sub": "` + bobSubject + `", "username": "bob", "password_hash": "` + hashPassword(tb, bobPassword) + `"}
 		]
 	}`))
 	if err != nil {
@@ -179,20 +183,31 @@ func withoutQuery(u *url.URL) string {
 // page sends the browser back to.
 func (b *browser) signIn(resp response) response {
 	b.t.Helper()
+	return b.signInAs(resp, "alice", alicePassword)
+}
+
+// signInAs is signIn as the End-User with username and password.
+func (b *browser) signInAs(resp response, username, password string) response {
+	b.t.Helper()
 	loginURL := location(b.t, resp)
 	if loginURL.Path != loginPath {
-		b.t.Fatalf("authorization request without a Login Session redirected to %q, want the login page %q", loginURL, loginPath)
+		b.t.Fatalf("authorization request redirected to %q, want the login page %q", loginURL, loginPath)
 	}
-	resp = b.send(http.MethodPost, loginURL.RequestURI(), url.Values{"username": {"alice"}, "password": {alicePassword}})
+	resp = b.send(http.MethodPost, loginURL.RequestURI(), url.Values{"username": {username}, "password": {password}})
 	return b.send(http.MethodGet, location(b.t, resp).RequestURI(), nil)
 }
 
 // code signs a new browser in as alice through an authorization request
-// from rp with params, and returns the code the response carries.
+// from rp with params, allows it on the consent page if alice's Consent
+// does not already cover it, and returns the code the response carries.
 func code(t *testing.T, handler http.Handler, params url.Values) string {
 	t.Helper()
 	b := &browser{t: t, handler: handler}
-	u := location(t, b.signIn(b.authorize(http.MethodGet, params)))
+	resp := b.signIn(b.authorize(http.MethodGet, params))
+	if resp.status == http.StatusOK {
+		resp = b.decide(resp, "allow")
+	}
+	u := location(t, resp)
 	c := u.Query().Get("code")
 	if c == "" {
 		t.Fatalf("authorization response %q has no code", u)
@@ -282,7 +297,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 				if diff := cmp.Diff(params, loginURL.Query()); diff != "" {
 					t.Errorf("redirect to the login page carries parameters mismatch (-want +got):\n%s", diff)
 				}
-				resp = b.signIn(resp)
+				resp = b.decide(b.signIn(resp), "allow")
 				callback := location(t, resp)
 				if got := withoutQuery(callback); got != rpRedirectURI {
 					t.Fatalf("authorization response redirects to %q, want %q", got, rpRedirectURI)
@@ -365,7 +380,8 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 					t.Errorf("access token claims mismatch (-want +got):\n%s", diff)
 				}
 
-				// The Login Session now answers the next request at once.
+				// The Login Session and the Consent now answer the next
+				// request at once.
 				callback = location(t, b.authorize(method, params))
 				if got := withoutQuery(callback); got != rpRedirectURI || callback.Query().Get("code") == "" {
 					t.Errorf("second authorization request redirected to %q, want a code at %q", callback, rpRedirectURI)
@@ -385,7 +401,7 @@ func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 	b := &browser{t: t, handler: handler}
-	b.signIn(b.authorize(http.MethodGet, authorizationParams()))
+	b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow")
 	session := b.session
 
 	// The cross-site POST: the browser withholds the cookie.
@@ -531,6 +547,31 @@ func TestAuthorizationErrorRedirect(t *testing.T) {
 		{
 			name: "repeated state",
 			edit: func(v url.Values) { v.Add("state", "second") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "repeated prompt",
+			edit: func(v url.Values) { v["prompt"] = []string{"login", "consent"} },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "repeated max_age",
+			edit: func(v url.Values) { v["max_age"] = []string{"60", "60"} },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "negative max_age",
+			edit: func(v url.Values) { v.Set("max_age", "-1") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "fractional max_age",
+			edit: func(v url.Values) { v.Set("max_age", "1.5") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "max_age not a number",
+			edit: func(v url.Values) { v.Set("max_age", "one") },
 			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
 		},
 		{

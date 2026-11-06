@@ -45,6 +45,7 @@ type Provider struct {
 	issuer   *Issuer
 	registry *registry.Registry
 	sessions *login.Sessions
+	consents *login.Consents
 	keys     JWTSigner
 	db       *pgxpool.Pool
 	queries  *queries.Queries
@@ -52,14 +53,15 @@ type Provider struct {
 }
 
 // NewProvider returns the endpoints of the OP at issuer, for the Clients
-// and End-Users of reg, reading Login Sessions from sessions, signing with
-// keys and keeping codes and access tokens in the database behind db. It
-// logs to logger any error that ends a request.
-func NewProvider(issuer *Issuer, reg *registry.Registry, sessions *login.Sessions, keys JWTSigner, db *pgxpool.Pool, logger *slog.Logger) *Provider {
+// and End-Users of reg, reading Login Sessions from sessions and Consents
+// from consents, signing with keys and keeping codes and access tokens in
+// the database behind db. It logs to logger any error that ends a request.
+func NewProvider(issuer *Issuer, reg *registry.Registry, sessions *login.Sessions, consents *login.Consents, keys JWTSigner, db *pgxpool.Pool, logger *slog.Logger) *Provider {
 	return &Provider{
 		issuer:   issuer,
 		registry: reg,
 		sessions: sessions,
+		consents: consents,
 		keys:     keys,
 		db:       db,
 		queries:  queries.New(db),
