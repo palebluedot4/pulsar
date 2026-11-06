@@ -105,18 +105,18 @@ result and human review time.
 
 ## Deliberately not doing
 
-| Not doing                                                                   | Until                                                                                    |
-| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Using this provider in production                                           | Never; it is a reference implementation.                                                 |
-| Sign-up, password reset, MFA, social login, SAML, admin UI                  | Never; no authoritative spec, so no objective done.                                      |
-| Implicit and hybrid flows, front-channel logout, session management         | Never; discouraged by RFC 9700 or fragile in current browsers.                           |
-| Dynamic Client Registration                                                 | MCP deprecated it for Client ID Metadata Documents.                                      |
-| FAPI 2.0: PAR, DPoP, mTLS                                                   | Never; costly, and it adds no kind of evidence #11's conformance plans do not already.   |
-| Token revocation (RFC 7009), introspection (RFC 7662), `client_credentials` | A consumer in `examples/` or the MCP extension needs one (#47).                          |
-| Custom skills, subagents or hooks beyond `docs/harness.md`                  | A recorded failure calls for one, and an eval can measure it.                            |
-| obra/superpowers                                                            | Its always-on prompt conflicts with lean context; see `docs/research/ai-development.md`. |
-| A second vendor's model for review                                          | Calibration shows a systematic blind spot.                                               |
-| Agents running in CI                                                        | #1.                                                                                      |
+| Not doing                                                                   | Until                                                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Using this provider in production                                           | Never; it is a reference implementation.                                                         |
+| Sign-up, password reset, MFA, social login, SAML, admin UI                  | Never; no authoritative spec, so no objective done.                                              |
+| Implicit and hybrid flows, front-channel logout, session management         | Never; discouraged by RFC 9700 or fragile in current browsers.                                   |
+| Dynamic Client Registration                                                 | MCP deprecated it for Client ID Metadata Documents.                                              |
+| FAPI 2.0: PAR, DPoP, mTLS                                                   | Never; it needs PAR and sender-constrained tokens, a large addition beyond the Basic OP profile. |
+| Token revocation (RFC 7009), introspection (RFC 7662), `client_credentials` | A consumer in `examples/` or MCP authorization support needs one (#47).                          |
+| Custom skills, subagents or hooks beyond `docs/harness.md`                  | A recorded failure calls for one, and an eval can measure it.                                    |
+| obra/superpowers                                                            | Its always-on prompt conflicts with lean context; see `docs/research/ai-development.md`.         |
+| A second vendor's model for review                                          | Calibration shows a systematic blind spot.                                                       |
+| Agents running in CI                                                        | #1.                                                                                              |
 
 ## Agent skills
 

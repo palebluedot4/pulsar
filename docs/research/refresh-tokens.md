@@ -16,8 +16,7 @@ their source at these tags:
 - node-oidc-provider v9.13.3
 - Keycloak 26.8.2
 
-Paths are relative to each repository at its tag, and line numbers are
-approximate. OAuth 2.1 was read as draft-ietf-oauth-v2-1-17 (October 2026),
+Paths are relative to each repository at its tag. OAuth 2.1 was read as draft-ietf-oauth-v2-1-17 (October 2026),
 which is still a draft. Anything not confirmed is marked **UNVERIFIED**.
 
 ## The suite's oidcc-refresh-token module
@@ -30,7 +29,7 @@ not in the Config OP plan.
 | Asking for it         | Sends `scope=openid offline_access` only if discovery's `scopes_supported` lists `offline_access`, and then adds `prompt=consent`. Otherwise it sends `openid` alone.                                                                                                                                                        | `condition/client/SetScopeInClientConfigurationToOpenIdOfflineAccessIfServerSupportsOfflineAccess.java`, `…/AddPromptConsentToAuthorizationEndpointRequestIfScopeContainsOfflineAccess.java` |
 | No refresh token      | The module is skipped, with a WARNING if `grant_types_supported` lists `refresh_token`.                                                                                                                                                                                                                                      | `openid/OIDCCRefreshToken.java`                                                                                                                                                              |
 | Discovery             | Issuing a refresh token while `grant_types_supported` lacks `refresh_token` is a WARNING.                                                                                                                                                                                                                                    | `condition/client/EnsureServerConfigurationSupportsRefreshToken.java`                                                                                                                        |
-| Refreshing            | One refresh per Client, a second after the code exchange. client sends `scope` set to its configured scope; client2 sends no `scope`.                                                                                                                                                                                        | `sequence/client/RefreshTokenRequestSteps.java`                                                                                                                                              |
+| Refreshing            | One refresh per Client, one second after the code exchange. client sends `scope` set to its configured scope; client2 sends no `scope`.                                                                                                                                                                                      | `sequence/client/RefreshTokenRequestSteps.java`                                                                                                                                              |
 | The refresh response  | 200, JSON, `Cache-Control: no-store`, `token_type` Bearer and an access token of enough entropy are each a FAILURE if missing. A missing `expires_in` is a WARNING. A new ID token and a new refresh token are optional. If a new refresh token is returned, it must be at least 16 bytes with more than 96 bits of entropy. | `sequence/client/RefreshTokenRequestSteps.java`, `condition/client/EnsureMinimumRefreshTokenLength.java`                                                                                     |
 | The new ID token      | If one is returned: `iss`, `sub`, `aud` and `azp` must equal the original's, `iat` must differ, and `auth_time` must equal the original's (OpenID Connect Core §12.2). Its `nonce`, `exp` and signature are not checked.                                                                                                     | `condition/client/CompareIdTokenClaims.java`                                                                                                                                                 |
 | UserInfo              | The new access token must get 200 at UserInfo.                                                                                                                                                                                                                                                                               | `openid/AbstractOIDCCServerTest.java`                                                                                                                                                        |
@@ -77,7 +76,8 @@ checks refresh tokens on code reuse, or a replay after the code's lifetime.
 - Discovery lists `offline_access` and `refresh_token`. Each refresh returns
   a new refresh token and ID token, so that the suite checks both.
 - A used code is kept, linked to the Refresh Token Family it started, until
-  the family ends, as Spring and fosite keep theirs. So a reuse is recognized
+  the family ends and the code itself has expired, as Spring and fosite keep
+  theirs. So a reuse is recognized
   for as long as there is a family to revoke, and no longer.
 - pulsar revokes only on a replay that would otherwise be valid: the same
   Client, the same redirect URI and a matching `code_verifier`. This follows
