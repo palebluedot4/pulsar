@@ -239,13 +239,21 @@ func code(t *testing.T, handler http.Handler, params url.Values) string {
 // unauthenticated if clientID is "".
 func tokenRequest(t *testing.T, handler http.Handler, clientID, secret string, form url.Values) response {
 	t.Helper()
+	b := &browser{t: t, handler: handler}
+	return b.do(newTokenRequest(t, clientID, secret, form))
+}
+
+// newTokenRequest returns a token request with form, from clientID with
+// secret by HTTP Basic authentication, or without authentication if
+// clientID is "".
+func newTokenRequest(t *testing.T, clientID, secret string, form url.Values) *http.Request {
+	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+tokenPath, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if clientID != "" {
 		req.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(secret))
 	}
-	b := &browser{t: t, handler: handler}
-	return b.do(req)
+	return req
 }
 
 // codeForm returns the form of a token request that redeems code for

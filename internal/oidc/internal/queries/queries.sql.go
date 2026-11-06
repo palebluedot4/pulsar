@@ -212,8 +212,11 @@ type RedeemAuthorizationCodeRow struct {
 // issued to this Client for this redirect URI, has not expired and has not
 // been redeemed. The caller checks the code challenge it returns, and
 // issues no token if the token request's code_verifier does not match it.
-// Under read committed, of two transactions redeeming one code, the second
-// waits for the first and then finds it redeemed.
+// Under read committed, of two transactions redeeming one code for its
+// Client and redirect URI, the second waits for the first and then finds
+// it redeemed. One for another Client or redirect URI, or after the code
+// has expired, does not wait: the row it reads does not match, so it is
+// not locked (see LockAuthorizationCode).
 func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthorizationCodeParams) (RedeemAuthorizationCodeRow, error) {
 	row := q.db.QueryRow(ctx, redeemAuthorizationCode,
 		arg.CodeHash,
