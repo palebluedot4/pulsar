@@ -520,11 +520,13 @@ func TestAuthorizationErrorPage(t *testing.T) {
 }
 
 // REQ-OAUTH-5, REQ-OAUTH-9, REQ-OAUTH-17, REQ-OAUTH-18, REQ-ISS-2,
-// REQ-CORE-6, REQ-CORE-8, REQ-CORE-9, REQ-PKCE-1, REQ-PKCE-2, REQ-PKCE-3:
-// once the Client and redirect URI are valid, an invalid request is
-// redirected to the redirect URI with the error, state and iss, before any
-// login; the redirect URI keeps its own query. A public Client must send
-// an S256 code_challenge, and any Client that sends one must name S256.
+// REQ-CORE-6, REQ-CORE-8, REQ-CORE-9, REQ-PKCE-1, REQ-PKCE-2, REQ-PKCE-3,
+// REQ-PKCE-7, REQ-PKCE-8: once the Client and redirect URI are valid, an
+// invalid request is redirected to the redirect URI with the error, state
+// and iss, before any login; the redirect URI keeps its own query. A
+// public Client must send a code_challenge; any Client that sends one must
+// name S256 and send it in the form RFC 7636 §4.2 gives, and one that
+// names a method must send it.
 func TestAuthorizationErrorRedirect(t *testing.T) {
 	t.Parallel()
 
@@ -662,6 +664,26 @@ func TestAuthorizationErrorRedirect(t *testing.T) {
 		{
 			name: "code_challenge_method unknown",
 			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge_method", "S512") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge_method and no code_challenge",
+			edit: func(v url.Values) { withPKCE(v); v.Del("code_challenge") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge of 42 characters",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", pkceChallenge[1:]) },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge of 129 characters",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", strings.Repeat("a", 129)) },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge with a character that is not unreserved",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", strings.ReplaceAll(pkceChallenge, "-", "+")) },
 			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
 		},
 		{

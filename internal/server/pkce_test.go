@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,8 +34,20 @@ func asPublic(params url.Values) {
 // withPKCE adds pkceChallenge to params, an authorization request's, by
 // S256.
 func withPKCE(params url.Values) {
-	params.Set("code_challenge", pkceChallenge)
+	withChallenge(params, pkceChallenge)
+}
+
+// withChallenge adds challenge to params, an authorization request's, by
+// S256.
+func withChallenge(params url.Values, challenge string) {
+	params.Set("code_challenge", challenge)
 	params.Set("code_challenge_method", "S256")
+}
+
+// challengeOf returns the S256 code_challenge of verifier (RFC 7636 §4.2).
+func challengeOf(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // pkceClient is a Client that sends an authorization request, with or
@@ -42,23 +56,30 @@ type pkceClient struct {
 	clientID    string
 	redirectURI string
 	basic       credentials // of HTTP Basic authentication, if any; a public Client sends its client_id instead
-	pkce        bool        // whether the authorization request sends pkceChallenge
+	challenge   string      // the S256 code_challenge the authorization request sends, if any
 }
 
 // The Clients of the tests: public with PKCE, and rp, a confidential
 // Client, with and without.
 var (
-	publicPKCE = pkceClient{clientID: "public", redirectURI: publicRedirectURI, pkce: true}
-	rpPKCE     = pkceClient{clientID: "rp", redirectURI: rpRedirectURI, basic: credentials{"rp", rpSecret}, pkce: true}
+	publicPKCE = pkceClient{clientID: "public", redirectURI: publicRedirectURI, challenge: pkceChallenge}
+	rpPKCE     = pkceClient{clientID: "rp", redirectURI: rpRedirectURI, basic: credentials{"rp", rpSecret}, challenge: pkceChallenge}
 	rpNoPKCE   = pkceClient{clientID: "rp", redirectURI: rpRedirectURI, basic: credentials{"rp", rpSecret}}
 )
+
+// publicFor returns public, sending the challenge of verifier.
+func publicFor(verifier string) pkceClient {
+	c := publicPKCE
+	c.challenge = challengeOf(verifier)
+	return c
+}
 
 // code returns a code issued for the Client's authorization request.
 func (c pkceClient) code(t *testing.T, handler http.Handler) string {
 	t.Helper()
 	params := clientParams(c.clientID, c.redirectURI)
-	if c.pkce {
-		withPKCE(params)
+	if c.challenge != "" {
+		withChallenge(params, c.challenge)
 	}
 	return code(t, handler, params)
 }
@@ -82,19 +103,22 @@ func (c pkceClient) redeem(t *testing.T, handler http.Handler, form url.Values) 
 	return tokenRequest(t, handler, c.basic.id, c.basic.secret, form)
 }
 
-// REQ-BCP-5, REQ-BCP-6, REQ-PKCE-5, REQ-OAUTH-11: a public Client redeems
-// its code with its client_id and the code_verifier of the code_challenge
-// it sent, by S256; a confidential Client does so with or without PKCE.
+// REQ-BCP-5, REQ-BCP-6, REQ-PKCE-5, REQ-PKCE-6, REQ-OAUTH-11: a public
+// Client redeems its code with its client_id and the code_verifier of the
+// code_challenge it sent, by S256, with a verifier of 43 to 128
+// characters; a confidential Client does so with or without PKCE.
 func TestPKCE(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	longest := strings.Repeat("~", 128) // the longest verifier RFC 7636 §4.1 allows
 	tests := []struct {
 		name     string
 		client   pkceClient
 		verifier string
 	}{
 		{name: "public Client", client: publicPKCE, verifier: pkceVerifier},
+		{name: "public Client, verifier of 128 characters", client: publicFor(longest), verifier: longest},
 		{name: "confidential Client with PKCE", client: rpPKCE, verifier: pkceVerifier},
 		{name: "confidential Client without PKCE", client: rpNoPKCE},
 	}
@@ -109,10 +133,11 @@ func TestPKCE(t *testing.T) {
 	}
 }
 
-// REQ-PKCE-4, REQ-BCP-6, REQ-BCP-7, REQ-OAUTH-11, REQ-OAUTH-26,
-// REQ-OAUTH-27: a token request fails with invalid_grant when its
-// code_verifier does not match the code_challenge the code was issued
-// with, when a confidential Client sends none for a code issued with one,
+// REQ-PKCE-4, REQ-PKCE-6, REQ-BCP-6, REQ-BCP-7, REQ-OAUTH-11,
+// REQ-OAUTH-26, REQ-OAUTH-27: a token request fails with invalid_grant
+// when its code_verifier is not of the form RFC 7636 §4.1 gives, even if
+// its challenge matches, or does not match the code_challenge the code
+// was issued with, when a confidential Client sends none for a code issued with one,
 // or when it sends one for a code issued without; with invalid_request
 // when a public Client sends none, whatever its code; and with
 // invalid_client when a Client identifies itself by client_id alone and
@@ -122,6 +147,11 @@ func TestPKCETokenErrors(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	// Verifiers of a form RFC 7636 §4.1 does not allow, each sent with its
+	// own challenge, so that only their form can fail them.
+	short := pkceVerifier[1:]
+	long := strings.Repeat("a", 129)
+	plus := strings.Repeat("a", 42) + "+"
 	tests := []struct {
 		name       string
 		client     pkceClient  // the Client the code is issued to
@@ -133,6 +163,18 @@ func TestPKCETokenErrors(t *testing.T) {
 	}{
 		{name: "public Client, wrong verifier", client: publicPKCE, verifier: wrongVerifier, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 		{name: "public Client, no verifier", client: publicPKCE, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
+		{
+			name: "verifier of 42 characters, matching its challenge", client: publicFor(short), verifier: short,
+			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
+		},
+		{
+			name: "verifier of 129 characters, matching its challenge", client: publicFor(long), verifier: long,
+			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
+		},
+		{
+			name: "verifier with a character that is not unreserved, matching its challenge", client: publicFor(plus), verifier: plus,
+			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
+		},
 		{name: "confidential Client, wrong verifier", client: rpPKCE, verifier: wrongVerifier, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 		{name: "confidential Client, no verifier", client: rpPKCE, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 		{
