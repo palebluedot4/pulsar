@@ -202,11 +202,9 @@ func TestOfflineAccessDenied(t *testing.T) {
 // REQ-CORE-53, REQ-CORE-28: the Consent an End-User gives when allowing
 // offline access covers the other scopes, never offline access. A later
 // request from the same Client without offline_access is answered from
-// it; a later one with it asks again.
-//
-// No request can show that the Consent lacks offline_access, since every
-// request that keeps offline_access asks the End-User; so the Consent's
-// record is read.
+// it; a later one with it asks again, listing offline access. The page
+// is shown for any request with prompt=consent, so only the Consent's
+// record shows that it lacks offline_access.
 func TestOfflineAccessNotRemembered(t *testing.T) {
 	t.Parallel()
 
@@ -227,7 +225,9 @@ func TestOfflineAccessNotRemembered(t *testing.T) {
 	}
 
 	wantCode(t, b.authorize(http.MethodGet, withScope("openid profile")), "later request without offline_access")
-	parseConsentPage(t, b.authorize(http.MethodGet, params))
+	if diff := cmp.Diff([]string{"openid", "profile", "offline_access"}, parseConsentPage(t, b.authorize(http.MethodGet, params)).scopes); diff != "" {
+		t.Errorf("consent page of a later request for offline access scopes mismatch (-want +got):\n%s", diff)
+	}
 }
 
 // REQ-CORE-54: offline_access without prompt=consent is ignored. The
