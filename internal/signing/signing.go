@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/palebluedot4/pulsar/internal/config"
 	"github.com/palebluedot4/pulsar/internal/signing/internal/queries"
 )
 
@@ -61,8 +62,12 @@ const GenerationLockID int64 = 0x70756c7361726b // "pulsark"
 // other purpose differs from it.
 const encryptionKeyInfo = "pulsar signing key encryption"
 
-// ErrNotLoaded is returned by [KeySet.Active] before the key set is loaded.
-var ErrNotLoaded = errors.New("signing: the key set is not loaded yet")
+// encryptionKeySize is the size of the key that seals private keys: 32
+// bytes, for AES-256.
+const encryptionKeySize = 32
+
+// errNotLoaded is returned by [KeySet.Active] before the key set is loaded.
+var errNotLoaded = errors.New("signing: the key set is not loaded yet")
 
 // Key is a signing key: a [crypto.Signer] that signs with RS256, and the
 // kid that names its public half in the JWK Set.
@@ -89,14 +94,14 @@ type snapshot struct {
 
 // New returns an empty key set for the database behind db, whose private
 // keys are encrypted under a key derived from secret.
-func New(db *pgxpool.Pool, secret [32]byte) *KeySet {
-	key, err := hkdf.Key(sha256.New, secret[:], nil, encryptionKeyInfo, 32)
+func New(db *pgxpool.Pool, secret config.Secret) *KeySet {
+	key, err := hkdf.Key(sha256.New, secret[:], nil, encryptionKeyInfo, encryptionKeySize)
 	if err != nil {
-		panic(fmt.Sprintf("signing: derive encryption key: %v", err)) // HKDF-SHA256 can derive 32 bytes from any secret.
+		panic(fmt.Sprintf("signing: derive encryption key: %v", err)) // HKDF-SHA256 can derive a key of this size from any secret.
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		panic(fmt.Sprintf("signing: %v", err)) // A 32-byte key is valid for AES-256.
+		panic(fmt.Sprintf("signing: %v", err)) // The key has AES-256's size.
 	}
 	aead, err := cipher.NewGCMWithRandomNonce(block)
 	if err != nil {
@@ -138,11 +143,11 @@ func (s *KeySet) Run(ctx context.Context, logger *slog.Logger) {
 }
 
 // Active returns the key to sign with: the last by generation time, ties
-// broken by kid. It returns ErrNotLoaded before the key set is loaded.
+// broken by kid. It returns an error before the key set is loaded.
 func (s *KeySet) Active() (Key, error) {
 	snap := s.loaded.Load()
 	if snap == nil {
-		return Key{}, ErrNotLoaded
+		return Key{}, errNotLoaded
 	}
 	return snap.active, nil
 }

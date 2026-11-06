@@ -280,17 +280,22 @@ func TestRunRefusesSecret(t *testing.T) {
 
 	// Each value contains this, so an error that echoes it is caught.
 	const marker = "hunter2"
+	// secret returns size bytes: the marker, then fill.
+	secret := func(size int, fill string) []byte {
+		return []byte(marker + strings.Repeat(fill, size-len(marker)))
+	}
+	std := base64.StdEncoding.EncodeToString
 	tests := []struct {
 		name   string
 		secret string
 	}{
 		{name: "unset", secret: ""},
 		{name: "not base64", secret: marker + "!not base64!"},
-		{name: "31 bytes", secret: base64.StdEncoding.EncodeToString([]byte(marker + strings.Repeat("x", 31-len(marker))))},
-		{name: "33 bytes", secret: base64.StdEncoding.EncodeToString([]byte(marker + strings.Repeat("x", 33-len(marker))))},
-		{name: "32 bytes, unpadded", secret: base64.RawStdEncoding.EncodeToString([]byte(marker + strings.Repeat("x", 32-len(marker))))},
-		{name: "32 bytes, URL alphabet", secret: base64.URLEncoding.EncodeToString([]byte(marker + strings.Repeat("\xff", 32-len(marker))))},
-		{name: "32 bytes, surrounded by spaces", secret: " " + base64.StdEncoding.EncodeToString([]byte(marker+strings.Repeat("x", 32-len(marker)))) + " "},
+		{name: "31 bytes", secret: std(secret(31, "x"))},
+		{name: "33 bytes", secret: std(secret(33, "x"))},
+		{name: "32 bytes, unpadded", secret: base64.RawStdEncoding.EncodeToString(secret(32, "x"))},
+		{name: "32 bytes, URL alphabet", secret: base64.URLEncoding.EncodeToString(secret(32, "\xff"))},
+		{name: "32 bytes, surrounded by spaces", secret: " " + std(secret(32, "x")) + " "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
