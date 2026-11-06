@@ -3,7 +3,8 @@
 #
 # Base images are pinned by tag and digest: the tag says which release, the
 # digest is what is pulled. They are bumped by hand, with a changelog entry in
-# docs/harness.md; the Go release matches go.mod's.
+# docs/harness.md. The Go release must be the one go.mod names, which
+# make dockerfile-check enforces.
 
 FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS build
 WORKDIR /src

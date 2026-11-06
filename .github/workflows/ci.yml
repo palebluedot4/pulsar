@@ -91,4 +91,6 @@ jobs:
         with:
           name: conformance-results
           path: conformance/results/
-          if-no-files-found: error
+          # Warn, not error: a run that fails before writing any results has
+          # already failed the job, with its own message.
+          if-no-files-found: warn

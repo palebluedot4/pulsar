@@ -22,11 +22,17 @@ services:
       # Reachable only from this network, and removed with it.
       POSTGRES_HOST_AUTH_METHOD: trust
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
+      # Over TCP, as pulsar connects: the image's first start runs a
+      # temporary server on its Unix socket alone, which pg_isready would
+      # otherwise report as ready.
+      test:
+        ["CMD", "pg_isready", "--host", "127.0.0.1", "--username", "postgres"]
       interval: 2s
       timeout: 5s
       retries: 15
 
+  # pulsar's name and port are also in config-op.json, runner/run.sh and
+  # the certificate make conformance generates; change them together.
   pulsar:
     build:
       context: ..
@@ -86,8 +92,11 @@ services:
       CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
       # No token; and the suite's self-signed certificate is not verified.
       CONFORMANCE_DEV_MODE: "1"
+    # Only what the runner reads, and where it writes; not tls/.
     volumes:
-      - .:/conformance:ro
+      - ./config-op.json:/conformance/config-op.json:ro
+      - ./expected-failures.json:/conformance/expected-failures.json:ro
+      - ./expected-warnings.json:/conformance/expected-warnings.json:ro
       - ./results:/results
     depends_on:
       - nginx
