@@ -24,10 +24,10 @@ SELECT scopes
 FROM consents
 WHERE subject = @subject AND client_id = @client_id;
 
--- name: GrantConsent :exec
+-- name: AddToConsent :exec
 -- Adds scopes to the Consent of the End-User for the Client, creating it if
--- there is none, in one statement, so that two grants at once both count.
+-- there is none, in one statement, so that two additions at once both count.
 INSERT INTO consents (subject, client_id, scopes)
-VALUES (@subject, @client_id, @scopes::text[])
+VALUES (@subject, @client_id, @scopes)
 ON CONFLICT (subject, client_id) DO UPDATE
 SET scopes = ARRAY(SELECT DISTINCT unnest(consents.scopes || excluded.scopes));

@@ -24,14 +24,17 @@ var (
 	consentClient = regexp.MustCompile(`<strong id="client">([^<]*)</strong>`)
 	consentScope  = regexp.MustCompile(`<li><code>([^<]*)</code>`)
 	consentAction = regexp.MustCompile(`<form method="post" action="([^"]*)">`)
+	consentHidden = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
 )
 
 // consentPage is a consent page: the Client it names, the scopes it lists,
-// and the URL its form is submitted to.
+// the URL its form is submitted to, and the hidden fields the form
+// submits.
 type consentPage struct {
 	client string
 	scopes []string
 	action *url.URL
+	hidden url.Values
 }
 
 // parseConsentPage returns the consent page that resp shows, failing the
@@ -54,7 +57,11 @@ func parseConsentPage(t *testing.T, resp response) consentPage {
 	for _, m := range consentScope.FindAllStringSubmatch(resp.body, -1) {
 		scopes = append(scopes, html.UnescapeString(m[1]))
 	}
-	return consentPage{client: html.UnescapeString(client[1]), scopes: scopes, action: u}
+	hidden := url.Values{}
+	for _, m := range consentHidden.FindAllStringSubmatch(resp.body, -1) {
+		hidden.Add(html.UnescapeString(m[1]), html.UnescapeString(m[2]))
+	}
+	return consentPage{client: html.UnescapeString(client[1]), scopes: scopes, action: u, hidden: hidden}
 }
 
 // decide submits the consent form of the page resp shows with decision,
@@ -63,7 +70,7 @@ func parseConsentPage(t *testing.T, resp response) consentPage {
 func (b *browser) decide(resp response, decision string) response {
 	b.t.Helper()
 	page := parseConsentPage(b.t, resp)
-	next := location(b.t, b.send(http.MethodPost, page.action.RequestURI(), url.Values{"decision": {decision}}))
+	next := location(b.t, b.submitConsent(page, url.Values{"decision": {decision}}, nil))
 	if next.Path != authorizationPath {
 		b.t.Fatalf("consent form redirected to %q, want %q", next, authorizationPath)
 	}
@@ -163,11 +170,33 @@ func TestConsentFormMalformed(t *testing.T) {
 	}
 }
 
-// submitConsent submits the consent form of page with form as its body,
-// and with header, which may be nil, and returns the response.
+// REQ-OAUTH-23, REQ-CORE-28: a decision counts only for the End-User the
+// consent page was shown for. alice's page, submitted after bob signs in
+// in the same browser, gives bob no Consent; bob is shown the page for
+// himself.
+func TestConsentDecisionBoundToEndUser(t *testing.T) {
+	t.Parallel()
+
+	b := &browser{t: t, handler: newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))}
+	alicePage := parseConsentPage(t, b.signIn(b.authorize(http.MethodGet, authorizationParams())))
+	b.login("bob", bobPassword, nil)
+
+	next := location(t, b.submitConsent(alicePage, url.Values{"decision": {"allow"}}, nil))
+	resp := b.send(http.MethodGet, next.RequestURI(), nil)
+	parseConsentPage(t, resp)
+	if !strings.Contains(resp.body, "Signed in as bob.") {
+		t.Errorf("consent page after alice's page was allowed while bob is signed in = %q, want bob's", resp.body)
+	}
+}
+
+// submitConsent submits the consent form of page, as a browser does, with
+// the page's hidden fields and form as its body, and with header, which
+// may be nil, and returns the response.
 func (b *browser) submitConsent(page consentPage, form url.Values, header http.Header) response {
 	b.t.Helper()
-	req := httptest.NewRequestWithContext(b.t.Context(), http.MethodPost, "https://op.example"+page.action.RequestURI(), strings.NewReader(form.Encode()))
+	body := maps.Clone(page.hidden)
+	maps.Copy(body, form)
+	req := httptest.NewRequestWithContext(b.t.Context(), http.MethodPost, "https://op.example"+page.action.RequestURI(), strings.NewReader(body.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	maps.Copy(req.Header, header)
 	return b.do(req)
@@ -185,15 +214,17 @@ func wantCode(t *testing.T, resp response, what string) {
 	}
 }
 
-// withScope returns authorizationParams with scope, and with each pair of
-// extra, a name and a value, set.
-func withScope(scope string, extra ...string) url.Values {
+// requestWith returns authorizationParams with each parameter of set set
+// to its values in set.
+func requestWith(set url.Values) url.Values {
 	params := authorizationParams()
-	params.Set("scope", scope)
-	for i := 0; i+1 < len(extra); i += 2 {
-		params.Set(extra[i], extra[i+1])
-	}
+	maps.Copy(params, set)
 	return params
+}
+
+// withScope returns authorizationParams with scope.
+func withScope(scope string) url.Values {
+	return requestWith(url.Values{"scope": {scope}})
 }
 
 // REQ-CORE-16, REQ-CORE-28: a Consent is remembered per End-User and
@@ -217,7 +248,7 @@ func TestConsentRemembered(t *testing.T) {
 	wantCode(t, b.decide(resp, "allow"), "request for a scope not yet allowed, allowed")
 	wantCode(t, b.authorize(http.MethodGet, withScope("openid profile email")), "request for the scopes allowed in two Consents")
 
-	resp = b.authorize(http.MethodGet, withScope("openid profile", "prompt", "consent"))
+	resp = b.authorize(http.MethodGet, requestWith(url.Values{"scope": {"openid profile"}, "prompt": {"consent"}}))
 	parseConsentPage(t, resp)
 	wantCode(t, b.decide(resp, "allow"), "prompt=consent, allowed")
 }
@@ -239,7 +270,7 @@ func TestConsentCannotBeForged(t *testing.T) {
 		{
 			name: "decision in the authorization request",
 			forge: func(*browser) url.Values {
-				return withScope("openid profile", "decision", "allow", "allowed", "allow", "consent", "allow")
+				return requestWith(url.Values{"scope": {"openid profile"}, "decision": {"allow"}, "allowed": {"allow"}, "consent": {"allow"}})
 			},
 		},
 		{

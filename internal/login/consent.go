@@ -20,12 +20,6 @@ import (
 // is submitted to.
 const ConsentPath = "/consent"
 
-// The decisions the consent form submits.
-const (
-	allow = "allow"
-	deny  = "deny"
-)
-
 // Consents keeps each End-User's Consents, in PostgreSQL. It is safe for
 // concurrent use.
 type Consents struct {
@@ -40,7 +34,7 @@ func NewConsents(pool *pgxpool.Pool) *Consents {
 // Covers reports whether the End-User whose Subject is subject has allowed
 // the Client clientID every one of scopes.
 func (c *Consents) Covers(ctx context.Context, subject, clientID string, scopes []string) (bool, error) {
-	granted, err := c.queries.FindConsent(ctx, queries.FindConsentParams{Subject: subject, ClientID: clientID})
+	allowed, err := c.queries.FindConsent(ctx, queries.FindConsentParams{Subject: subject, ClientID: clientID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -48,33 +42,48 @@ func (c *Consents) Covers(ctx context.Context, subject, clientID string, scopes 
 		return false, fmt.Errorf("find the Consent: %w", err)
 	}
 	for _, s := range scopes {
-		if !slices.Contains(granted, s) {
+		if !slices.Contains(allowed, s) {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
-// Grant adds scopes to what the End-User whose Subject is subject has
+// Allow adds scopes to what the End-User whose Subject is subject has
 // allowed the Client clientID.
-func (c *Consents) Grant(ctx context.Context, subject, clientID string, scopes []string) error {
-	if err := c.queries.GrantConsent(ctx, queries.GrantConsentParams{Subject: subject, ClientID: clientID, Scopes: scopes}); err != nil {
-		return fmt.Errorf("grant the Consent: %w", err)
+func (c *Consents) Allow(ctx context.Context, subject, clientID string, scopes []string) error {
+	if err := c.queries.AddToConsent(ctx, queries.AddToConsentParams{Subject: subject, ClientID: clientID, Scopes: scopes}); err != nil {
+		return fmt.Errorf("add to the Consent: %w", err)
 	}
 	return nil
 }
 
 // ConsentPage is the content of the consent page.
 type ConsentPage struct {
-	ClientID string   // the Client that asks
-	Username string   // the End-User signed in
+	ClientID string // the Client that asks
+	// Subject and Username are those of the End-User signed in, whom the
+	// page asks. A decision counts only for that Subject.
+	Subject  string
+	Username string
 	Scopes   []string // the scope values the Client asks for
 	// Action is where the form is submitted: the consent form's path, with
 	// the authorization request's parameters as its query.
 	Action string
 }
 
-// scopeDescriptions say what each scope value pulsar grants releases.
+// endUserField is the consent form's field that carries the Subject of
+// the End-User the page was shown for.
+const endUserField = "end_user"
+
+// consentPageData is what the consent page's template reads: the page,
+// and the form's names and values, from their one definition here.
+type consentPageData struct {
+	ConsentPage
+	EndUserField string
+	Allow, Deny  string
+}
+
+// scopeDescriptions say what each scope value pulsar knows releases.
 var scopeDescriptions = map[string]string{
 	"openid":  "your identifier at this provider",
 	"profile": "your name and other profile details",
@@ -103,8 +112,9 @@ var consentTemplate = template.Must(template.New("consent").Funcs(template.FuncM
 {{- end}}
 </ul>
 <form method="post" action="{{.Action}}">
-<p><button type="submit" name="decision" value="allow">Allow</button>
-<button type="submit" name="decision" value="deny">Deny</button></p>
+<input type="hidden" name="{{.EndUserField}}" value="{{.Subject}}">
+<p><button type="submit" name="decision" value="{{.Allow}}">Allow</button>
+<button type="submit" name="decision" value="{{.Deny}}">Deny</button></p>
 </form>
 </main>
 </body>
@@ -114,8 +124,14 @@ var consentTemplate = template.Must(template.New("consent").Funcs(template.FuncM
 // WriteConsentPage writes the consent page p, with the headers of every
 // page pulsar serves. It must be called after the Login Session is saved.
 func WriteConsentPage(w http.ResponseWriter, p ConsentPage) error {
+	data := consentPageData{
+		ConsentPage:  p,
+		EndUserField: endUserField,
+		Allow:        decisionValues[Allowed],
+		Deny:         decisionValues[Denied],
+	}
 	var buf bytes.Buffer
-	if err := consentTemplate.Execute(&buf, p); err != nil {
+	if err := consentTemplate.Execute(&buf, data); err != nil {
 		return fmt.Errorf("render the consent page: %w", err)
 	}
 	SetPageHeaders(w.Header())
@@ -126,11 +142,13 @@ func WriteConsentPage(w http.ResponseWriter, p ConsentPage) error {
 
 // ConsentHandler serves the consent form's submission, by POST. The
 // form's URL carries the authorization request's parameters as its query,
-// and its body only the decision, allow or deny. The decision is recorded
-// in the Login Session for that request (see [Interaction]), and the
-// browser is sent on to continuePath with the same query, where the
-// authorization endpoint acts on it. A browser without a Login Session
-// records nothing, and the authorization endpoint sends it to log in.
+// and its body the decision, allow or deny, and the Subject of the
+// End-User the page was shown for. The decision is recorded in the Login
+// Session for that request (see [Interaction]), if that End-User is still
+// the one signed in, and the browser is sent on to continuePath with the
+// same query, where the authorization endpoint acts on it. Otherwise
+// nothing is recorded, and the authorization endpoint asks again, or
+// sends a browser without a Login Session to log in.
 //
 // The form refuses cross-origin submissions, through
 // [http.CrossOriginProtection], so that another site cannot decide for an
@@ -153,8 +171,8 @@ func (h *consentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
-	decision := r.PostForm.Get("decision")
-	if decision != allow && decision != deny {
+	decision, ok := parseDecision(r.PostForm.Get("decision"))
+	if !ok {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
@@ -164,7 +182,7 @@ func (h *consentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r = loaded
-	if _, ok := h.sessions.endUser(r); ok {
+	if u, ok := h.sessions.endUser(r); ok && u.Subject == r.PostForm.Get(endUserField) {
 		h.sessions.decide(r, r.URL.RawQuery, decision)
 	}
 	if err := h.sessions.save(w, r); err != nil {
