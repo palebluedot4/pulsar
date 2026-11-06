@@ -45,7 +45,7 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh)
 .DEFAULT_GOAL := help
 .PHONY: help setup tools node-tools check verify fmt lint format-check \
 	markdown-lint shell-lint spell test tidy-check repocheck workflow-check \
-	vulncheck build hooks eval
+	sqlc sqlc-check vulncheck build hooks eval
 
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -56,7 +56,7 @@ setup: tools hooks ## Once per clone: tools, git hooks, and the plugin that need
 tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(ZIZMOR) $(NODE_TOOLS) ## Install every pinned tool
 	$(GO) -C tools mod download
 
-check: tidy-check lint format-check markdown-lint shell-lint spell repocheck workflow-check test ## Fast gate
+check: tidy-check sqlc-check lint format-check markdown-lint shell-lint spell repocheck workflow-check test ## Fast gate
 
 verify: check vulncheck build ## Full gate: check, reachable vulnerabilities, build
 
@@ -96,6 +96,15 @@ test: ## Tests with the race detector; needs PostgreSQL at PULSAR_TEST_DATABASE_
 tidy-check: ## Fail if go.mod or tools/go.mod is untidy
 	$(GO) mod tidy -diff
 	$(GO) -C tools mod tidy -diff
+
+# sqlc generates each domain package's query code from its queries.sql and
+# the migrations, as sqlc.yaml lists them. The generated code is committed,
+# so the gate fails when it differs from what sqlc would generate now.
+sqlc: ## Regenerate the query code from queries.sql files and migrations
+	$(TOOL) sqlc generate
+
+sqlc-check: ## Fail if the generated query code is stale
+	$(TOOL) sqlc diff
 
 repocheck: ## Requirement traceability and TODO(#N) form
 	$(GO) run ./internal/cmd/repocheck

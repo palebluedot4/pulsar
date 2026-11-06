@@ -1,6 +1,7 @@
 # sqlc generates each domain package's query code from its queries.sql and
 # the goose migrations, which are the one schema. The generated code
-# imports only pgx.
+# imports only pgx. `make sqlc` regenerates it; `make check` fails when it
+# is stale.
 version: "2"
 sql:
   - engine: postgresql
