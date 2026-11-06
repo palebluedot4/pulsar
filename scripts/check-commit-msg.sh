@@ -5,10 +5,23 @@
 # with a capitalized word (an acronym such as JWKS is fine) and has no
 # trailing period, and at most 72 characters. Used by the commit-msg hook
 # and by CI, so the rule has one definition.
+#
+# With --dependabot, which CI passes only for pull requests that
+# dependabot[bot] opened, the description may open with a capitalized word
+# and the header may be longer: Dependabot writes "build: Bump <module> from
+# <version> to <version>", and neither its case nor its length can be
+# configured (docs/harness.md). The type and the trailing period are still
+# checked.
 
 set -euo pipefail
 
-readonly message_file="${1:?usage: check-commit-msg.sh <path-to-commit-message>}"
+dependabot=false
+if [[ ${1:-} == --dependabot ]]; then
+	dependabot=true
+	shift
+fi
+readonly dependabot
+readonly message_file="${1:?usage: check-commit-msg.sh [--dependabot] <path-to-commit-message>}"
 readonly max_header=72
 readonly types='build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
 
@@ -42,12 +55,12 @@ if ! [[ ${header} =~ ^(${types})(\([a-z0-9./_-]+\))?!?:\ (.+)$ ]]; then
 fi
 description=${BASH_REMATCH[3]}
 
-if [[ ${description} =~ ^[A-Z]([^A-Z0-9]|$) ]]; then
+if ! ${dependabot} && [[ ${description} =~ ^[A-Z]([^A-Z0-9]|$) ]]; then
 	fail "The description starts with a capitalized word."
 fi
 if [[ ${description} == *. ]]; then
 	fail "The description ends with a period."
 fi
-if ((${#header} > max_header)); then
+if ! ${dependabot} && ((${#header} > max_header)); then
 	fail "The header is ${#header} characters; the limit is ${max_header}."
 fi

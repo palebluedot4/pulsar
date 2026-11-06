@@ -50,7 +50,7 @@ it, because `claude plugin eval` evaluates only plugins.
 | `make dockerfile-check` in `make check`              | Sensor, computational | The golang image pins `GOTOOLCHAIN=local`, so `Dockerfile` builds only with the Go release `go.mod` names, and `make verify` never builds it; the gate fails when the two differ, rather than the conformance job                                                                                                                                                                        | Review finding (#15)                                                                                                                                                                                                      |
 | `make conformance` and its CI job                    | Sensor, computational | The external oracle of #11: the OpenID Foundation's conformance suite checks pulsar over the wire, outside `go test`; the Config OP plan for now. A warning fails it as a failure does, unless an entry in `conformance/` accepts it with a reason                                                                                                                                       | Maintainer's decision (#11)                                                                                                                                                                                               |
 | `golangci-lint` configuration                        | Sensor, computational | Rules a tool can decide live in the tool, not in prose                                                                                                                                                                                                                                                                                                                                   | Hypothesis                                                                                                                                                                                                                |
-| Conventional Commits hook and CI job                 | Sensor, computational | One commit format, checked locally and in CI from one script                                                                                                                                                                                                                                                                                                                             | Hypothesis                                                                                                                                                                                                                |
+| Conventional Commits hook and CI job                 | Sensor, computational | One commit format, checked locally and in CI from one script; Dependabot's pull requests get its case and lengths (Versions)                                                                                                                                                                                                                                                             | Hypothesis                                                                                                                                                                                                                |
 | `mattpocock-skills:code-review` (spec axis)          | Sensor, inferential   | Fresh-context review of the diff against the spec; step 1 of "Before a pull request" in `AGENTS.md`                                                                                                                                                                                                                                                                                      | Pending ablation                                                                                                                                                                                                          |
 | `/security-review` before a PR                       | Sensor, inferential   | Anthropic runs it on its own pull requests; step 2 in `AGENTS.md`                                                                                                                                                                                                                                                                                                                        | Pending ablation                                                                                                                                                                                                          |
 | `code-review@claude-plugins-official` on PRs         | Sensor, inferential   | Parallel reviewers, each finding validated separately; step 3 in `AGENTS.md`, run locally until CI runs it (#1)                                                                                                                                                                                                                                                                          | Pending ablation                                                                                                                                                                                                          |
@@ -170,6 +170,22 @@ A vulnerable transitive dependency is patched with an override in
 and the condition for removing the override beside it. When the vulnerable
 code is not reachable from how the tool is used, the alert is dismissed as
 "vulnerable code not actually used", with the evidence in the dismissal.
+
+Dependabot's commits are checked with `scripts/check-commit-msg.sh
+--dependabot`, which CI passes only for pull requests that `dependabot[bot]`
+opened. That mode still requires a known type and no trailing period, but
+allows a capitalized first word and a header past 72 characters, so
+Dependabot's commits can land on `main` as `build: Bump <module> from
+<version> to <version>`. Neither can be configured. Dependabot capitalizes
+when every recent human commit in the 100 it reads has a colon followed by
+a capital somewhere in its message, which the `Co-Authored-By: Claude`
+trailer gives every commit here, unless the most recent Dependabot commit
+among those 100 sets the case instead. With dozens of commits a day, its
+own commits leave that window before its next weekly run. Module paths
+with pseudo-versions exceed 72 characters in any case. Read from
+dependabot-core's
+[`PrNamePrefixer`](https://github.com/dependabot/dependabot-core/blob/0e024a6d20eaa5b8728f5cfe3b9c340a35145663/common/lib/dependabot/pull_request_creator/pr_name_prefixer.rb#L78-L85)
+at `0e024a6`.
 
 Tools are installed by the maintainer, outside the sandbox, with `make setup`.
 Inside it, pnpm cannot switch to the version `package.json` pins (it fails to
@@ -310,3 +326,10 @@ None yet.
   conformance job would otherwise have found.
   Maintainer's decision: the `main` ruleset requires `make conformance`,
   so a regression in conformance blocks a merge (#11, story 72).
+- Dependabot's first pull requests, #30 and #31, failed the Conventional
+  Commits check with `build: Bump …`. Their commits landed in #33 with the
+  first word lowercased by hand, and the check gained `--dependabot` for
+  pull requests Dependabot opens, so the next ones pass as written
+  (Versions, above). Lowercasing alone would not have lasted: Dependabot
+  copies its own last commit only while that commit is among `main`'s 100
+  most recent.
