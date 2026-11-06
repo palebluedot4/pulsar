@@ -6,9 +6,9 @@ It is a reference implementation, not for production use. So far it serves
 liveness and readiness checks, its discovery document, its JWK Set, a login
 page that starts a Login Session, a consent page that remembers the scopes
 an End-User allows each Client, and the authorization code flow, with
-`prompt` and `max_age`, to an ID token
-and access token for Clients that authenticate with `client_secret_basic`.
-The other client authentication methods, PKCE and UserInfo are next.
+`prompt` and `max_age`, to an ID token and access token for Clients that
+authenticate with `client_secret_basic`, `client_secret_post` or
+`private_key_jwt`. Public Clients with PKCE, and UserInfo, are next.
 
 ## Running it
 

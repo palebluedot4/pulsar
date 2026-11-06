@@ -21,7 +21,7 @@ func FuzzParse(f *testing.F) {
 		`{"clients": [{"client_id": "native", "token_endpoint_auth_method": "none",
 			"redirect_uris": ["com.example.app:/oauth2redirect"]}]}`,
 		`{"clients": [{"client_id": "jwt", "token_endpoint_auth_method": "private_key_jwt",
-			"jwks": {"keys": [{"kty": "EC", "crv": "P-256",
+			"jwks": {"keys": [{"kty": "EC", "crv": "P-256", "alg": "ES256",
 				"x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
 				"y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}]},
 			"redirect_uris": ["https://rp.example/callback"]}]}`,

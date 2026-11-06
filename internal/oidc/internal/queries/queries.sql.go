@@ -30,6 +30,16 @@ func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, now time.
 	return err
 }
 
+const deleteExpiredClientAssertions = `-- name: DeleteExpiredClientAssertions :exec
+DELETE FROM client_assertions
+WHERE expiry <= $1
+`
+
+func (q *Queries) DeleteExpiredClientAssertions(ctx context.Context, now time.Time) error {
+	_, err := q.db.Exec(ctx, deleteExpiredClientAssertions, now)
+	return err
+}
+
 const insertAccessToken = `-- name: InsertAccessToken :exec
 INSERT INTO access_tokens (jti, code_hash, expiry)
 VALUES ($1, $2, $3)
@@ -77,6 +87,39 @@ func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthori
 		arg.Expiry,
 	)
 	return err
+}
+
+const insertClientAssertion = `-- name: InsertClientAssertion :execrows
+INSERT INTO client_assertions (client_id, jti_hash, expiry)
+VALUES ($1, $2, $3)
+ON CONFLICT (client_id, jti_hash) DO UPDATE
+SET expiry = excluded.expiry
+WHERE client_assertions.expiry <= $4
+`
+
+type InsertClientAssertionParams struct {
+	ClientID string
+	JtiHash  []byte
+	Expiry   time.Time
+	Now      time.Time
+}
+
+// Records a client assertion's jti for its Client, and affects no row if
+// an assertion of that Client with that jti has not yet expired. One whose
+// row has expired but is not yet deleted is replaced. Under read
+// committed, of two transactions recording one jti at once, the second
+// waits for the first and then affects no row.
+func (q *Queries) InsertClientAssertion(ctx context.Context, arg InsertClientAssertionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertClientAssertion,
+		arg.ClientID,
+		arg.JtiHash,
+		arg.Expiry,
+		arg.Now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :one

@@ -48,9 +48,10 @@ const (
 	bobSubject   = "0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b"
 )
 
-// flowRegistry returns a registry of three Clients and the End-Users alice
+// flowRegistry returns a registry of four Clients and the End-Users alice
 // and bob: rp and other authenticate with client_secret_basic, post with
-// client_secret_post.
+// client_secret_post, and jwt with private_key_jwt, by the public keys of
+// jwtKeys.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
 	reg, err := registry.Parse([]byte(`{
@@ -60,7 +61,9 @@ func flowRegistry(tb testing.TB) *registry.Registry {
 			{"client_id": "other", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hashPassword(tb, otherSecret) + `",
 			 "redirect_uris": ["https://other.example/callback"]},
 			{"client_id": "post", "token_endpoint_auth_method": "client_secret_post", "client_secret_hash": "` + hashPassword(tb, postSecret) + `",
-			 "redirect_uris": ["https://post.example/callback"]}
+			 "redirect_uris": ["` + postRedirectURI + `"]},
+			{"client_id": "jwt", "token_endpoint_auth_method": "private_key_jwt", "jwks": ` + jwtJWKS(tb) + `,
+			 "redirect_uris": ["` + jwtRedirectURI + `"]}
 		],
 		"end_users": [
 			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `"},
@@ -76,13 +79,13 @@ func flowRegistry(tb testing.TB) *registry.Registry {
 // newFlowHandler returns the handler of an OP at loginIssuer, with the
 // Clients and End-User of flowRegistry, backed by pool, with its signing
 // keys loaded.
-func newFlowHandler(t *testing.T, pool *pgxpool.Pool) http.Handler {
-	t.Helper()
+func newFlowHandler(tb testing.TB, pool *pgxpool.Pool) http.Handler {
+	tb.Helper()
 	keys := signing.New(pool, config.Secret{})
-	if err := keys.Load(t.Context()); err != nil {
-		t.Fatalf("Load() error = %v", err)
+	if err := keys.Load(tb.Context()); err != nil {
+		tb.Fatalf("Load() error = %v", err)
 	}
-	return New(slog.New(slog.NewTextHandler(t.Output(), nil)), mustParse(t, loginIssuer), pool, keys, flowRegistry(t), ready())
+	return New(slog.New(slog.NewTextHandler(tb.Output(), nil)), mustParse(tb, loginIssuer), pool, keys, flowRegistry(tb), ready())
 }
 
 // newFlowHandlerWithoutDatabase returns the handler of newFlowHandler with

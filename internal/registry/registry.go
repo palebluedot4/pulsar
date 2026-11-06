@@ -20,7 +20,9 @@
 // A Client authenticates with the token_endpoint_auth_method it registers:
 // client_secret_basic or client_secret_post with a client_secret_hash,
 // private_key_jwt with the public keys in jwks, or none, for a public
-// Client, with neither. Secrets and passwords appear only as Argon2id
+// Client, with neither. Each key in jwks names in alg the one algorithm it
+// signs with: RS256 or PS256 for an RSA key of at least 2048 bits, ES256
+// for a P-256 key. Secrets and passwords appear only as Argon2id
 // hashes in the PHC string format, such as the reference implementation's
 // `argon2 <salt> -id -e` prints.
 //
@@ -30,7 +32,10 @@
 package registry
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -73,7 +78,8 @@ type Client struct {
 	AuthMethod   AuthMethod
 	RedirectURIs []string
 	// JWKS holds the public keys of a Client that authenticates with
-	// private_key_jwt, and is nil for any other.
+	// private_key_jwt, and is nil for any other. Each key's Algorithm is
+	// one of AssertionAlgorithms, and is the only one it is used with.
 	JWKS *jose.JSONWebKeySet
 
 	secretHash *passwordHash // for client_secret_basic and client_secret_post
@@ -270,8 +276,17 @@ func newClient(e clientEntry) (*Client, error) {
 	return c, nil
 }
 
+// AssertionAlgorithms returns the JWS algorithms with which a Client
+// registered for private_key_jwt may sign its client assertions: an
+// allow-list, as RFC 8725 §3.2 requires. It holds no HMAC algorithm, since
+// client_secret_jwt is not offered, and never none.
+func AssertionAlgorithms() []jose.SignatureAlgorithm {
+	return []jose.SignatureAlgorithm{jose.RS256, jose.PS256, jose.ES256}
+}
+
 // checkJWKS checks that a Client's JWK Set holds at least one key, and
-// only valid public keys.
+// only public signing keys that each name, in alg, the one algorithm of
+// AssertionAlgorithms it is used with (RFC 8725 §3.1).
 func checkJWKS(set *jose.JSONWebKeySet) error {
 	if len(set.Keys) == 0 {
 		return errors.New("must hold at least one key")
@@ -280,6 +295,42 @@ func checkJWKS(set *jose.JSONWebKeySet) error {
 		if !k.Valid() || !k.IsPublic() {
 			return fmt.Errorf("keys[%d] is not a valid public key", i)
 		}
+		if k.Use != "" && k.Use != "sig" {
+			return fmt.Errorf("keys[%d]: use %q is not sig", i, k.Use)
+		}
+		if err := checkAssertionKey(k); err != nil {
+			return fmt.Errorf("keys[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// checkAssertionKey checks that k names an algorithm of
+// AssertionAlgorithms in alg, and is a key of the type and size that
+// algorithm takes.
+func checkAssertionKey(k jose.JSONWebKey) error {
+	// Of jose's algorithms, all but these few are refused alike.
+	//
+	//exhaustive:ignore
+	switch alg := jose.SignatureAlgorithm(k.Algorithm); alg {
+	case jose.RS256, jose.PS256:
+		pub, ok := k.Key.(*rsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("alg %s takes an RSA key", alg)
+		}
+		// RFC 7518 §3.3 and §3.5.
+		if n := pub.N.BitLen(); n < 2048 {
+			return fmt.Errorf("an RSA key must have at least 2048 bits, not %d", n)
+		}
+	case jose.ES256:
+		pub, ok := k.Key.(*ecdsa.PublicKey)
+		if !ok || pub.Curve != elliptic.P256() {
+			return fmt.Errorf("alg %s takes a P-256 key", alg)
+		}
+	case "":
+		return errors.New("alg is required, so that the key is used with one algorithm only")
+	default:
+		return fmt.Errorf("alg %q is not one of %s", alg, AssertionAlgorithms())
 	}
 	return nil
 }
