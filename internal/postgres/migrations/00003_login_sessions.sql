@@ -4,7 +4,7 @@
 
 -- +goose Up
 CREATE TABLE login_sessions (
-    -- The SHA-256 of the session token, hex-encoded (scs's
+    -- The SHA-256 of the session token, in unpadded base64url (scs's
     -- HashTokenInStore), so that no row holds a token a browser could
     -- present.
     token text PRIMARY KEY,
