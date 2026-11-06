@@ -242,6 +242,14 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // verifier of the form RFC 7636 §4.1 allows can be tried against a code,
 // and a weak one cannot be guessed in the code's lifetime.
 //
+// A code that cannot be redeemed revokes the access tokens issued from it,
+// if it was redeemed before (RFC 6749 §4.1.2): their records are deleted,
+// so that UserInfo refuses them. They are found by the code's hash, which
+// only one who holds the code can present, so they are revoked whichever
+// Client presents it, and also after the code has expired, until they
+// expire themselves. node-oidc-provider and Ory Hydra (fosite) likewise
+// revoke what a code issued by an identifier taken from it.
+//
 // The code is redeemed and the access token recorded in one transaction,
 // so that a code is redeemed at most once, and only when its token is
 // recorded. The tokens are signed after it commits, so
@@ -254,7 +262,9 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	jti := rand.Text()
 	var row queries.RedeemAuthorizationCodeRow
 	var claims claimsRequest
-	var mismatch bool
+	// Whether the code is refused, after the transaction commits what the
+	// refusal changed.
+	var refused bool
 	// Read committed whatever the database's default, so that a second
 	// redemption waits for the first and then finds the code redeemed,
 	// rather than failing to serialize.
@@ -268,9 +278,15 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			Now:         now,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
-			// TODO(#22): when the code was redeemed before, revoke the
-			// access tokens issued from it.
-			return errCodeNotRedeemable
+			refused = true
+			// A redemption whose Client or redirect URI does not match
+			// does not wait for one in progress, so the code's row is
+			// locked first: the tokens are then looked up after any
+			// redemption in progress has recorded its own.
+			if err := q.LockAuthorizationCode(ctx, hash); err != nil {
+				return err
+			}
+			return q.DeleteAccessTokensOfCode(ctx, hash)
 		}
 		if err != nil {
 			return err
@@ -278,7 +294,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		// A verifier that does not match commits the code redeemed, with
 		// no token issued from it (RFC 7636 §4.6).
 		if row.CodeChallenge != challenge {
-			mismatch = true
+			refused = true
 			return nil
 		}
 		// The token is recorded with the claims requested from UserInfo,
@@ -295,7 +311,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	if err != nil {
 		return nil, err
 	}
-	if mismatch {
+	if refused {
 		return nil, errCodeNotRedeemable
 	}
 	// Issuing a token is when expired ones are deleted. A failure leaves

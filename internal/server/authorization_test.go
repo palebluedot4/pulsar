@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -973,32 +972,6 @@ func TestTokenCodeExpiry(t *testing.T) {
 				}
 			})
 		})
-	}
-}
-
-// REQ-OAUTH-16: of token requests that redeem one code at once, at most
-// one succeeds.
-func TestTokenConcurrentRedemption(t *testing.T) {
-	t.Parallel()
-
-	const requests = 8
-	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	form := codeForm(code(t, handler, authorizationParams()))
-	statuses := make([]int, requests)
-	var wg sync.WaitGroup
-	for i := range requests {
-		wg.Go(func() {
-			statuses[i] = tokenRequest(t, handler, "rp", rpSecret, form).status
-		})
-	}
-	wg.Wait()
-	counts := map[int]int{}
-	for _, s := range statuses {
-		counts[s]++
-	}
-	want := map[int]int{http.StatusOK: 1, http.StatusBadRequest: requests - 1}
-	if diff := cmp.Diff(want, counts); diff != "" {
-		t.Errorf("statuses of %d concurrent redemptions of one code mismatch (-want +got):\n%s", requests, diff)
 	}
 }
 

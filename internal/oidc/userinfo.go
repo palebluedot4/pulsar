@@ -214,8 +214,8 @@ func (p *Provider) verifyAccessToken(ctx context.Context, token string) (verifie
 	case claims.Subject == "" || claims.ID == "":
 		return verifiedAccessToken{}, errTokenNotValid
 	}
-	// TODO(#22): refuse a token that a second redemption of its code has
-	// revoked.
+	// A token that a second redemption of its code has revoked has no
+	// record (RFC 6749 §4.1.2), so it is refused here.
 	data, err := p.queries.FindAccessToken(ctx, queries.FindAccessTokenParams{Jti: claims.ID, Now: now})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return verifiedAccessToken{}, errTokenNotValid

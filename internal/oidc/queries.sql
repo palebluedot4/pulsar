@@ -21,6 +21,22 @@ WHERE code_hash = @code_hash
     AND NOT redeemed
 RETURNING subject, scopes, nonce, code_challenge, claims, auth_time;
 
+-- name: LockAuthorizationCode :exec
+-- Locks the code's row, if it is still kept, until the transaction ends.
+-- Under read committed, a transaction that has redeemed the code but not
+-- yet committed is waited for, so that a later statement sees the access
+-- token it records.
+SELECT true
+FROM authorization_codes
+WHERE code_hash = @code_hash
+FOR UPDATE;
+
+-- name: DeleteAccessTokensOfCode :exec
+-- Revokes the access tokens issued from the code, by deleting their
+-- records.
+DELETE FROM access_tokens
+WHERE code_hash = @code_hash;
+
 -- name: DeleteExpiredAuthorizationCodes :exec
 DELETE FROM authorization_codes
 WHERE expiry <= @now;
