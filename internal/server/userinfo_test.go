@@ -126,10 +126,10 @@ func userInfoClaims(t *testing.T, resp response) map[string]any {
 }
 
 // REQ-CORE-36, REQ-CORE-37, REQ-CORE-38, REQ-CORE-39, REQ-CORE-40,
-// REQ-CORE-49, REQ-BEARER-1, REQ-BEARER-2: UserInfo returns, by GET or POST, with the
-// access token in the Authorization header or the body, alice's sub and
-// exactly the claims of the scopes granted, as JSON that no cache may
-// keep.
+// REQ-CORE-49, REQ-BEARER-1, REQ-BEARER-2: UserInfo returns, by GET or
+// POST, with the access token in the Authorization header or the body,
+// alice's sub and exactly the claims of the scopes granted, as JSON that
+// no cache may keep.
 func TestUserInfo(t *testing.T) {
 	t.Parallel()
 
@@ -243,7 +243,7 @@ func TestUserInfoInvalidToken(t *testing.T) {
 	parts := strings.Split(accessToken, ".")
 	widened, err := json.Marshal(with("scope", "openid profile email address phone"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	tampered := parts[0] + "." + base64.RawURLEncoding.EncodeToString(widened) + "." + parts[2]
 	tests := []struct {
