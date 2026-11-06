@@ -12,6 +12,7 @@ sql:
         package: queries
         out: internal/signing/internal/queries
         sql_package: pgx/v5
+        omit_unused_structs: true
         overrides:
           - db_type: timestamptz
             go_type: time.Time
@@ -23,6 +24,7 @@ sql:
         package: queries
         out: internal/login/internal/queries
         sql_package: pgx/v5
+        omit_unused_structs: true
         overrides:
           - db_type: timestamptz
             go_type: time.Time

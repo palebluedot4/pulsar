@@ -3,19 +3,3 @@
 //   sqlc v1.31.1
 
 package queries
-
-import (
-	"time"
-)
-
-type LoginSession struct {
-	Token  string
-	Data   []byte
-	Expiry time.Time
-}
-
-type SigningKey struct {
-	Kid              string
-	SealedPrivateKey []byte
-	CreatedAt        time.Time
-}

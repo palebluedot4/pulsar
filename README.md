@@ -36,10 +36,11 @@ read -rs password && printf %s "$password" | argon2 "$(openssl rand -hex 16)" -i
 # Once per database; every later start needs the same value.
 export PULSAR_SECRET="$(openssl rand -base64 32)"
 # Listens on :8080; PULSAR_ADDR overrides. The issuer must be https, except
-# on a loopback host.
+# on a loopback host. conformance/registry.json lists no Client or End-User;
+# name a registry of your own to sign anyone in.
 PULSAR_ISSUER=http://localhost:8080 \
   PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
-  PULSAR_REGISTRY=registry.json \
+  PULSAR_REGISTRY=conformance/registry.json \
   go run ./cmd/pulsar
 curl -i localhost:8080/.well-known/openid-configuration
 curl -i localhost:8080/jwks

@@ -28,9 +28,25 @@ func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, poo
 	mux.Handle("GET "+oidc.JWKSPath(issuer), keys.HandleJWKS())
 
 	loginPath := issuer.Route(login.Path)
-	loginPage := login.Handler(loginPath, pool, reg, logger)
+	// The login page needs the Login Session table, so it waits, as
+	// readiness does, until the schema is migrated.
+	loginPage := whenReady(ready, login.Handler(loginPath, pool, reg, logger))
 	mux.Handle("GET "+loginPath, loginPage)
 	mux.Handle("POST "+loginPath, loginPage)
+}
+
+// whenReady answers 503, which no cache may keep, until ready is closed,
+// and passes every request after that to h.
+func whenReady(ready <-chan struct{}, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-ready:
+			h.ServeHTTP(w, r)
+		default:
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	})
 }
 
 // handleLive reports that the process is serving requests. It checks no

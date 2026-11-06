@@ -182,6 +182,25 @@ func TestLoginPage(t *testing.T) {
 	}
 }
 
+// Until the database is migrated, the login page answers 503, as /readyz
+// does, rather than fail on a table that does not exist yet.
+func TestLoginBeforeReady(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewEmptyDatabase(t))
+	logger := slog.New(slog.NewTextHandler(t.Output(), nil))
+	handler := New(logger, mustParse(t, loginIssuer), pool, signing.New(pool, config.Secret{}), testRegistry(t), make(chan struct{}))
+	b := &browser{t: t, handler: handler}
+	for name, resp := range map[string]response{
+		"GET":  b.get(),
+		"POST": b.login("alice", alicePassword, nil),
+	} {
+		if resp.status != http.StatusServiceUnavailable {
+			t.Errorf("%s %s before ready status = %d, want %d", name, loginPath, resp.status, http.StatusServiceUnavailable)
+		}
+	}
+}
+
 // A correct username and password start a Login Session, whose cookie is
 // __Host- prefixed, Secure, HttpOnly and SameSite=Lax: Lax rather than
 // Strict, so that the top-level navigation from a Client that carries an
