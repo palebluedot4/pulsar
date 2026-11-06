@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -21,32 +20,13 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/palebluedot4/pulsar/internal/oidc"
+	"github.com/palebluedot4/pulsar/internal/config"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
-	"github.com/palebluedot4/pulsar/internal/server"
 	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 // secret stands in for PULSAR_SECRET.
-var secret = [32]byte{1, 2, 3}
-
-// ready returns a channel that is already closed.
-func ready() <-chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-	return ch
-}
-
-// newHandler returns pulsar's handler for the OP at https://op.example,
-// signing with keys.
-func newHandler(t *testing.T, pool *pgxpool.Pool, keys *signing.KeySet) http.Handler {
-	t.Helper()
-	issuer, err := oidc.ParseIssuer("https://op.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return server.New(issuer, pool, keys, ready())
-}
+var secret = config.Secret{1, 2, 3}
 
 // load returns a key set for pool, loaded.
 func load(t *testing.T, pool *pgxpool.Pool) *signing.KeySet {
@@ -58,12 +38,13 @@ func load(t *testing.T, pool *pgxpool.Pool) *signing.KeySet {
 	return keys
 }
 
-// getJWKS sends GET /jwks to handler and returns the response.
-func getJWKS(t *testing.T, handler http.Handler) *httptest.ResponseRecorder {
+// getJWKS sends GET /jwks to the JWK Set handler of keys and returns the
+// response.
+func getJWKS(t *testing.T, keys *signing.KeySet) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/jwks", http.NoBody)
-	handler.ServeHTTP(rec, req)
+	keys.HandleJWKS().ServeHTTP(rec, req)
 	return rec
 }
 
@@ -86,12 +67,13 @@ func decodeJWKS(t *testing.T, rec *httptest.ResponseRecorder) jwkSet {
 	return set
 }
 
-// kids returns the kid of each key in set, in order.
-func kids(set jwkSet) []string {
+// sortedKids returns the kid of each key in set, sorted.
+func sortedKids(set jwkSet) []string {
 	var kids []string
 	for _, key := range set.Keys {
 		kids = append(kids, key["kid"])
 	}
+	slices.Sort(kids)
 	return kids
 }
 
@@ -103,7 +85,7 @@ func TestJWKS(t *testing.T) {
 	t.Parallel()
 
 	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
-	rec := getJWKS(t, newHandler(t, pool, load(t, pool)))
+	rec := getJWKS(t, load(t, pool))
 
 	wantHeader := map[string]string{
 		"Content-Type":                "application/json",
@@ -151,12 +133,13 @@ func TestJWKS(t *testing.T) {
 }
 
 // Before the key set is loaded, as while pulsar migrates, the JWK Set is
-// not served, and the refusal is not cached.
+// not served, and the refusal is not cached. It cites no requirement: no
+// clause in scope says what an OP answers before it has keys.
 func TestJWKSBeforeLoad(t *testing.T) {
 	t.Parallel()
 
 	pool := postgrestest.Open(t, postgrestest.UnreachableURL(t))
-	rec := getJWKS(t, newHandler(t, pool, signing.New(pool, secret)))
+	rec := getJWKS(t, signing.New(pool, secret))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("GET /jwks before Load status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -167,11 +150,13 @@ func TestJWKSBeforeLoad(t *testing.T) {
 
 // REQ-JWA-2: a JWS signed through the active key's crypto.Signer, as
 // RS256 defines, verifies against the published JWK Set.
+//
+// The test signs through Active itself: nothing pulsar serves signs yet,
+// until the token endpoint (#17) issues ID Tokens.
 func TestSignatureVerifiesAgainstJWKS(t *testing.T) {
 	t.Parallel()
 
-	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
-	keys := load(t, pool)
+	keys := load(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 	active, err := keys.Active()
 	if err != nil {
 		t.Fatalf("Active() error = %v", err)
@@ -191,7 +176,7 @@ func TestSignatureVerifiesAgainstJWKS(t *testing.T) {
 	compact := signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
 
 	var set jose.JSONWebKeySet
-	if err := json.Unmarshal(getJWKS(t, newHandler(t, pool, keys)).Body.Bytes(), &set); err != nil {
+	if err := json.Unmarshal(getJWKS(t, keys).Body.Bytes(), &set); err != nil {
 		t.Fatalf("GET /jwks body: %v", err)
 	}
 	jws, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.RS256})
@@ -211,8 +196,36 @@ func TestSignatureVerifiesAgainstJWKS(t *testing.T) {
 	}
 }
 
+// storedKey is a row of the signing_keys table.
+type storedKey struct {
+	kid       string
+	sealed    []byte
+	createdAt time.Time
+}
+
+// generateElsewhere loads a key set, under the same secret, on a database
+// of its own, so that it generates a key there, and returns the stored
+// row.
+func generateElsewhere(t *testing.T) storedKey {
+	t.Helper()
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	load(t, pool)
+	var key storedKey
+	err := pool.QueryRow(t.Context(), "SELECT kid, sealed_private_key, created_at FROM signing_keys").
+		Scan(&key.kid, &key.sealed, &key.createdAt)
+	if err != nil {
+		t.Fatalf("read the key stored elsewhere: %v", err)
+	}
+	return key
+}
+
 // REQ-JWK-2: a key that another replica stores appears in this replica's
 // JWK Set after one reload interval, not before, under a kid of its own.
+//
+// Until rotation (#23), a replica stores a key only in an empty database,
+// so the other replica's key is generated in a database of its own, under
+// the same secret, and its row copied into this replica's database, as the
+// other replica's insert would put it there.
 //
 // The pool is opened inside the bubble, so that its connections and
 // timers belong to it, on an address rather than a host name, so that it
@@ -222,6 +235,7 @@ func TestSignatureVerifiesAgainstJWKS(t *testing.T) {
 func TestJWKSReloadsKeyFromAnotherReplica(t *testing.T) {
 	t.Parallel()
 
+	added := generateElsewhere(t)
 	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
@@ -230,9 +244,11 @@ func TestJWKSReloadsKeyFromAnotherReplica(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer pool.Close()
-		replica, other := load(t, pool), load(t, pool)
-		handler := newHandler(t, pool, replica)
-		before := kids(decodeJWKS(t, getJWKS(t, handler)))
+		replica := load(t, pool)
+		before := sortedKids(decodeJWKS(t, getJWKS(t, replica)))
+		if slices.Contains(before, added.kid) {
+			t.Fatalf("GET /jwks before the copy has kids %q, want none of them %q", before, added.kid)
+		}
 
 		reloading := make(chan struct{})
 		go func() {
@@ -243,27 +259,23 @@ func TestJWKSReloadsKeyFromAnotherReplica(t *testing.T) {
 			cancel()
 			<-reloading
 		}()
-		added, err := signing.AddKey(ctx, other)
+		_, err = pool.Exec(ctx, "INSERT INTO signing_keys (kid, sealed_private_key, created_at) VALUES ($1, $2, $3)",
+			added.kid, added.sealed, added.createdAt)
 		if err != nil {
-			t.Fatalf("AddKey() error = %v", err)
+			t.Fatalf("copy the key stored elsewhere: %v", err)
 		}
 
 		time.Sleep(signing.ReloadInterval - time.Nanosecond)
 		synctest.Wait()
-		if got := kids(decodeJWKS(t, getJWKS(t, handler))); !cmp.Equal(got, before) {
-			t.Errorf("GET /jwks just before one reload interval has kids %q, want %q", got, before)
+		if diff := cmp.Diff(before, sortedKids(decodeJWKS(t, getJWKS(t, replica)))); diff != "" {
+			t.Errorf("GET /jwks just before one reload interval kids mismatch (-want +got):\n%s", diff)
 		}
 
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
-		// The keys are dated the same instant of the bubble's clock, so
-		// their order is not the order they were added in.
-		got := slices.Sorted(slices.Values(kids(decodeJWKS(t, getJWKS(t, handler)))))
-		if want := slices.Sorted(slices.Values(append(slices.Clone(before), added))); !cmp.Equal(got, want) {
-			t.Errorf("GET /jwks after one reload interval has kids %q, want %q", got, want)
-		}
-		if slices.Contains(before, added) || strings.TrimSpace(added) == "" {
-			t.Errorf("AddKey() kid = %q, want one distinct from %q", added, before)
+		want := slices.Sorted(slices.Values(append(slices.Clone(before), added.kid)))
+		if diff := cmp.Diff(want, sortedKids(decodeJWKS(t, getJWKS(t, replica)))); diff != "" {
+			t.Errorf("GET /jwks after one reload interval kids mismatch (-want +got):\n%s", diff)
 		}
 	})
 }
