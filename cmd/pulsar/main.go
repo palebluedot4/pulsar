@@ -173,6 +173,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 
 	// Migrate and load the signing keys, report the result on startErr,
 	// and then, if both succeeded, reload the keys until the run ends.
+	// The keys are logged as loaded only once the replica is ready, so
+	// that whoever reads the log line, a test included, finds /readyz
+	// answering 200.
 	keysCtx, stopKeys := context.WithCancel(ctx)
 	defer stopKeys()
 	startErr := make(chan error, 1)
@@ -183,6 +186,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 		startErr <- err
 		if err == nil {
 			close(ready)
+			active, _ := keys.Active() // prepare has loaded the keys, so Active cannot fail.
+			logger.InfoContext(keysCtx, "signing keys loaded", "kid", active.KID)
 			keys.Run(keysCtx, logger)
 		}
 	}()
@@ -269,7 +274,5 @@ func prepare(ctx context.Context, pool *pgxpool.Pool, keys *signing.KeySet, logg
 	if err := keys.Load(ctx); err != nil {
 		return fmt.Errorf("load the signing keys: %w", err)
 	}
-	active, _ := keys.Active() // Load has succeeded, so Active cannot fail.
-	logger.InfoContext(ctx, "signing keys loaded", "kid", active.KID)
 	return nil
 }
