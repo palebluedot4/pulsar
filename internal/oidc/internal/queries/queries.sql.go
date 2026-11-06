@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+const deleteAccessTokensOfCode = `-- name: DeleteAccessTokensOfCode :exec
+DELETE FROM access_tokens
+WHERE code_hash = $1
+`
+
+// Revokes the access tokens issued from the code, by deleting their
+// records.
+func (q *Queries) DeleteAccessTokensOfCode(ctx context.Context, codeHash []byte) error {
+	_, err := q.db.Exec(ctx, deleteAccessTokensOfCode, codeHash)
+	return err
+}
+
 const deleteExpiredAccessTokens = `-- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
 WHERE expiry <= $1
@@ -151,6 +163,22 @@ func (q *Queries) InsertClientAssertion(ctx context.Context, arg InsertClientAss
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const lockAuthorizationCode = `-- name: LockAuthorizationCode :exec
+SELECT true
+FROM authorization_codes
+WHERE code_hash = $1
+FOR UPDATE
+`
+
+// Locks the code's row, if it is still kept, until the transaction ends.
+// Under read committed, a transaction that has redeemed the code but not
+// yet committed is waited for, so that a later statement sees the access
+// token it records.
+func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash []byte) error {
+	_, err := q.db.Exec(ctx, lockAuthorizationCode, codeHash)
+	return err
 }
 
 const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :one

@@ -210,8 +210,8 @@ that pulsar, as an OP, must or should meet.
   In the `Authorization` header, or, by POST, in the form-encoded body
   (REQ-BEARER-1, REQ-BEARER-2). The token is validated as RFC 9068 §4
   requires of a resource server (REQ-AT-6 to REQ-AT-11), and its record
-  must be current: recorded, and not expired. Refusing a token whose code
-  was redeemed twice comes with #22.
+  must be current: recorded, and not expired. A token whose code was
+  redeemed twice has no record (REQ-OAUTH-29).
 
 - REQ-CORE-38 (§5.3.2): "The sub (subject) Claim MUST always be returned
   in the UserInfo Response."
