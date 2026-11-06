@@ -387,7 +387,8 @@ func badRequest(code, desc string) *tokenError {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
-		// Only strings and integers are encoded, which always encode.
+		// Only strings, numbers, booleans, and maps and slices of them
+		// are encoded, which always encode.
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}

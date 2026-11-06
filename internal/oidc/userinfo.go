@@ -99,20 +99,9 @@ func (p *Provider) userInfoClaims(w http.ResponseWriter, r *http.Request) (map[s
 		p.logger.ErrorContext(ctx, "UserInfo endpoint", "error", err)
 		return nil, &bearerError{status: http.StatusInternalServerError}
 	}
-	// sub always (§5.3.2); the claims of each scope granted, whatever their
-	// values (§5.4); and those the claims parameter requested from
-	// UserInfo, in addition (§5.5).
-	requested := maps.Clone(at.claims)
-	if requested == nil {
-		requested = make(claimRequests)
-	}
-	for scope := range strings.FieldsSeq(at.scope) {
-		for _, name := range scopeClaims[scope] {
-			requested[name] = claimRequest{}
-		}
-	}
+	// sub always (§5.3.2), and the claims requested.
 	claims := map[string]any{"sub": u.Subject}
-	requested.release(claims, all)
+	at.requested().release(claims, all)
 	return claims, nil
 }
 
@@ -163,12 +152,29 @@ var errTokenNotValid = errors.New("the access token is not valid")
 type verifiedAccessToken struct {
 	subject string
 	scope   string
-	claims  claimRequests // requested from UserInfo by the claims parameter
+	claims  requestedClaims // requested from UserInfo by the claims parameter
+}
+
+// requested returns the claims UserInfo returns for the token, if the
+// End-User has them: those of each scope granted, whatever their values
+// (§5.4), and those the claims parameter requested from UserInfo, in
+// addition (§5.5).
+func (at verifiedAccessToken) requested() requestedClaims {
+	requested := maps.Clone(at.claims)
+	if requested == nil {
+		requested = make(requestedClaims)
+	}
+	for scope := range strings.FieldsSeq(at.scope) {
+		for _, name := range scopeClaims[scope] {
+			requested[name] = claimRequest{}
+		}
+	}
+	return requested
 }
 
 // verifyAccessToken validates token as RFC 9068 §4 requires of a resource
 // server, with this OP as the resource, and checks that its record is
-// current: it has not expired, and would be gone had it been revoked.
+// current: it is recorded, and has not expired.
 func (p *Provider) verifyAccessToken(ctx context.Context, token string) (verifiedAccessToken, error) {
 	// A signature by a key the OP publishes, by RS256, never none.
 	typ, payload, ok := p.keys.VerifyJWT(token)
@@ -197,6 +203,8 @@ func (p *Provider) verifyAccessToken(ctx context.Context, token string) (verifie
 		now.Unix() >= claims.Expiry || claims.Subject == "" || claims.JTI == "" {
 		return verifiedAccessToken{}, errTokenNotValid
 	}
+	// TODO(#22): refuse a token that a second redemption of its code has
+	// revoked.
 	data, err := p.queries.FindAccessToken(ctx, queries.FindAccessTokenParams{Jti: claims.JTI, Now: now})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return verifiedAccessToken{}, errTokenNotValid

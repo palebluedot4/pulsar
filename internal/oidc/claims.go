@@ -56,8 +56,8 @@ func endUserClaims(u *registry.EndUser) (map[string]any, error) {
 // in the ID token and from UserInfo that pulsar can release. The sub Claim
 // is always both, and is not kept.
 type claimsRequest struct {
-	IDToken  claimRequests `json:"id_token,omitzero"`
-	UserInfo claimRequests `json:"userinfo,omitzero"`
+	IDToken  requestedClaims `json:"id_token,omitzero"`
+	UserInfo requestedClaims `json:"userinfo,omitzero"`
 }
 
 // encode returns c as it is stored with a code.
@@ -79,8 +79,8 @@ func decodeClaimsRequest(data []byte) (claimsRequest, error) {
 	return c, nil
 }
 
-// claimRequests are individual claim requests (§5.5.1), by claim name.
-type claimRequests map[string]claimRequest
+// requestedClaims are individual claim requests (§5.5.1), by claim name.
+type requestedClaims map[string]claimRequest
 
 // claimRequest is an individual claim request: the values the claim may
 // be released with, by its value or values member, or nil for any.
@@ -109,7 +109,7 @@ func (r claimRequest) allows(v any) bool {
 
 // release adds to dst those of all, an End-User's claims, that rs
 // requests, each only if its request allows its value.
-func (rs claimRequests) release(dst, all map[string]any) {
+func (rs requestedClaims) release(dst, all map[string]any) {
 	for name, r := range rs {
 		if v, ok := all[name]; ok && r.allows(v) {
 			dst[name] = v
@@ -121,7 +121,7 @@ func (rs claimRequests) release(dst, all map[string]any) {
 // the request asks for, in the order of supportedScopes.
 func (c claimsRequest) scopes() []string {
 	requested := make(map[string]bool)
-	for _, rs := range []claimRequests{c.IDToken, c.UserInfo} {
+	for _, rs := range []requestedClaims{c.IDToken, c.UserInfo} {
 		for name := range rs {
 			requested[claimScope[name]] = true
 		}
@@ -165,7 +165,7 @@ func parseClaimsParameter(raw string) (req claimsRequest, subjects []string, err
 	}
 	for _, m := range []struct {
 		name string
-		dst  *claimRequests
+		dst  *requestedClaims
 	}{{"id_token", &req.IDToken}, {"userinfo", &req.UserInfo}} {
 		var members map[string]jsontext.Value
 		if v, ok := top[m.name]; ok {
@@ -204,7 +204,7 @@ func parseClaimsParameter(raw string) (req claimsRequest, subjects []string, err
 				continue
 			}
 			if *m.dst == nil {
-				*m.dst = make(claimRequests)
+				*m.dst = make(requestedClaims)
 			}
 			(*m.dst)[name] = r
 		}

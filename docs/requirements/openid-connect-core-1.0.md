@@ -210,8 +210,8 @@ that pulsar, as an OP, must or should meet.
   In the `Authorization` header, or, by POST, in the form-encoded body
   (REQ-BEARER-1, REQ-BEARER-2). The token is validated as RFC 9068 §4
   requires of a resource server (REQ-AT-6 to REQ-AT-11), and its record
-  must be current: it has not expired, and would be gone had it been
-  revoked.
+  must be current: recorded, and not expired. Refusing a token whose code
+  was redeemed twice comes with #22.
 
 - REQ-CORE-38 (§5.3.2): "The sub (subject) Claim MUST always be returned
   in the UserInfo Response."
@@ -219,7 +219,10 @@ that pulsar, as an OP, must or should meet.
   be omitted from the JSON object representing the Claims; it SHOULD NOT
   be present with a null or empty string value."
 - REQ-CORE-40 (§5.3.2): "The content-type of the HTTP response MUST be
-  application/json if the response body is a text JSON object"
+  application/json if the response body is a text JSON object; the
+  response body SHOULD be encoded using UTF-8."
+
+  Go encodes JSON in UTF-8.
 
   Every response, success or error, also carries `Cache-Control: no-store`
   (#11), since it is about an End-User or a credential.
@@ -270,8 +273,10 @@ would serve no Client.
   So is a requested claim pulsar cannot release: one that is not a
   Standard Claim, or carries a language tag (§5.5.2). `essential` makes no
   difference, since "the Authorization Server MUST NOT generate an error
-  when Claims are not returned, whether they are Essential or Voluntary"
-  (§5.5.1).
+  when Claims are not returned, whether they are Essential or Voluntary,
+  unless otherwise specified in the description of the specific claim"
+  (§5.5.1). Of the claims pulsar can release, only `sub` is so specified
+  (REQ-CORE-48).
 
 - REQ-CORE-46 (§5.5.1, `value` and `values`): "When the Claim value does
   not match the requested value, the Claim is not included in the
