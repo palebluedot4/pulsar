@@ -497,7 +497,7 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 		{name: "exp passed", assertion: sign(with("exp", now.Add(-time.Minute).Unix()))},
 		{name: "exp more than an hour away", assertion: sign(with("exp", now.Add(time.Hour+time.Minute).Unix()))},
 		{name: "exp not a number", assertion: sign(with("exp", "soon"))},
-		{name: "nbf to come", assertion: sign(with("nbf", now.Add(time.Minute).Unix()))},
+		{name: "nbf more than a minute away", assertion: sign(with("nbf", now.Add(2*time.Minute).Unix()))},
 		{name: "no jti", assertion: sign(with("jti", nil))},
 		{name: "client_id another Client", assertion: sign(assertionClaims()), edit: func(f url.Values) { f.Set("client_id", "post") }},
 		{
@@ -524,6 +524,58 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 				t.Errorf("POST %s error = %q, want %q", tokenPath, got, "invalid_client")
 			}
 		})
+	}
+}
+
+// REQ-JWTAUTH-5: an assertion whose nbf is up to a minute ahead of
+// pulsar's clock, for clock skew between the Client and pulsar,
+// authenticates; one whose nbf is further ahead does not.
+func TestTokenPrivateKeyJWTNotBefore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ahead      time.Duration
+		wantStatus int
+	}{
+		{ahead: time.Minute, wantStatus: http.StatusOK},
+		{ahead: time.Minute + time.Second, wantStatus: http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ahead.String(), func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+			synctest.Test(t, func(t *testing.T) {
+				handler := newBubbleFlowHandler(t, databaseURL)
+				k := jwtKey(jose.RS256)
+				claims := assertionClaims()
+				claims["nbf"] = time.Now().Add(tt.ahead).Unix()
+				claims["exp"] = time.Now().Add(tt.ahead + time.Minute).Unix()
+				form := jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), signAssertion(t, k.alg, k.key, k.kid, claims))
+				if resp := postTokenRequest(t, handler, form); resp.status != tt.wantStatus {
+					t.Errorf("POST %s with nbf %v ahead status = %d, want %d; body %q", tokenPath, tt.ahead, resp.status, tt.wantStatus, resp.body)
+				}
+			})
+		})
+	}
+}
+
+// REQ-OAUTH-15: a token request that lacks a parameter fails with
+// invalid_request before its Client authenticates, so a client assertion
+// sent with it is not used up and authenticates the corrected request.
+func TestTokenMalformedRequestKeepsAssertion(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	k := jwtKey(jose.RS256)
+	assertion := signAssertion(t, k.alg, k.key, k.kid, assertionClaims())
+	form := jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), assertion)
+	malformed := maps.Clone(form)
+	malformed.Del("code")
+	if got := tokenErrorCode(t, postTokenRequest(t, handler, malformed), http.StatusBadRequest); got != "invalid_request" {
+		t.Errorf("POST %s without code error = %q, want %q", tokenPath, got, "invalid_request")
+	}
+	if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
+		t.Errorf("POST %s ID token aud = %v, want %q", tokenPath, got, "jwt")
 	}
 }
 

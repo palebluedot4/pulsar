@@ -24,6 +24,12 @@ const jwtBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" //nol
 // is kept.
 const maxAssertionLifetime = time.Hour
 
+// nbfLeeway is how far ahead of pulsar's clock a client assertion's nbf
+// may be, for clock skew between the Client and pulsar. exp gets none, so
+// that a jti is kept exactly as long as its assertion could be accepted;
+// nbf can have some without that cost.
+const nbfLeeway = time.Minute
+
 // authenticateAssertion authenticates a Client registered for
 // private_key_jwt by the JWT in the client_assertion parameter (RFC 7523
 // §3, OpenID Connect Core 1.0 §9), and records its jti so that it
@@ -108,7 +114,7 @@ func (p *Provider) verifyAssertion(raw string, now time.Time) (*registry.Client,
 		return nil, nil, false
 	case claims.Expiry.Time().After(now.Add(maxAssertionLifetime)):
 		return nil, nil, false
-	case claims.NotBefore != nil && now.Before(claims.NotBefore.Time()):
+	case claims.NotBefore != nil && now.Add(nbfLeeway).Before(claims.NotBefore.Time()):
 		return nil, nil, false
 	case claims.ID == "":
 		return nil, nil, false

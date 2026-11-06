@@ -89,11 +89,9 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 		return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
 	}
 
-	client, tokErr := p.authenticateClient(r, params)
-	if tokErr != nil {
-		return nil, tokErr
-	}
-
+	// The request's form is checked before its Client authenticates, so
+	// that a malformed request does not use up a client assertion, which
+	// authenticates once.
 	switch params.Get("grant_type") {
 	case "authorization_code":
 	case "":
@@ -111,6 +109,10 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 		return nil, badRequest(errInvalidRequest, "The parameter redirect_uri is required.")
 	}
 
+	client, tokErr := p.authenticateClient(r, params)
+	if tokErr != nil {
+		return nil, tokErr
+	}
 	resp, err := p.issueTokens(r.Context(), client, code, redirectURI)
 	switch {
 	case errors.Is(err, errCodeNotRedeemable):
