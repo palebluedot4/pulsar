@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-jose/go-jose/v4"
+
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
@@ -253,5 +255,51 @@ func TestPKCEWrongVerifierUsesUpCode(t *testing.T) {
 	}
 	if got := tokenErrorCode(t, publicPKCE.redeem(t, handler, right), http.StatusBadRequest); got != "invalid_grant" {
 		t.Errorf("POST %s with the right verifier after a wrong one error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+}
+
+// REQ-PKCE-6: a code_verifier of the wrong form is refused before the
+// Client authenticates, so a private_key_jwt Client's assertion sent with
+// it is not used up and authenticates the corrected request.
+func TestPKCEMalformedVerifierKeepsAssertion(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	params := clientParams("jwt", jwtRedirectURI)
+	withPKCE(params)
+	k := jwtKey(jose.RS256)
+	form := jwtForm(code(t, handler, params), signAssertion(t, k.alg, k.key, k.kid, assertionClaims()))
+	form.Set("code_verifier", pkceVerifier[1:])
+	if got := tokenErrorCode(t, postTokenRequest(t, handler, form), http.StatusBadRequest); got != "invalid_grant" {
+		t.Errorf("POST %s with a verifier of 42 characters error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+	form.Set("code_verifier", pkceVerifier)
+	if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
+		t.Errorf("POST %s with the assertion again and the right verifier ID token aud = %v, want %q", tokenPath, got, "jwt")
+	}
+}
+
+// REQ-OAUTH-28: a public Client's request is never answered from a
+// remembered Consent. The consent page is shown again for the scopes the
+// End-User allowed it before, and prompt=none gets consent_required.
+func TestPublicClientConsentNotRemembered(t *testing.T) {
+	t.Parallel()
+
+	b := &browser{t: t, handler: newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))}
+	params := clientParams("public", publicRedirectURI)
+	withPKCE(params)
+	if u := location(t, b.decide(b.signIn(b.authorize(http.MethodGet, params)), "allow")); u.Query().Get("code") == "" {
+		t.Fatalf("first request, allowed: redirected to %q, want a code", u)
+	}
+
+	parseConsentPage(t, b.authorize(http.MethodGet, params))
+
+	params.Set("prompt", "none")
+	u := location(t, b.authorize(http.MethodGet, params))
+	if got := withoutQuery(u); got != publicRedirectURI {
+		t.Fatalf("prompt=none redirected to %q, want %q", u, publicRedirectURI)
+	}
+	if got := u.Query().Get("error"); got != "consent_required" {
+		t.Errorf("prompt=none error = %q, want %q", got, "consent_required")
 	}
 }
