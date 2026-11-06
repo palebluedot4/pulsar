@@ -121,6 +121,13 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	// sent (RFC 9700 §2.1.1).
 	var challenge string
 	if verifier := params.Get("code_verifier"); verifier != "" {
+		// A verifier of another form than RFC 7636 §4.1 gives is refused
+		// even if its challenge matches, since a short one could be
+		// guessed (§7.1). It gets invalid_grant, as a verifier that does
+		// not match does (§4.6).
+		if !validPKCEValue(verifier) {
+			return nil, badRequest(errInvalidGrant, "The code_verifier must be 43 to 128 unreserved characters.")
+		}
 		challenge = codeChallenge(verifier)
 	} else if client.Public() {
 		// A public Client always uses PKCE (ADR 0002), even for a code
@@ -354,14 +361,6 @@ type accessTokenClaims struct {
 func accessTokenHash(accessToken string) string {
 	sum := sha256.Sum256([]byte(accessToken))
 	return base64.RawURLEncoding.EncodeToString(sum[:len(sum)/2])
-}
-
-// codeChallenge returns the S256 code challenge of a PKCE code_verifier:
-// BASE64URL-ENCODE(SHA256(ASCII(code_verifier))) (RFC 7636 §4.2). pulsar
-// supports S256 only (ADR 0002).
-func codeChallenge(verifier string) string {
-	sum := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func badRequest(code, desc string) *tokenError {
