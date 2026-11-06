@@ -51,13 +51,13 @@ type metadata struct {
 // is served: the issuer's path followed by /.well-known/openid-configuration
 // (Discovery §4).
 func DiscoveryPath(issuer *Issuer) string {
-	return issuer.route(discoveryPath)
+	return issuer.Route(discoveryPath)
 }
 
 // JWKSPath returns the path at which the JWK Set for issuer is served: the
 // path of the jwks_uri that the discovery document publishes.
 func JWKSPath(issuer *Issuer) string {
-	return issuer.route(jwksPath)
+	return issuer.Route(jwksPath)
 }
 
 // HandleDiscovery serves the discovery document for issuer. The document

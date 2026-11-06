@@ -3,8 +3,8 @@
 An OpenID Connect Provider in Go, built by AI agents under a harness that has
 to prove it helps. The provider is the artifact; the method is the subject.
 It is a reference implementation, not for production use. So far it serves
-liveness and readiness checks, its discovery document and its JWK Set; the
-other OpenID endpoints are next.
+liveness and readiness checks, its discovery document, its JWK Set, and a
+login page that starts a Login Session; the other OpenID endpoints are next.
 
 ## Running it
 
@@ -20,6 +20,18 @@ The private keys are stored encrypted under a key derived from
 pulsar cannot decrypt its keys, so it never becomes ready; it answers
 `/livez` until it has tried, and then exits with an error.
 
+Clients and End-Users are listed in a registry file, a JSON document
+named by `PULSAR_REGISTRY` and read at startup; pulsar refuses to start if
+it is invalid. The comment of [internal/registry](internal/registry/registry.go)
+describes its form. Client secrets and passwords appear in it only as
+Argon2id hashes in the PHC string format, which the reference
+implementation's `argon2` command prints:
+
+```sh
+# 2 passes over 32 MiB, one lane: above OWASP's minimum for Argon2id.
+read -rs password && printf %s "$password" | argon2 "$(openssl rand -hex 16)" -id -t 2 -m 15 -p 1 -e
+```
+
 ```sh
 # Once per database; every later start needs the same value.
 export PULSAR_SECRET="$(openssl rand -base64 32)"
@@ -27,11 +39,15 @@ export PULSAR_SECRET="$(openssl rand -base64 32)"
 # on a loopback host.
 PULSAR_ISSUER=http://localhost:8080 \
   PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
+  PULSAR_REGISTRY=registry.json \
   go run ./cmd/pulsar
 curl -i localhost:8080/.well-known/openid-configuration
 curl -i localhost:8080/jwks
 curl -i localhost:8080/readyz
 ```
+
+The login page is at `/login` under the issuer. Its Login Session cookie is
+`Secure`, which browsers keep over plain http only on `localhost`.
 
 As with libpq, anything `PULSAR_DATABASE_URL` leaves out is taken from the
 `PG*` environment variables (`PGHOST`, `PGPASSWORD` and the rest), a

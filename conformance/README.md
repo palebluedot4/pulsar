@@ -9,6 +9,7 @@ against pulsar. The Makefile target says how a run proceeds;
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `compose.yaml`           | pulsar, its PostgreSQL, the suite's prebuilt images at `release-v5.3.4`, and the suite's CI runner                                  |
 | `config-op.json`         | The suite's configuration for `oidcc-config-certification-test-plan`                                                                |
+| `registry.json`          | pulsar's registry of Clients and End-Users; empty, since the Config OP plan signs no one in                                         |
 | `expected-failures.json` | Conditions the runner is to accept as failures                                                                                      |
 | `expected-warnings.json` | Conditions the runner is to accept as warnings                                                                                      |
 | `runner/`                | The runner's image: `scripts/run-test-plan.py` from the suite, checksummed, and its hashed dependencies                             |

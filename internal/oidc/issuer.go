@@ -91,8 +91,9 @@ func (i *Issuer) endpointURL(p string) string {
 	return i.url.String() + p
 }
 
-// route returns the request path at which the endpoint at path p is served.
-func (i *Issuer) route(p string) string {
+// Route returns the request path at which the page or endpoint at path p
+// under the issuer is served.
+func (i *Issuer) Route(p string) string {
 	return i.url.EscapedPath() + p
 }
 

@@ -34,6 +34,10 @@ type Config struct {
 	// its signing keys at rest.
 	Secret Secret
 
+	// RegistryFile names the registry file, which lists the Clients and
+	// End-Users (ADR 0001).
+	RegistryFile string
+
 	// TLSCertFile and TLSKeyFile name a PEM certificate chain and its
 	// private key. Both are set, and pulsar serves TLS itself, or neither.
 	TLSCertFile string
@@ -45,10 +49,11 @@ type Config struct {
 // name the setting at fault.
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		Addr:        ":8080",
-		DatabaseURL: getenv("PULSAR_DATABASE_URL"),
-		TLSCertFile: getenv("PULSAR_TLS_CERT"),
-		TLSKeyFile:  getenv("PULSAR_TLS_KEY"),
+		Addr:         ":8080",
+		DatabaseURL:  getenv("PULSAR_DATABASE_URL"),
+		RegistryFile: getenv("PULSAR_REGISTRY"),
+		TLSCertFile:  getenv("PULSAR_TLS_CERT"),
+		TLSKeyFile:   getenv("PULSAR_TLS_KEY"),
 	}
 	if v := getenv("PULSAR_ADDR"); v != "" {
 		cfg.Addr = v
@@ -90,6 +95,10 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Secret = secret
+
+	if cfg.RegistryFile == "" {
+		return Config{}, errors.New("PULSAR_REGISTRY is required: the path of the registry file listing the Clients and End-Users")
+	}
 	return cfg, nil
 }
 

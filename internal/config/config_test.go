@@ -33,6 +33,7 @@ func TestLoadNamesPGVariables(t *testing.T) {
 		"PULSAR_ISSUER":       "https://op.example",
 		"PULSAR_DATABASE_URL": databaseURL,
 		"PULSAR_SECRET":       secret,
+		"PULSAR_REGISTRY":     "registry.json",
 	}
 	_, err := Load(func(key string) string { return env[key] })
 	if err == nil || !strings.Contains(err.Error(), "PULSAR_DATABASE_URL") || !strings.Contains(err.Error(), "PG*") {
@@ -60,8 +61,9 @@ func TestLoad(t *testing.T) {
 				"PULSAR_ISSUER":       "https://op.example",
 				"PULSAR_DATABASE_URL": databaseURL,
 				"PULSAR_SECRET":       secret,
+				"PULSAR_REGISTRY":     "registry.json",
 			},
-			want: Config{Addr: ":8080", Issuer: issuer, DatabaseURL: databaseURL, Secret: Secret([]byte(secretDecoded))},
+			want: Config{Addr: ":8080", Issuer: issuer, DatabaseURL: databaseURL, Secret: Secret([]byte(secretDecoded)), RegistryFile: "registry.json"},
 		},
 		{
 			name: "every setting from environment",
@@ -72,14 +74,16 @@ func TestLoad(t *testing.T) {
 				"PULSAR_TLS_CERT":     "cert.pem",
 				"PULSAR_TLS_KEY":      "key.pem",
 				"PULSAR_SECRET":       secret,
+				"PULSAR_REGISTRY":     "registry.json",
 			},
 			want: Config{
-				Addr:        "127.0.0.1:9000",
-				Issuer:      issuer,
-				DatabaseURL: databaseURL,
-				Secret:      Secret([]byte(secretDecoded)),
-				TLSCertFile: "cert.pem",
-				TLSKeyFile:  "key.pem",
+				Addr:         "127.0.0.1:9000",
+				Issuer:       issuer,
+				DatabaseURL:  databaseURL,
+				Secret:       Secret([]byte(secretDecoded)),
+				RegistryFile: "registry.json",
+				TLSCertFile:  "cert.pem",
+				TLSKeyFile:   "key.pem",
 			},
 		},
 	}
@@ -109,6 +113,7 @@ func TestSecretDoesNotFormat(t *testing.T) {
 			"PULSAR_ISSUER":       "https://op.example",
 			"PULSAR_DATABASE_URL": databaseURL,
 			"PULSAR_SECRET":       secret,
+			"PULSAR_REGISTRY":     "registry.json",
 		}[key]
 	})
 	if err != nil {
