@@ -17,6 +17,12 @@ const (
 	minKeySize  = 4 // bytes, the tag length
 )
 
+// maxMemory is the most memory, in KiB, a hash may ask for: 2 GiB, the
+// most any option RFC 9106 §4 recommends uses. A hash that asks for more
+// is refused when the registry loads, rather than when a login allocates
+// it.
+const maxMemory = 1 << 21
+
 // passwordHash is a parsed Argon2id hash of a password or client secret.
 type passwordHash struct {
 	memory  uint32 // KiB
@@ -57,6 +63,8 @@ func parsePasswordHash(s string) (passwordHash, error) {
 		return passwordHash{}, errors.New("p must be at least 1")
 	case m < 8*p:
 		return passwordHash{}, errors.New("m must be at least 8 times p")
+	case m > maxMemory:
+		return passwordHash{}, fmt.Errorf("m must be at most %d KiB (2 GiB)", maxMemory)
 	}
 	salt, err := base64.RawStdEncoding.Strict().DecodeString(fields[4])
 	if err != nil {
@@ -74,7 +82,7 @@ func parsePasswordHash(s string) (passwordHash, error) {
 	}
 	// param has checked that each fits the size it is converted to.
 	return passwordHash{
-		memory:  uint32(m), //nolint:gosec // G115: see above.
+		memory:  uint32(m),
 		time:    uint32(t), //nolint:gosec // G115: see above.
 		threads: uint8(p),  //nolint:gosec // G115: see above.
 		salt:    salt,

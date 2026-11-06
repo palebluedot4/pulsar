@@ -126,12 +126,8 @@ func Handler(path string, pool *pgxpool.Pool, reg *registry.Registry, logger *sl
 	sessions.Cookie.Secure = true
 	sessions.Cookie.HttpOnly = true
 	sessions.Cookie.SameSite = http.SameSiteLaxMode
-	sessions.ErrorFunc = func(w http.ResponseWriter, r *http.Request, err error) {
-		logger.ErrorContext(r.Context(), "login session", "error", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-	}
 	h := &handler{path: path, sessions: sessions, store: st, registry: reg, logger: logger}
-	return http.NewCrossOriginProtection().Handler(sessions.LoadAndSave(h))
+	return http.NewCrossOriginProtection().Handler(h)
 }
 
 type handler struct {
@@ -142,10 +138,27 @@ type handler struct {
 	logger   *slog.Logger
 }
 
+// ServeHTTP loads the request's Login Session itself, rather than through
+// scs's LoadAndSave, which saves the Login Session when the response is
+// first written and, if saving fails, writes its error response and then
+// the page after it. Here every response is preceded by save, which
+// answers 500 alone if saving fails.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for k, v := range pageHeaders {
 		w.Header().Set(k, v)
 	}
+	w.Header().Add("Vary", "Cookie")
+	var token string
+	if c, err := r.Cookie(cookieName); err == nil {
+		token = c.Value
+	}
+	ctx, err := h.sessions.Load(r.Context(), token)
+	if err != nil {
+		h.fail(w, r, "load the Login Session", err)
+		return
+	}
+	r = r.WithContext(ctx)
+
 	if r.Method == http.MethodPost {
 		h.login(w, r)
 		return
@@ -155,6 +168,26 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.SignedInAs = u.Username
 	}
 	h.render(w, r, p)
+}
+
+// save stores the request's Login Session, if it has changed, and sets its
+// cookie. It must run before anything of the response is written. If it
+// fails, it answers 500 and returns false.
+//
+// A Login Session changes at login, and on every request that loads one,
+// since each request moves its idle expiry.
+func (h *handler) save(w http.ResponseWriter, r *http.Request) bool {
+	ctx := r.Context()
+	if h.sessions.Status(ctx) != scs.Modified {
+		return true
+	}
+	token, expiry, err := h.sessions.Commit(ctx)
+	if err != nil {
+		h.fail(w, r, "save the Login Session", err)
+		return false
+	}
+	h.sessions.WriteSessionCookie(ctx, w, token, expiry)
+	return true
 }
 
 // login authenticates the End-User whose username and password the form
@@ -185,10 +218,13 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	h.sessions.Put(ctx, subjectKey, u.Subject)
 	h.sessions.Put(ctx, authTimeKey, time.Now().Unix())
 	// A login is rare next to the requests a Login Session serves, so it
-	// is when Login Sessions that have ended are deleted. A failure leaves them
-	// for the next login and does not fail this one.
+	// is when Login Sessions that have ended are deleted. A failure leaves
+	// them for the next login and does not fail this one.
 	if err := h.store.deleteEnded(ctx); err != nil {
 		h.logger.ErrorContext(ctx, "delete ended login sessions", "error", err)
+	}
+	if !h.save(w, r) {
+		return
 	}
 	http.Redirect(w, r, h.path, http.StatusSeeOther)
 }
@@ -208,6 +244,9 @@ func (h *handler) render(w http.ResponseWriter, r *http.Request, p page) {
 	var buf bytes.Buffer
 	if err := pageTemplate.Execute(&buf, p); err != nil {
 		h.fail(w, r, "render login page", err)
+		return
+	}
+	if !h.save(w, r) {
 		return
 	}
 	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.

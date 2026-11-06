@@ -157,9 +157,14 @@ func Load(path string) (*Registry, error) {
 // the form the package describes, or if a client_id, Subject or username
 // is not unique.
 func Parse(data []byte) (*Registry, error) {
-	var f file
+	// A pointer, so that a file holding only null, which would leave a
+	// struct as it was, is told apart from an empty object.
+	var f *file
 	if err := json.Unmarshal(data, &f, json.RejectUnknownMembers(true)); err != nil {
 		return nil, err
+	}
+	if f == nil {
+		return nil, errors.New("the registry must be a JSON object, not null")
 	}
 	r := &Registry{
 		clients:   make(map[string]*Client, len(f.Clients)),
@@ -281,8 +286,14 @@ func checkJWKS(set *jose.JSONWebKeySet) error {
 
 // checkRedirectURI checks raw against RFC 6749 §3.1.2: an absolute URI,
 // as RFC 3986 §4.3 defines it, with no fragment. A custom scheme, as a
-// native app uses, is allowed.
+// native app uses, is allowed; an http or https URI must name a host.
+//
+// url.Parse accepts characters RFC 3986 does not, such as spaces, so raw
+// is first checked against the characters RFC 3986 §2 allows.
 func checkRedirectURI(raw string) error {
+	if i := strings.IndexFunc(raw, notURIChar); i >= 0 {
+		return fmt.Errorf("%q is not a URI: RFC 3986 does not allow %q", raw, raw[i])
+	}
 	u, err := url.Parse(raw)
 	switch {
 	case err != nil:
@@ -292,12 +303,27 @@ func checkRedirectURI(raw string) error {
 		return fmt.Errorf("%q is not a URI: %w", raw, err)
 	case !u.IsAbs():
 		return fmt.Errorf("%q is not an absolute URI", raw)
+	case (u.Scheme == "https" || u.Scheme == "http") && u.Host == "":
+		return fmt.Errorf("%q has no host", raw)
 	// The raw value is checked, because url.Parse does not record an
 	// empty fragment ("https://rp.example/cb#") at all.
 	case strings.Contains(raw, "#"):
 		return fmt.Errorf("%q must not have a fragment", raw)
 	}
 	return nil
+}
+
+// notURIChar reports whether RFC 3986 §2 allows c nowhere in a URI: it is
+// none of the unreserved characters, the reserved ones, or the "%" that
+// starts a percent-encoding.
+func notURIChar(c rune) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return false
+	case strings.ContainsRune("-._~:/?#[]@!$&'()*+,;=%", c):
+		return false
+	}
+	return true
 }
 
 func newEndUser(e endUserEntry) (*EndUser, error) {
