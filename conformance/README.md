@@ -25,7 +25,10 @@ hashes in the other, as pulsar reads them.
 `runner/run.sh` runs the Config OP plan and then the Basic OP plan, with
 the variants `server_metadata=discovery` and
 `client_registration=static_client`. The registered redirect URI is the
-one the suite derives from the configuration's `alias`.
+one the suite derives from the configuration's `alias` and its own
+`BASE_URL` in `compose.yaml`; a change to either changes the
+`redirect_uris` in `registry.json` and the callback URL that
+`config-basic.json` matches.
 
 The runner fails a run when a condition fails or warns without a matching
 entry, when a module is skipped without one, and also when an entry
@@ -54,10 +57,12 @@ template for each unexpected result.
 ## Pages a person would review
 
 Four modules of the Basic OP plan ask for a page to be reviewed rather than
-checked by the suite: the login page shown again for `prompt=login` and for
-`max_age=1`, and, in two of them, the error page pulsar shows for a
-redirect URI the Client did not register. Such a module ends in `REVIEW`,
-which the runner accepts.
+checked by the suite. `oidcc-prompt-login` and `oidcc-max-age-1` review
+the login page shown again for `prompt=login` and for `max_age=1`;
+`oidcc-ensure-registered-redirect-uri` and
+`oidcc-ensure-request-object-with-redirect-uri` review the error page
+pulsar shows for a redirect URI the Client did not register. Such a module
+ends in `REVIEW`, which the runner accepts.
 `config-basic.json` overrides the browser automation for these modules
 so that, on reaching that page, it hands the page to the suite, which
 records it in the module's log. The suite records the page's HTML, not a

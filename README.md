@@ -17,8 +17,12 @@ reach it. UserInfo returns the End-User's `sub` and the claims of the
 with the access token in the `Authorization` header or the body; the
 `claims` parameter requests individual claims in the ID token or from
 UserInfo. A second redemption of a code revokes the access tokens issued
-from it, and `pulsar keys rotate` rotates the signing key. Running the
-conformance suite's Basic OP plan in CI is next.
+from it, and `pulsar keys rotate` rotates the signing key. The OpenID
+conformance suite's Config OP and Basic OP plans run against it in CI, and
+passed on 2026-11-06 at commit `bd97ab0`, as
+[Checking conformance](#checking-conformance) details. The next
+specification, not yet written, is the token lifecycle: refresh tokens,
+revocation and introspection.
 
 ## Running it
 
@@ -38,8 +42,9 @@ pulsar cannot decrypt its keys, so it never becomes ready; it answers
 environment as the server. Every replica publishes the key in its JWK Set at
 its next reload, within a minute, and signs with it two minutes after it is
 stored: one reload interval plus the JWK Set's one-minute cache lifetime, so
-that every replica, and every JWK Set a Client has cached, has the key
-first. The key it replaces stays in the JWK Set for eleven minutes more,
+that, provided every replica reloads on time and Clients honor
+`Cache-Control`, every replica, and every JWK Set a Client has cached, has
+the key first. The key it replaces stays in the JWK Set for eleven minutes more,
 the ten-minute token lifetime plus a reload interval, by when every token it
 signed has expired.
 
@@ -51,7 +56,7 @@ revoke a key: a leaked key stays in the JWK Set, so Clients accept tokens
 signed with it, for at least thirteen minutes.
 
 ```sh
-# The same environment as the server's.
+# The same environment as the server's, PULSAR_SECRET included (below).
 PULSAR_ISSUER=http://localhost:8080 \
   PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
   PULSAR_REGISTRY=conformance/registry.json \
@@ -129,6 +134,15 @@ consent pages. The run exits non-zero on a failure, a warning or a skipped
 module that `conformance/` does not list with a reason, and leaves the
 results in `conformance/results/`. CI runs the same target on every pull
 request.
+
+On 2026-11-06, CI ran both plans against commit `bd97ab0`, of
+[#46](https://github.com/palebluedot4/pulsar/pull/46), with no failures.
+Of the Basic OP plan's 35 modules, 28 passed; one ended in a warning,
+since pulsar never returns `acr`; two were skipped, since pulsar issues no
+refresh tokens and supports no request objects; and four ended in
+`REVIEW`, a page left for a person to look at, as
+[conformance/README.md](conformance/README.md) describes. That is a result
+of the suite's checks, not an OpenID certification.
 [conformance/README.md](conformance/README.md) describes the files it uses.
 
 ## How it is built
