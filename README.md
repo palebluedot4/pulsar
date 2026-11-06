@@ -9,7 +9,8 @@ an End-User allows each Client, and the authorization code flow, with
 `prompt` and `max_age`, to an ID token and access token for Clients that
 authenticate with `client_secret_basic`, `client_secret_post` or
 `private_key_jwt`, and for public Clients, which must use PKCE with `S256`.
-UserInfo is next.
+The token endpoint sends no CORS headers, so a public Client running in a
+browser on another origin cannot reach it. UserInfo is next.
 
 ## Running it
 

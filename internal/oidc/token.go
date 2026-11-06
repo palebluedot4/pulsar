@@ -122,6 +122,11 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	var challenge string
 	if verifier := params.Get("code_verifier"); verifier != "" {
 		challenge = codeChallenge(verifier)
+	} else if client.Public() {
+		// A public Client always uses PKCE (ADR 0002), even for a code
+		// issued without a challenge: before migration 00007, or by a
+		// replica not yet upgraded to require one.
+		return nil, badRequest(errInvalidRequest, "A public client must send code_verifier.")
 	}
 	resp, err := p.issueTokens(r.Context(), client, code, redirectURI, challenge)
 	switch {
@@ -226,9 +231,9 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // issueTokens redeems code, for client and redirectURI, and returns the
 // tokens issued for it. The code must have been issued with challenge, the
 // code challenge of the request's code_verifier, or "" if it sent none. A
-// code that cannot be redeemed is left as it was, so that a wrong
-// code_verifier does not use up the code of the Client that holds the
-// right one. The code is redeemed and the access token recorded
+// code_verifier that does not match uses up the code, so that a code can
+// be tried with one verifier only, and a weak verifier cannot be guessed
+// in the code's lifetime. The code is redeemed and the access token recorded
 // in one transaction, so that a code is redeemed at most once, and only
 // when its token is recorded. The tokens are signed after it commits, so
 // that the code's row is not locked meanwhile; signing fails only before
@@ -239,6 +244,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	hash := hashCode(code)
 	jti := rand.Text()
 	var row queries.RedeemAuthorizationCodeRow
+	var mismatch bool
 	// Read committed whatever the database's default, so that a second
 	// redemption waits for the first and then finds the code redeemed,
 	// rather than failing to serialize.
@@ -246,11 +252,10 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		q := p.queries.WithTx(tx)
 		var err error
 		row, err = q.RedeemAuthorizationCode(ctx, queries.RedeemAuthorizationCodeParams{
-			CodeHash:      hash,
-			ClientID:      client.ID,
-			RedirectUri:   redirectURI,
-			CodeChallenge: challenge,
-			Now:           now,
+			CodeHash:    hash,
+			ClientID:    client.ID,
+			RedirectUri: redirectURI,
+			Now:         now,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			// TODO(#22): when the code was redeemed before, revoke the
@@ -260,10 +265,19 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		if err != nil {
 			return err
 		}
+		// A verifier that does not match commits the code redeemed, with
+		// no token issued from it (RFC 7636 §4.6).
+		if row.CodeChallenge != challenge {
+			mismatch = true
+			return nil
+		}
 		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, Expiry: exp})
 	})
 	if err != nil {
 		return nil, err
+	}
+	if mismatch {
+		return nil, errCodeNotRedeemable
 	}
 	// Issuing a token is when expired ones are deleted. A failure leaves
 	// them for the next and does not fail this one.

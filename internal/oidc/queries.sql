@@ -7,23 +7,19 @@ VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_
 
 -- name: RedeemAuthorizationCode :one
 -- Marks the code redeemed and returns what it was issued for, if it was
--- issued to this Client for this redirect URI with this code challenge,
--- has not expired and has not been redeemed. The code challenge is the one
--- the token request's code_verifier makes, or the empty string if it sent
--- none, so that a code issued with a challenge needs its verifier, and one
--- issued without needs none and refuses one. A request that matches no row
--- leaves the code as it was. Under read committed, of two transactions
--- redeeming one code, the second waits for the first and then finds it
--- redeemed.
+-- issued to this Client for this redirect URI, has not expired and has not
+-- been redeemed. The caller checks the code challenge it returns, and
+-- issues no token if the token request's code_verifier does not match it.
+-- Under read committed, of two transactions redeeming one code, the second
+-- waits for the first and then finds it redeemed.
 UPDATE authorization_codes
 SET redeemed = true
 WHERE code_hash = @code_hash
     AND client_id = @client_id
     AND redirect_uri = @redirect_uri
-    AND code_challenge = @code_challenge
     AND expiry > @now
     AND NOT redeemed
-RETURNING subject, scopes, nonce, auth_time;
+RETURNING subject, scopes, nonce, code_challenge, auth_time;
 
 -- name: DeleteExpiredAuthorizationCodes :exec
 DELETE FROM authorization_codes

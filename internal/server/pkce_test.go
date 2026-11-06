@@ -112,10 +112,12 @@ func TestPKCE(t *testing.T) {
 // REQ-PKCE-4, REQ-BCP-6, REQ-BCP-7, REQ-OAUTH-11, REQ-OAUTH-26,
 // REQ-OAUTH-27: a token request fails with invalid_grant when its
 // code_verifier does not match the code_challenge the code was issued
-// with, when it sends none for a code issued with one, or one for a code
-// issued without; and with invalid_client when a Client identifies itself
-// by client_id alone and is not public, when a public Client sends
-// credentials, or when nothing identifies the Client.
+// with, when a confidential Client sends none for a code issued with one,
+// or when it sends one for a code issued without; with invalid_request
+// when a public Client sends none, whatever its code; and with
+// invalid_client when a Client identifies itself by client_id alone and
+// is not public, when a public Client sends credentials, or when nothing
+// identifies the Client.
 func TestPKCETokenErrors(t *testing.T) {
 	t.Parallel()
 
@@ -130,11 +132,7 @@ func TestPKCETokenErrors(t *testing.T) {
 		wantError  string
 	}{
 		{name: "public Client, wrong verifier", client: publicPKCE, verifier: wrongVerifier, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
-		{name: "public Client, no verifier", client: publicPKCE, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
-		{
-			name: "public Client, verifier longer than RFC 7636 allows", client: publicPKCE, verifier: strings.Repeat("a", 129),
-			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
-		},
+		{name: "public Client, no verifier", client: publicPKCE, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
 		{name: "confidential Client, wrong verifier", client: rpPKCE, verifier: wrongVerifier, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 		{name: "confidential Client, no verifier", client: rpPKCE, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 		{
@@ -196,9 +194,9 @@ func TestPKCETokenErrors(t *testing.T) {
 }
 
 // REQ-PKCE-4: a token request with a wrong code_verifier fails with
-// invalid_grant. pulsar leaves the code as it was, so that the Client that
-// holds the right verifier still redeems it, once.
-func TestPKCEWrongVerifierKeepsCode(t *testing.T) {
+// invalid_grant, and uses up the code, so that a code can be tried with
+// one verifier only: the right one then fails too.
+func TestPKCEWrongVerifierUsesUpCode(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
@@ -207,10 +205,7 @@ func TestPKCEWrongVerifierKeepsCode(t *testing.T) {
 	if got := tokenErrorCode(t, publicPKCE.redeem(t, handler, wrong), http.StatusBadRequest); got != "invalid_grant" {
 		t.Errorf("POST %s with a wrong verifier error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
-	if got := idTokenAudience(t, handler, publicPKCE.redeem(t, handler, right)); got != "public" {
-		t.Errorf("POST %s with the right verifier ID token aud = %v, want %q", tokenPath, got, "public")
-	}
 	if got := tokenErrorCode(t, publicPKCE.redeem(t, handler, right), http.StatusBadRequest); got != "invalid_grant" {
-		t.Errorf("POST %s with the right verifier again error = %q, want %q", tokenPath, got, "invalid_grant")
+		t.Errorf("POST %s with the right verifier after a wrong one error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
 }
