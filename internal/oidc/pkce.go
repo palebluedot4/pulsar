@@ -22,8 +22,7 @@ func codeChallenge(verifier string) string {
 
 // validPKCEValue reports whether s has the form RFC 7636 gives both a
 // code_verifier (§4.1) and a code_challenge (§4.2): 43 to 128 of the
-// unreserved characters of RFC 3986 §2.3. The lower bound on a verifier
-// is what keeps it from being guessed (§7.1).
+// unreserved characters of RFC 3986 §2.3.
 func validPKCEValue(s string) bool {
 	if len(s) < minPKCELen || len(s) > maxPKCELen {
 		return false

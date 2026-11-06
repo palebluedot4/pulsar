@@ -134,15 +134,19 @@ func TestPKCE(t *testing.T) {
 }
 
 // REQ-PKCE-4, REQ-PKCE-6, REQ-BCP-6, REQ-BCP-7, REQ-OAUTH-11,
-// REQ-OAUTH-26, REQ-OAUTH-27: a token request fails with invalid_grant
-// when its code_verifier is not of the form RFC 7636 §4.1 gives, even if
-// its challenge matches, or does not match the code_challenge the code
-// was issued with, when a confidential Client sends none for a code issued with one,
-// or when it sends one for a code issued without; with invalid_request
-// when a public Client sends none, whatever its code; and with
-// invalid_client when a Client identifies itself by client_id alone and
-// is not public, when a public Client sends credentials, or when nothing
-// identifies the Client.
+// REQ-OAUTH-26, REQ-OAUTH-27: a token request fails as follows.
+//
+// With invalid_grant: a code_verifier that does not match the code's
+// code_challenge; one of another form than RFC 7636 §4.1 gives, even if
+// it matches; none, from a confidential Client, for a code issued with a
+// challenge; or one for a code issued without.
+//
+// With invalid_request: no code_verifier from a public Client, whatever
+// its code.
+//
+// With invalid_client: a Client that identifies itself by client_id alone
+// and is not public; a public Client that sends credentials; or a request
+// that identifies no Client.
 func TestPKCETokenErrors(t *testing.T) {
 	t.Parallel()
 
@@ -242,8 +246,8 @@ func TestPKCEWrongVerifierUsesUpCode(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	c := publicPKCE.code(t, handler)
-	wrong, right := publicPKCE.form(c, wrongVerifier), publicPKCE.form(c, pkceVerifier)
+	issued := publicPKCE.code(t, handler)
+	wrong, right := publicPKCE.form(issued, wrongVerifier), publicPKCE.form(issued, pkceVerifier)
 	if got := tokenErrorCode(t, publicPKCE.redeem(t, handler, wrong), http.StatusBadRequest); got != "invalid_grant" {
 		t.Errorf("POST %s with a wrong verifier error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
