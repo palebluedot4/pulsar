@@ -130,30 +130,32 @@ func (p *Provider) authenticateClient(r *http.Request, params url.Values) (*regi
 	// An Authorization header of any scheme is an attempt to authenticate
 	// by it, and an assertion parameter, even alone, one to authenticate by
 	// an assertion.
-	header := r.Header.Get("Authorization") != ""
-	post := params.Has("client_secret")
-	assertion := params.Has("client_assertion") || params.Has("client_assertion_type")
+	usesHeader := r.Header.Get("Authorization") != ""
+	usesBody := params.Has("client_secret")
+	usesAssertion := params.Has("client_assertion") || params.Has("client_assertion_type")
 	switch {
-	case assertion && (header || post):
+	case usesAssertion && (usesHeader || usesBody):
 		// RFC 7521 §4.2.1.
-		return nil, unauthorized
-	case header && post:
+		return nil, unauthorized()
+	case usesHeader && usesBody:
 		// RFC 6749 §5.2.
 		return nil, badRequest(errInvalidRequest, "The client must authenticate by one method only.")
-	case header:
+	case usesHeader:
 		return p.authenticateBasic(r, params)
-	case post:
+	case usesBody:
 		return p.authenticatePost(params)
-	case assertion:
+	case usesAssertion:
 		return p.authenticateAssertion(r.Context(), params)
 	default:
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 }
 
-// unauthorized is the answer to a token request whose Client fails to
-// authenticate (RFC 6749 §5.2).
-var unauthorized = &tokenError{status: http.StatusUnauthorized, Code: errInvalidClient, Description: "Client authentication failed."}
+// unauthorized returns the answer to a token request whose Client fails
+// to authenticate (RFC 6749 §5.2).
+func unauthorized() *tokenError {
+	return &tokenError{status: http.StatusUnauthorized, Code: errInvalidClient, Description: "Client authentication failed."}
+}
 
 // authenticatePost authenticates a Client registered for
 // client_secret_post by the client_id and client_secret in the request
@@ -162,7 +164,7 @@ var unauthorized = &tokenError{status: http.StatusUnauthorized, Code: errInvalid
 func (p *Provider) authenticatePost(params url.Values) (*registry.Client, *tokenError) {
 	client, ok := p.registry.AuthenticateClientSecret(registry.ClientSecretPost, params.Get("client_id"), params.Get("client_secret"))
 	if !ok {
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 	return client, nil
 }
@@ -173,19 +175,19 @@ func (p *Provider) authenticatePost(params url.Values) (*registry.Client, *token
 func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*registry.Client, *tokenError) {
 	user, pass, ok := r.BasicAuth()
 	if !ok {
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 	id, errID := url.QueryUnescape(user)
 	secret, errSecret := url.QueryUnescape(pass)
 	if errID != nil || errSecret != nil {
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 	if bodyID := params.Get("client_id"); bodyID != "" && bodyID != id {
 		return nil, badRequest(errInvalidRequest, "The client_id does not match the authenticated client.")
 	}
 	client, ok := p.registry.AuthenticateClientSecret(registry.ClientSecretBasic, id, secret)
 	if !ok {
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 	return client, nil
 }
