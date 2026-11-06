@@ -61,7 +61,9 @@ type Registry struct {
 
 	// decoy is verified against when no End-User has the username given,
 	// so that a login for a username that does not exist costs what one
-	// for a username that does costs.
+	// for the first End-User does, and so what one for any End-User whose
+	// hash has the same parameters does, as hashes made by one command
+	// have.
 	decoy passwordHash
 }
 
@@ -188,19 +190,16 @@ func Parse(data []byte) (*Registry, error) {
 		r.endUsers[u.Subject] = u
 		r.usernames[u.Username] = u
 	}
-	r.decoy = decoyFor(f.EndUsers, r.usernames)
+	if len(f.EndUsers) > 0 {
+		r.decoy = decoyFor(r.usernames[f.EndUsers[0].Username].passwordHash)
+	}
 	return r, nil
 }
 
 // decoyFor returns a password hash that no password is known to match,
-// with the parameters of the first End-User's, so that verifying against
-// it costs what verifying against theirs does. With no End-User it is
-// never verified against.
-func decoyFor(entries []endUserEntry, byUsername map[string]*EndUser) passwordHash {
-	if len(entries) == 0 {
-		return passwordHash{}
-	}
-	h := byUsername[entries[0].Username].passwordHash
+// with the parameters of h, so that verifying against it costs what
+// verifying against h does.
+func decoyFor(h passwordHash) passwordHash {
 	h.salt = make([]byte, len(h.salt))
 	h.key = make([]byte, len(h.key))
 	_, _ = rand.Read(h.salt) // crypto/rand.Read never returns an error.

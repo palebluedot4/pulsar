@@ -47,7 +47,7 @@ func (s *store) DeleteCtx(ctx context.Context, token string) error {
 	return s.queries.DeleteLoginSession(ctx, token)
 }
 
-// deleteEnded deletes every session that has ended by pulsar's clock.
+// deleteEnded deletes every Login Session that has ended by pulsar's clock.
 func (s *store) deleteEnded(ctx context.Context) error {
 	return s.queries.DeleteEndedLoginSessions(ctx, time.Now())
 }

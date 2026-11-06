@@ -98,6 +98,9 @@ func with(e entry, key string, value any) entry {
 func TestRunRefusesRegistry(t *testing.T) {
 	t.Parallel()
 
+	// Not cryptotest.SetGlobalRandom: the key's value does not matter, only
+	// that the registry holds a public or a private key, and the tests run
+	// in parallel, which a process-wide source forbids.
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -223,6 +226,7 @@ func TestRunRequiresRegistry(t *testing.T) {
 func TestRunAcceptsRegistry(t *testing.T) {
 	t.Parallel()
 
+	// Not cryptotest.SetGlobalRandom, as in TestRunRefusesRegistry.
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)

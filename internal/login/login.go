@@ -175,17 +175,17 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	if err := h.sessions.RenewToken(ctx); err != nil {
-		h.fail(w, r, "renew session token", err)
+		h.fail(w, r, "renew the Login Session token", err)
 		return
 	}
 	if err := h.sessions.Clear(ctx); err != nil {
-		h.fail(w, r, "clear session", err)
+		h.fail(w, r, "clear the Login Session", err)
 		return
 	}
 	h.sessions.Put(ctx, subjectKey, u.Subject)
 	h.sessions.Put(ctx, authTimeKey, time.Now().Unix())
 	// A login is rare next to the requests a Login Session serves, so it
-	// is when sessions that have ended are deleted. A failure leaves them
+	// is when Login Sessions that have ended are deleted. A failure leaves them
 	// for the next login and does not fail this one.
 	if err := h.store.deleteEnded(ctx); err != nil {
 		h.logger.ErrorContext(ctx, "delete ended login sessions", "error", err)
