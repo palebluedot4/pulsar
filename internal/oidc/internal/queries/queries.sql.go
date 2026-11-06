@@ -165,20 +165,38 @@ func (q *Queries) InsertClientAssertion(ctx context.Context, arg InsertClientAss
 	return result.RowsAffected(), nil
 }
 
-const lockAuthorizationCode = `-- name: LockAuthorizationCode :exec
-SELECT true
+const lockAuthorizationCode = `-- name: LockAuthorizationCode :one
+SELECT client_id, redirect_uri, code_challenge, redeemed
 FROM authorization_codes
 WHERE code_hash = $1
 FOR UPDATE
 `
 
-// Locks the code's row, if it is still kept, until the transaction ends.
-// Under read committed, a transaction that has redeemed the code but not
-// yet committed is waited for, so that a later statement sees the access
-// token it records.
-func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash []byte) error {
-	_, err := q.db.Exec(ctx, lockAuthorizationCode, codeHash)
-	return err
+type LockAuthorizationCodeRow struct {
+	ClientID      string
+	RedirectUri   string
+	CodeChallenge string
+	Redeemed      bool
+}
+
+// Locks the code's row, if it is still kept, until the transaction ends,
+// and returns the Client, redirect URI and code challenge it was issued
+// for, and whether it has been redeemed. Under read committed, a
+// transaction that has redeemed the code but not yet committed is waited
+// for, so that this sees the code redeemed and a later statement sees the
+// access token it records. The row is selected by its code_hash alone,
+// which never changes, so that it is locked, and so waited for, whatever
+// the transaction in progress changes.
+func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash []byte) (LockAuthorizationCodeRow, error) {
+	row := q.db.QueryRow(ctx, lockAuthorizationCode, codeHash)
+	var i LockAuthorizationCodeRow
+	err := row.Scan(
+		&i.ClientID,
+		&i.RedirectUri,
+		&i.CodeChallenge,
+		&i.Redeemed,
+	)
+	return i, err
 }
 
 const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :one

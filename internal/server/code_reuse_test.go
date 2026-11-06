@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -15,24 +16,34 @@ import (
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
-// REQ-OAUTH-29, REQ-OAUTH-19, REQ-AT-11: a second redemption of a code
-// fails with invalid_grant, and UserInfo then refuses the access token
-// issued from the code with 401 and invalid_token: at once, 30 seconds
-// later, by another Client, and after the code has expired, while the
-// token has not.
+// verifierOf returns the code_verifier that c sends with a token request:
+// pkceVerifier if its authorization request sent a challenge, or "".
+func verifierOf(c pkceClient) string {
+	if c.challenge == "" {
+		return ""
+	}
+	return pkceVerifier
+}
+
+// REQ-OAUTH-29, REQ-OAUTH-19, REQ-AT-11: a second redemption of a code by
+// its own Client, with its redirect URI and, if it was issued with a code
+// challenge, the matching code_verifier, fails with invalid_grant, and
+// UserInfo then refuses the access token issued from the code with 401 and
+// invalid_token: at once, 30 seconds later, and after the code has
+// expired, while the token has not.
 func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		wait time.Duration // between the two redemptions
-		// The Client of the second redemption, and its secret.
-		clientID, secret string
+		name   string
+		wait   time.Duration // between the two redemptions
+		client pkceClient
 	}{
-		{name: "at once", clientID: "rp", secret: rpSecret},
-		{name: "30 seconds later", wait: 30 * time.Second, clientID: "rp", secret: rpSecret},
-		{name: "by another Client", clientID: "other", secret: otherSecret},
-		{name: "after the code expired", wait: 5 * time.Minute, clientID: "rp", secret: rpSecret},
+		{name: "at once", client: rpNoPKCE},
+		{name: "30 seconds later", wait: 30 * time.Second, client: rpNoPKCE},
+		{name: "after the code expired", wait: 5 * time.Minute, client: rpNoPKCE},
+		{name: "with PKCE", client: rpPKCE},
+		{name: "by a public Client", client: publicPKCE},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,14 +51,14 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 			synctest.Test(t, func(t *testing.T) {
 				handler := newBubbleFlowHandler(t, databaseURL)
-				form := codeForm(code(t, handler, withScope("openid")))
-				accessToken, _ := tokensOf(t, tokenRequest(t, handler, "rp", rpSecret, form))
+				form := tt.client.form(tt.client.code(t, handler), verifierOf(tt.client))
+				accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, form))
 				time.Sleep(tt.wait)
-				if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+				if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
 					t.Errorf("UserInfo before the second redemption claims mismatch (-want +got):\n%s", diff)
 				}
 
-				if got := tokenErrorCode(t, tokenRequest(t, handler, tt.clientID, tt.secret, form), http.StatusBadRequest); got != "invalid_grant" {
+				if got := tokenErrorCode(t, tt.client.redeem(t, handler, form), http.StatusBadRequest); got != "invalid_grant" {
 					t.Errorf("second POST %s error = %q, want %q", tokenPath, got, "invalid_grant")
 				}
 				if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
@@ -58,9 +69,121 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 	}
 }
 
+// REQ-OAUTH-29, REQ-OAUTH-8, REQ-OAUTH-14, REQ-OAUTH-19, REQ-OAUTH-26,
+// REQ-PKCE-4: a second redemption of a code whose parameters are not those
+// of a valid request revokes nothing (OAuth 2.1 draft -17 §7.5.3): one by
+// another Client, for another redirect URI, or with a code_verifier that
+// does not match fails with invalid_grant; one whose Client fails to
+// authenticate, or authenticates by a method other than the one it
+// registered, fails with invalid_client. Either way, UserInfo still
+// accepts the access token issued from the code.
+func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name   string
+		client pkceClient // the Client the code is issued to, which redeems it first
+		// The second redemption: the credentials it sends by HTTP Basic
+		// authentication, if any, and its form for the code.
+		basic      credentials
+		form       func(code string) url.Values
+		wantStatus int
+		wantError  string
+	}{
+		{
+			name:       "by another Client",
+			client:     rpNoPKCE,
+			basic:      credentials{"other", otherSecret},
+			form:       codeForm,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_grant",
+		},
+		{
+			name:   "with another redirect URI",
+			client: rpNoPKCE,
+			basic:  credentials{"rp", rpSecret},
+			form: func(code string) url.Values {
+				form := codeForm(code)
+				form.Set("redirect_uri", rpQueryRedirectURI)
+				return form
+			},
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_grant",
+		},
+		{
+			name:       "with a code_verifier that does not match",
+			client:     rpPKCE,
+			basic:      credentials{"rp", rpSecret},
+			form:       func(code string) url.Values { return rpPKCE.form(code, wrongVerifier) },
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_grant",
+		},
+		{
+			name:       "without the code_verifier",
+			client:     rpPKCE,
+			basic:      credentials{"rp", rpSecret},
+			form:       codeForm,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_grant",
+		},
+		{
+			name:       "with a code_verifier for a code without a challenge",
+			client:     rpNoPKCE,
+			basic:      credentials{"rp", rpSecret},
+			form:       func(code string) url.Values { return rpNoPKCE.form(code, pkceVerifier) },
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_grant",
+		},
+		{
+			name:       "by a public Client with a code_verifier that does not match",
+			client:     publicPKCE,
+			form:       func(code string) url.Values { return publicPKCE.form(code, wrongVerifier) },
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_grant",
+		},
+		{
+			name:       "with a wrong secret",
+			client:     rpNoPKCE,
+			basic:      credentials{"rp", otherSecret},
+			form:       codeForm,
+			wantStatus: http.StatusUnauthorized,
+			wantError:  "invalid_client",
+		},
+		{
+			name:   "by a method other than the registered one",
+			client: rpNoPKCE,
+			form: func(code string) url.Values {
+				form := codeForm(code)
+				form.Set("client_id", "rp")
+				form.Set("client_secret", rpSecret)
+				return form
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantError:  "invalid_client",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := tt.client.code(t, handler)
+			accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, tt.client.form(c, verifierOf(tt.client))))
+
+			replay := tokenRequest(t, handler, tt.basic.id, tt.basic.secret, tt.form(c))
+			if got := tokenErrorCode(t, replay, tt.wantStatus); got != tt.wantError {
+				t.Errorf("second POST %s error = %q, want %q", tokenPath, got, tt.wantError)
+			}
+			if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+				t.Errorf("UserInfo after the second redemption claims mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // REQ-OAUTH-29: a code whose record has been deleted, as an expired code's
-// is, still revokes the access tokens issued from it.
-func TestTokenCodeReuseAfterRecordDeleted(t *testing.T) {
+// is, revokes nothing when presented again: without the record, nothing
+// shows that the request's parameters are the code's.
+func TestTokenCodeReuseAfterRecordDeletedRevokesNothing(t *testing.T) {
 	t.Parallel()
 
 	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
@@ -77,16 +200,16 @@ func TestTokenCodeReuseAfterRecordDeleted(t *testing.T) {
 	if got := tokenErrorCode(t, tokenRequest(t, handler, "rp", rpSecret, form), http.StatusBadRequest); got != "invalid_grant" {
 		t.Errorf("second POST %s error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
-	if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
-		t.Errorf("UserInfo after the second redemption error = %q, want %q", got, "invalid_token")
+	if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+		t.Errorf("UserInfo after the second redemption claims mismatch (-want +got):\n%s", diff)
 	}
 }
 
-// REQ-OAUTH-29: a redemption that is refused by its Client, sent while
-// another redemption of the code is in progress, waits for that one to
-// commit and then revokes the access token it recorded. A refused Client
-// does not wait on the code's row as a second redemption by the right one
-// does, so this is what locking the row first gives.
+// REQ-OAUTH-29: a valid second redemption of a code that has expired, sent
+// while another redemption of it is in progress, waits for that one to
+// commit and then revokes the access token it recorded. A redemption of an
+// expired code does not wait on the code's row as one of a code not yet
+// expired does, so this is what locking the row first gives.
 //
 // The redemption in progress is the test's own transaction. It marks the
 // code redeemed and moves to it the record of an access token that
@@ -108,6 +231,9 @@ func TestTokenCodeReuseWaitsForRedemptionInProgress(t *testing.T) {
 	hash := sha256.Sum256([]byte(c))
 
 	ctx := t.Context()
+	if _, err := pool.Exec(ctx, "UPDATE authorization_codes SET expiry = $1 WHERE code_hash = $2", time.Now().Add(-time.Minute), hash[:]); err != nil {
+		t.Fatalf("expiring the code: %v", err)
+	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("Begin() error = %v", err)
@@ -122,7 +248,7 @@ func TestTokenCodeReuseWaitsForRedemptionInProgress(t *testing.T) {
 
 	// The request is served on its own goroutine, which must not fail the
 	// test, so it is sent without the helpers that do.
-	req := newTokenRequest(t, "other", otherSecret, codeForm(c))
+	req := newTokenRequest(t, "rp", rpSecret, codeForm(c))
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		rec := httptest.NewRecorder()
@@ -152,7 +278,7 @@ func TestTokenCodeReuseWaitsForRedemptionInProgress(t *testing.T) {
 	rec := <-done
 	resp := response{status: rec.Code, header: rec.Header(), body: rec.Body.String()}
 	if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
-		t.Errorf("POST %s by another Client error = %q, want %q", tokenPath, got, "invalid_grant")
+		t.Errorf("POST %s of the expired code error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
 	if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
 		t.Errorf("UserInfo with the token of the redemption in progress error = %q, want %q", got, "invalid_token")
