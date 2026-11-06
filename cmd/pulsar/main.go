@@ -4,10 +4,10 @@
 // to start if the file is invalid. It serves HTTP from the start, and
 // meanwhile applies any pending database migrations, holding a lock so
 // that replicas starting together migrate once, and then loads its signing
-// keys, generating the first if there is none. /readyz and the JWK Set answer 503 until both are done, and pulsar
-// exits if either fails. It then reloads the signing keys once a minute,
-// and serves until it receives an interrupt or SIGTERM, when it shuts down
-// gracefully.
+// keys, generating the first if there is none. /readyz and the JWK Set
+// answer 503 until both are done, and pulsar exits if either fails. It
+// then reloads the signing keys once a minute, and serves until it
+// receives an interrupt or SIGTERM, when it shuts down gracefully.
 //
 // Configuration is read from the environment:
 //

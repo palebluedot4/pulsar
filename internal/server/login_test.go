@@ -32,9 +32,7 @@ const (
 	loginPath   = "/tenant/login"
 )
 
-// sessionCookie is the Login Session cookie's name. The __Host- prefix
-// makes a browser accept it only with Secure, Path=/ and no Domain, so no
-// other host, such as a sibling subdomain, can set it.
+// sessionCookie is the Login Session cookie's name.
 const sessionCookie = "__Host-pulsar-session"
 
 // The End-Users the tests sign in as, with their passwords.
@@ -280,7 +278,7 @@ func TestLoginIgnoresQuery(t *testing.T) {
 	}
 }
 
-// The session token changes at login, so a token planted in a browser
+// The Login Session token changes at login, so a token planted in a browser
 // before it signs in is worthless afterward.
 func TestLoginRenewsSessionToken(t *testing.T) {
 	t.Parallel()
@@ -294,7 +292,7 @@ func TestLoginRenewsSessionToken(t *testing.T) {
 
 	b.login("bob", bobPassword, nil)
 	if b.session.Value == before.Value {
-		t.Fatalf("POST %s again kept the session token, want a new one", loginPath)
+		t.Fatalf("POST %s again kept the Login Session token, want a new one", loginPath)
 	}
 	if got := b.signedInAs(); got != "bob" {
 		t.Errorf("GET %s with the new token signed in as %q, want %q", loginPath, got, "bob")
@@ -320,11 +318,11 @@ func TestLoginSessionLimits(t *testing.T) {
 	)
 	tests := []struct {
 		name  string
-		steps []time.Duration // waits between requests, each followed by a check that the session lives
+		steps []time.Duration // waits between requests, each followed by a check that the Login Session lives
 		end   time.Duration   // the wait after which it has ended
 	}{
 		{name: "idle", steps: []time.Duration{idle - time.Second, idle - time.Second}, end: idle},
-		{name: "absolute", steps: repeat(absolute/(idle-time.Minute), idle-time.Minute), end: absolute % (idle - time.Minute)},
+		{name: "absolute", steps: repeat(int(absolute/(idle-time.Minute)), idle-time.Minute), end: absolute % (idle - time.Minute)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -358,7 +356,7 @@ func TestLoginSessionLimits(t *testing.T) {
 }
 
 // repeat returns n copies of d.
-func repeat(n time.Duration, d time.Duration) []time.Duration {
+func repeat(n int, d time.Duration) []time.Duration {
 	ds := make([]time.Duration, n)
 	for i := range ds {
 		ds[i] = d
@@ -366,10 +364,9 @@ func repeat(n time.Duration, d time.Duration) []time.Duration {
 	return ds
 }
 
-// REQ-OAUTH-3: the login form refuses a cross-origin submission, as a
-// browser marks it, so another site cannot sign an End-User in to an
-// account of its choosing; a same-origin one, or one from outside a
-// browser, is accepted.
+// The login form refuses a cross-origin submission, as a browser marks it,
+// so that another site cannot sign a browser in with credentials of its
+// choosing; a same-origin one, or one from outside a browser, is accepted.
 func TestLoginRefusesCrossOrigin(t *testing.T) {
 	t.Parallel()
 
