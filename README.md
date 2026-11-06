@@ -142,8 +142,9 @@ UserInfo endpoints. Its `oidcc-refresh-token` module redeems a refresh
 token once with `scope` and once without, checks the response, the
 refreshed ID token, and UserInfo with the new access token, and checks
 that another Client's refresh token is refused. It never presents a
-refresh token twice, so only pulsar's own tests check that each is
-redeemed once. The suite's browser automation fills in the login and
+refresh token twice
+([research](docs/research/refresh-tokens.md#the-suites-oidcc-refresh-token-module)),
+so only pulsar's own tests check that each is redeemed once. The suite's browser automation fills in the login and
 consent pages. The run exits non-zero on a failure, a warning or a skipped
 module that `conformance/` does not list with a reason, and leaves the
 results in `conformance/results/`. CI runs the same target on every pull

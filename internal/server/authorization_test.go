@@ -1,8 +1,6 @@
 package server
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"maps"
@@ -345,9 +343,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 				}
 				// At least 160 bits, so that guessing a code is as unlikely
 				// as RFC 6749 §10.10 recommends.
-				if raw, err := base64.RawURLEncoding.DecodeString(code); err != nil || len(raw) < 20 {
-					t.Errorf("authorization response code = %q, want at least 160 bits in base64url", code)
-				}
+				wantAtLeast160Bits(t, "authorization response code", code)
 
 				resp = tokenRequest(t, handler, "rp", rpSecret, codeForm(code))
 				if resp.status != http.StatusOK {
@@ -381,7 +377,6 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 
 				now := float64(start.Unix())
 				exp := now + 600
-				sum := sha256.Sum256([]byte(tokens.AccessToken))
 				idToken := verify(t, handler, tokens.IDToken)
 				if idToken.alg != "RS256" || idToken.kid == "" || idToken.typ != "JWT" {
 					t.Errorf("ID token header alg, kid, typ = %q, %q, %q, want RS256, a kid, JWT", idToken.alg, idToken.kid, idToken.typ)
@@ -390,7 +385,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 					"iss": loginIssuer, "sub": aliceSubject, "aud": "rp",
 					"exp": exp, "iat": now, "auth_time": now,
 					"nonce":   "n-0S6_WzA2Mj",
-					"at_hash": base64.RawURLEncoding.EncodeToString(sum[:16]),
+					"at_hash": atHash(tokens.AccessToken),
 				}
 				if diff := cmp.Diff(wantID, idToken.claims); diff != "" {
 					t.Errorf("ID token claims mismatch (-want +got):\n%s", diff)

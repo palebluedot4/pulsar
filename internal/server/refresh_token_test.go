@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -18,9 +19,8 @@ import (
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
-// refreshResponse is a successful token response, as the refresh tests
-// read it.
-type refreshResponse struct {
+// tokenResponse is a successful token response (RFC 6749 §5.1).
+type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int64  `json:"expires_in"`
@@ -29,9 +29,9 @@ type refreshResponse struct {
 	Scope        string `json:"scope"`
 }
 
-// refreshResponseOf returns the token response in resp, failing the test
+// tokenResponseOf returns the token response in resp, failing the test
 // unless it is successful and has the headers of RFC 6749 §5.1.
-func refreshResponseOf(t *testing.T, resp response) refreshResponse {
+func tokenResponseOf(t *testing.T, resp response) tokenResponse {
 	t.Helper()
 	if resp.status != http.StatusOK {
 		t.Fatalf("POST %s status = %d, want %d; body %q", tokenPath, resp.status, http.StatusOK, resp.body)
@@ -40,7 +40,7 @@ func refreshResponseOf(t *testing.T, resp response) refreshResponse {
 	if diff := cmp.Diff(wantHeader, headers(resp.header, wantHeader)); diff != "" {
 		t.Errorf("POST %s headers mismatch (-want +got):\n%s", tokenPath, diff)
 	}
-	var r refreshResponse
+	var r tokenResponse
 	if err := json.Unmarshal([]byte(resp.body), &r); err != nil {
 		t.Fatalf("POST %s body %q is not a token response: %v", tokenPath, resp.body, err)
 	}
@@ -51,7 +51,7 @@ func refreshResponseOf(t *testing.T, resp response) refreshResponse {
 // offline access, with the parameters of set in addition, allows it on the
 // consent page, and returns the response to the code's redemption with
 // verifier, unless it is "".
-func (c pkceClient) offlineTokens(t *testing.T, handler http.Handler, verifier string, set url.Values) refreshResponse {
+func (c pkceClient) offlineTokens(t *testing.T, handler http.Handler, verifier string, set url.Values) tokenResponse {
 	t.Helper()
 	params := clientParams(c.clientID, c.redirectURI)
 	params.Set("scope", "openid offline_access")
@@ -60,7 +60,7 @@ func (c pkceClient) offlineTokens(t *testing.T, handler http.Handler, verifier s
 		withChallenge(params, c.challenge)
 	}
 	maps.Copy(params, set)
-	r := refreshResponseOf(t, c.redeem(t, handler, c.form(code(t, handler, params), verifier)))
+	r := tokenResponseOf(t, c.redeem(t, handler, c.form(code(t, handler, params), verifier)))
 	if r.RefreshToken == "" {
 		t.Fatalf("POST %s for a code issued with offline access has no refresh_token", tokenPath)
 	}
@@ -88,6 +88,16 @@ func (c pkceClient) refresh(t *testing.T, handler http.Handler, refreshToken, sc
 	return c.redeem(t, handler, form)
 }
 
+// wantAtLeast160Bits fails the test unless token, which name describes,
+// is at least 160 bits in base64url, so that guessing one is as unlikely
+// as RFC 6749 §10.10 recommends.
+func wantAtLeast160Bits(t *testing.T, name, token string) {
+	t.Helper()
+	if raw, err := base64.RawURLEncoding.DecodeString(token); err != nil || len(raw) < 20 {
+		t.Errorf("%s = %q, want at least 160 bits in base64url", name, token)
+	}
+}
+
 // atHash returns the at_hash of accessToken (OpenID Connect Core 1.0
 // §3.1.3.6).
 func atHash(accessToken string) string {
@@ -99,14 +109,14 @@ func atHash(accessToken string) string {
 // REQ-OAUTH-40, REQ-OAUTH-41, REQ-BCP-9, REQ-CORE-52, REQ-CORE-55,
 // REQ-CORE-56, REQ-CORE-57, REQ-CORE-58, REQ-CORE-59, REQ-CORE-60,
 // REQ-CORE-61, REQ-CORE-62, REQ-CORE-63, REQ-AT-1, REQ-AT-2, REQ-AT-3,
-// REQ-AT-4, REQ-AT-5: a confidential or a public
-// Client redeems its refresh token for a new access token, ID token and
-// refresh token, and then redeems the new refresh token in turn. Each
-// access token is an RFC 9068 JWT valid for ten minutes, and UserInfo
-// returns the claims of its scopes. Each ID token has the original's iss,
-// sub, aud and auth_time, no azp as the original has none, no nonce, a new
-// iat, and the claims requested for the ID token. Each refresh token is
-// new, and the one it replaces is refused.
+// REQ-AT-4, REQ-AT-5: a confidential or a public Client redeems its
+// refresh token for a new access token, ID token and refresh token, and
+// then redeems the new refresh token in turn. Each access token is an RFC
+// 9068 JWT valid for ten minutes, and UserInfo returns the claims of its
+// scopes. Each ID token has the original's iss, sub, aud and auth_time, no
+// azp as the original has none, no nonce, a new iat, and the claims
+// requested for the ID token. Each refresh token is new, and the one it
+// replaces is refused.
 func TestRefreshToken(t *testing.T) {
 	t.Parallel()
 
@@ -138,18 +148,14 @@ func TestRefreshToken(t *testing.T) {
 				for _, step := range []string{"first refresh", "second refresh"} {
 					time.Sleep(time.Minute)
 					now := time.Now()
-					got := refreshResponseOf(t, tt.client.refresh(t, handler, refreshToken, ""))
+					got := tokenResponseOf(t, tt.client.refresh(t, handler, refreshToken, ""))
 
-					if raw, err := base64.RawURLEncoding.DecodeString(got.RefreshToken); err != nil || len(raw) < 20 {
-						t.Errorf("%s: refresh_token = %q, want at least 160 bits in base64url", step, got.RefreshToken)
+					wantAtLeast160Bits(t, step+": refresh_token", got.RefreshToken)
+					if slices.Contains(redeemed, got.RefreshToken) {
+						t.Errorf("%s: refresh_token = %q, one already redeemed; want a new one", step, got.RefreshToken)
 					}
-					for _, old := range redeemed {
-						if got.RefreshToken == old {
-							t.Errorf("%s: refresh_token = %q, the same as one already redeemed", step, got.RefreshToken)
-						}
-					}
-					want := refreshResponse{TokenType: "Bearer", ExpiresIn: 600, Scope: "openid email offline_access"}
-					gotFields := refreshResponse{TokenType: got.TokenType, ExpiresIn: got.ExpiresIn, Scope: got.Scope}
+					want := tokenResponse{TokenType: "Bearer", ExpiresIn: 600, Scope: "openid email offline_access"}
+					gotFields := tokenResponse{TokenType: got.TokenType, ExpiresIn: got.ExpiresIn, Scope: got.Scope}
 					if diff := cmp.Diff(want, gotFields); diff != "" {
 						t.Errorf("%s: token response mismatch (-want +got):\n%s", step, diff)
 					}
@@ -196,11 +202,11 @@ func TestRefreshToken(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-36, REQ-OAUTH-37, REQ-BCP-8, REQ-AT-4: a refresh without scope is for
-// the scope originally granted; one for a narrower scope issues an access
-// token for that scope alone, which UserInfo answers with that scope's
-// claims, and a refresh token for the scope originally granted, which the
-// next refresh without scope shows.
+// REQ-OAUTH-36, REQ-OAUTH-37, REQ-BCP-8, REQ-AT-4: a refresh without
+// scope is for the scope originally granted; one for a narrower scope
+// issues an access token for that scope alone, which UserInfo answers with
+// that scope's claims, and a refresh token for the scope originally
+// granted, which the next refresh without scope shows.
 func TestRefreshTokenScope(t *testing.T) {
 	t.Parallel()
 
@@ -221,7 +227,7 @@ func TestRefreshTokenScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			first := rpNoPKCE.offlineTokens(t, handler, "", url.Values{"scope": {granted}})
-			got := refreshResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, tt.scope))
+			got := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, tt.scope))
 			if got.Scope != tt.wantScope {
 				t.Errorf("POST %s for scope %q: scope = %q, want %q", tokenPath, tt.scope, got.Scope, tt.wantScope)
 			}
@@ -232,7 +238,7 @@ func TestRefreshTokenScope(t *testing.T) {
 				t.Errorf("UserInfo for scope %q: claims mismatch (-want +got):\n%s", tt.scope, diff)
 			}
 
-			next := refreshResponseOf(t, rpNoPKCE.refresh(t, handler, got.RefreshToken, ""))
+			next := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, got.RefreshToken, ""))
 			if next.Scope != granted {
 				t.Errorf("POST %s with the refresh token issued for scope %q, without scope: scope = %q, want %q", tokenPath, tt.scope, next.Scope, granted)
 			}
@@ -254,7 +260,7 @@ func TestRefreshTokenScopeNotGranted(t *testing.T) {
 			if got := tokenErrorCode(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, scope), http.StatusBadRequest); got != "invalid_scope" {
 				t.Errorf("POST %s for scope %q error = %q, want %q", tokenPath, scope, got, "invalid_scope")
 			}
-			refreshResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
+			tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
 		})
 	}
 }
@@ -306,7 +312,7 @@ func TestRefreshTokenOtherClient(t *testing.T) {
 			if got := tokenErrorCode(t, tokenRequest(t, handler, tt.basic.id, tt.basic.secret, form), http.StatusBadRequest); got != "invalid_grant" {
 				t.Errorf("POST %s with another Client's refresh token error = %q, want %q", tokenPath, got, "invalid_grant")
 			}
-			refreshResponseOf(t, tt.owner.refresh(t, handler, first.RefreshToken, ""))
+			tokenResponseOf(t, tt.owner.refresh(t, handler, first.RefreshToken, ""))
 		})
 	}
 }
@@ -409,17 +415,21 @@ func TestRefreshTokenFamilyExpiry(t *testing.T) {
 			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 			synctest.Test(t, func(t *testing.T) {
 				handler := newBubbleFlowHandler(t, databaseURL)
-				refreshToken := rpNoPKCE.offlineTokens(t, handler, "", nil).RefreshToken
+				// The code is redeemed 30 seconds after it is issued, so that
+				// the 30 days are seen to run from its redemption.
+				c := code(t, handler, offlineAccessParams())
+				time.Sleep(30 * time.Second)
+				refreshToken := tokenResponseOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c))).RefreshToken
 				last := len(tt.waits) - 1
 				for _, wait := range tt.waits[:last] {
 					time.Sleep(wait)
-					refreshToken = refreshResponseOf(t, rpNoPKCE.refresh(t, handler, refreshToken, "")).RefreshToken
+					refreshToken = tokenResponseOf(t, rpNoPKCE.refresh(t, handler, refreshToken, "")).RefreshToken
 				}
 				time.Sleep(tt.waits[last])
 
 				resp := rpNoPKCE.refresh(t, handler, refreshToken, "")
 				if tt.wantStatus == http.StatusOK {
-					refreshResponseOf(t, resp)
+					tokenResponseOf(t, resp)
 					return
 				}
 				if got := tokenErrorCode(t, resp, tt.wantStatus); got != "invalid_grant" {
@@ -447,16 +457,17 @@ func TestRefreshTokenConcurrentRedemption(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	counts := map[string]int{}
+	counts := map[int]int{}
 	for _, r := range resps {
-		var body struct {
-			Error string `json:"error"`
+		counts[r.status]++
+		if r.status != http.StatusOK {
+			if got := tokenErrorCode(t, r, http.StatusBadRequest); got != "invalid_grant" {
+				t.Errorf("POST %s of a refresh token redeemed at once by another request error = %q, want %q", tokenPath, got, "invalid_grant")
+			}
 		}
-		_ = json.Unmarshal([]byte(r.body), &body)
-		counts[http.StatusText(r.status)+" "+body.Error]++
 	}
-	want := map[string]int{"OK ": 1, "Bad Request invalid_grant": requests - 1}
+	want := map[int]int{http.StatusOK: 1, http.StatusBadRequest: requests - 1}
 	if diff := cmp.Diff(want, counts); diff != "" {
-		t.Errorf("responses to %d concurrent redemptions of one refresh token mismatch (-want +got):\n%s", requests, diff)
+		t.Errorf("statuses of %d concurrent redemptions of one refresh token mismatch (-want +got):\n%s", requests, diff)
 	}
 }

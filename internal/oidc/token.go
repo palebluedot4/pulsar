@@ -161,8 +161,7 @@ func (p *Provider) exchangeCode(r *http.Request, params url.Values) (*tokenRespo
 	case errors.Is(err, errCodeNotRedeemable):
 		return nil, badRequest(errInvalidGrant, "The code is invalid, expired or already used, was issued to another client or redirect_uri, or does not match the code_verifier.")
 	case err != nil:
-		p.logger.ErrorContext(r.Context(), "token endpoint", "error", err)
-		return nil, &tokenError{status: http.StatusInternalServerError, Code: errServerError}
+		return nil, p.serverError(r.Context(), err)
 	}
 	return resp, nil
 }
@@ -208,6 +207,13 @@ func (p *Provider) identifyPublic(params url.Values) (*registry.Client, *tokenEr
 		return nil, unauthorized()
 	}
 	return client, nil
+}
+
+// serverError logs err, which ends a token request for a reason of
+// pulsar's own, and returns the answer to the request.
+func (p *Provider) serverError(ctx context.Context, err error) *tokenError {
+	p.logger.ErrorContext(ctx, "token endpoint", "error", err)
+	return &tokenError{status: http.StatusInternalServerError, Code: errServerError}
 }
 
 // unauthorized returns the answer to a token request whose Client fails
@@ -343,13 +349,8 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			refused = true
 			return nil
 		}
-		// The token is recorded with the claims requested from UserInfo,
-		// which UserInfo returns with those of its scopes.
-		if claims, err = decodeClaimsRequest(row.Claims); err != nil {
-			return err
-		}
-		userInfoClaims, err := claims.UserInfo.encode()
-		if err != nil {
+		var userInfoClaims []byte
+		if claims, userInfoClaims, err = decodeStoredClaims(row.Claims); err != nil {
 			return err
 		}
 		var familyID pgtype.Int8
@@ -366,9 +367,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if err != nil {
 				return err
 			}
-			var refreshHash []byte
-			refreshToken, refreshHash = newRefreshToken()
-			if err := q.InsertRefreshToken(ctx, queries.InsertRefreshTokenParams{TokenHash: refreshHash, FamilyID: id}); err != nil {
+			if refreshToken, err = insertRefreshToken(ctx, q, id); err != nil {
 				return err
 			}
 			familyID = pgtype.Int8{Int64: id, Valid: true}
@@ -382,7 +381,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		return nil, errCodeNotRedeemable
 	}
 	p.deleteExpiredAccessTokens(ctx, now)
-	return p.signTokens(client, issued{
+	return p.signTokens(client, issuance{
 		subject:       row.Subject,
 		scopes:        row.Scopes,
 		authTime:      row.AuthTime,
@@ -421,8 +420,7 @@ func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*to
 	case errors.Is(err, errScopeNotGranted):
 		return nil, badRequest(errInvalidScope, "The scope must not include any scope not originally granted.")
 	case err != nil:
-		p.logger.ErrorContext(r.Context(), "token endpoint", "error", err)
-		return nil, &tokenError{status: http.StatusInternalServerError, Code: errServerError}
+		return nil, p.serverError(r.Context(), err)
 	}
 	return resp, nil
 }
@@ -476,16 +474,11 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		} else if !isSubset(scopes, row.Scopes) {
 			return errScopeNotGranted
 		}
-		if claims, err = decodeClaimsRequest(row.Claims); err != nil {
+		var userInfoClaims []byte
+		if claims, userInfoClaims, err = decodeStoredClaims(row.Claims); err != nil {
 			return err
 		}
-		userInfoClaims, err := claims.UserInfo.encode()
-		if err != nil {
-			return err
-		}
-		var replacementHash []byte
-		replacement, replacementHash = newRefreshToken()
-		if err := q.InsertRefreshToken(ctx, queries.InsertRefreshTokenParams{TokenHash: replacementHash, FamilyID: row.ID}); err != nil {
+		if replacement, err = insertRefreshToken(ctx, q, row.ID); err != nil {
 			return err
 		}
 		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{
@@ -502,7 +495,7 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 	p.deleteExpiredAccessTokens(ctx, now)
 	// The ID token has no nonce, which §12.2 allows only with the value
 	// of the original, and recommends against.
-	return p.signTokens(client, issued{
+	return p.signTokens(client, issuance{
 		subject:       row.Subject,
 		scopes:        scopes,
 		authTime:      row.AuthTime,
@@ -510,6 +503,26 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		jti:           jti,
 		refreshToken:  replacement,
 	}, now)
+}
+
+// decodeStoredClaims returns the claims request stored with a code or a
+// Refresh Token Family, and the claims it requests from UserInfo, as they
+// are recorded with an access token: UserInfo returns them with those of
+// the token's scopes.
+func decodeStoredClaims(data []byte) (claimsRequest, []byte, error) {
+	claims, err := decodeClaimsRequest(data)
+	if err != nil {
+		return claims, nil, err
+	}
+	userInfoClaims, err := claims.UserInfo.encode()
+	return claims, userInfoClaims, err
+}
+
+// insertRefreshToken records a new refresh token in the Refresh Token
+// Family whose id is familyID, and returns it.
+func insertRefreshToken(ctx context.Context, q *queries.Queries, familyID int64) (string, error) {
+	token, hash := newRefreshToken()
+	return token, q.InsertRefreshToken(ctx, queries.InsertRefreshTokenParams{TokenHash: hash, FamilyID: familyID})
 }
 
 // isSubset reports whether every value of sub is one of set.
@@ -531,9 +544,9 @@ func (p *Provider) deleteExpiredAccessTokens(ctx context.Context, now time.Time)
 	}
 }
 
-// issued is what a token response is issued for, and the tokens recorded
-// for it that signTokens does not sign.
-type issued struct {
+// issuance is what a token response is issued for, and the tokens
+// recorded for it that signTokens does not sign.
+type issuance struct {
 	subject string
 	// scopes are those of the access token.
 	scopes   []string
@@ -552,7 +565,7 @@ type issued struct {
 // signTokens returns the token response for t, issued to client at now:
 // an access token and an ID token, each valid for TokenLifetime, and t's
 // refresh token, if any.
-func (p *Provider) signTokens(client *registry.Client, t issued, now time.Time) (*tokenResponse, error) {
+func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time) (*tokenResponse, error) {
 	exp := now.Add(TokenLifetime)
 	scope := strings.Join(t.scopes, " ")
 	accessToken, err := p.keys.SignJWT("at+jwt", accessTokenClaims{
