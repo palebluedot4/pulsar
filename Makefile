@@ -40,12 +40,12 @@ NODE_LOCK_SUM := $(shell cat package.json pnpm-lock.yaml pnpm-workspace.yaml | s
 PRETTIER := node_modules/.bin/prettier
 MARKDOWNLINT := node_modules/.bin/markdownlint-cli2
 
-SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh)
+SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh conformance/runner/*.sh)
 
 .DEFAULT_GOAL := help
 .PHONY: help setup tools node-tools check verify fmt lint format-check \
 	markdown-lint shell-lint spell test tidy-check repocheck workflow-check \
-	sqlc sqlc-check vulncheck build hooks eval
+	sqlc sqlc-check vulncheck build conformance hooks eval
 
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -125,6 +125,43 @@ vulncheck: ## Vulnerabilities reachable from this code
 
 build: ## Build every package
 	$(GO) build ./...
+
+# The OpenID conformance suite against pulsar, in the Docker Compose stack of
+# conformance/compose.yaml, which says what runs. Every run starts from
+# nothing: a self-signed certificate for the name pulsar, valid for a day,
+# and a PULSAR_SECRET are generated for it and never committed. When the run
+# ends, on success, an error or an interrupt, the log of every service but
+# the runner, whose output is the target's own, is saved beside the exported
+# results in conformance/results, and the stack and its volumes are removed.
+# Needs Docker with Compose v2, openssl and jq; inside the sandbox it cannot
+# reach Docker (docs/harness.md).
+CONFORMANCE_COMPOSE := docker compose --file conformance/compose.yaml
+# Each expected-results file, with the one result its entries may accept.
+CONFORMANCE_EXPECTED := failure:conformance/expected-failures.json warning:conformance/expected-warnings.json
+
+conformance: ## Run the OpenID conformance suite's Config OP plan against pulsar; needs Docker
+	@for e in $(CONFORMANCE_EXPECTED); do \
+		result=$${e%%:*}; f=$${e#*:}; \
+		jq -e --arg result "$$result" 'type == "array" and all(.[]; \
+			.["expected-result"] == $$result and (.comment | type) == "string" and .comment != "")' "$$f" >/dev/null \
+			|| { echo "$$f: must be a JSON array of $$result entries, each giving its reason in \"comment\"" >&2; exit 1; }; \
+	done
+	rm -rf conformance/tls conformance/results
+	mkdir -p conformance/tls conformance/results
+	openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=pulsar \
+		-addext subjectAltName=DNS:pulsar \
+		-keyout conformance/tls/key.pem -out conformance/tls/cert.pem 2>/dev/null
+	@set -e; \
+	CONFORMANCE_USER="$$(id -u):$$(id -g)"; PULSAR_SECRET="$$(openssl rand -base64 32)"; \
+	export CONFORMANCE_USER PULSAR_SECRET; \
+	$(CONFORMANCE_COMPOSE) down --volumes --remove-orphans --timeout 0; \
+	trap 'for s in $$($(CONFORMANCE_COMPOSE) config --services | grep -vx runner); do \
+			$(CONFORMANCE_COMPOSE) logs --no-color "$$s" > "conformance/results/$$s.log" 2>&1; \
+		done; \
+		$(CONFORMANCE_COMPOSE) down --volumes --remove-orphans --timeout 0' EXIT; \
+	trap 'exit 130' INT; trap 'exit 143' TERM; \
+	$(CONFORMANCE_COMPOSE) build; \
+	$(CONFORMANCE_COMPOSE) run --rm runner
 
 hooks: ## Install the repository's git hooks
 	git config core.hooksPath .githooks
