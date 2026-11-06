@@ -120,7 +120,7 @@ func idTokenAudience(t *testing.T, handler http.Handler, resp response) any {
 	return verify(t, handler, tokens.IDToken).claims["aud"]
 }
 
-// REQ-OAUTH-23: a Client registered for client_secret_post redeems its code
+// REQ-OAUTH-25: a Client registered for client_secret_post redeems its code
 // with its client_id and secret in the request body.
 func TestTokenClientSecretPost(t *testing.T) {
 	t.Parallel()
@@ -166,7 +166,7 @@ type credentials struct {
 	id, secret string
 }
 
-// REQ-OAUTH-22, REQ-OAUTH-23, REQ-OAUTH-24, REQ-ASSERT-2: a Client that
+// REQ-OAUTH-24, REQ-OAUTH-25, REQ-OAUTH-26, REQ-ASSERT-2: a Client that
 // authenticates by a method other than the one it registered, or by more
 // than one, fails; with invalid_client, unless the methods are HTTP Basic
 // and the request body, which RFC 6749 §5.2 makes invalid_request.
@@ -313,7 +313,7 @@ func jwtForm(code, assertion string) url.Values {
 }
 
 // REQ-JWTAUTH-1, REQ-JWTAUTH-2, REQ-JWTAUTH-3, REQ-JWTAUTH-4,
-// REQ-JWTAUTH-7, REQ-ASSERT-1, REQ-CORE-14, REQ-CORE-15, REQ-CORE-17,
+// REQ-JWTAUTH-7, REQ-ASSERT-1, REQ-CORE-31, REQ-CORE-32, REQ-CORE-34,
 // REQ-JWTBCP-2: a Client registered for private_key_jwt redeems its code
 // with an assertion signed by any of its keys, by the key's algorithm,
 // whose audience is the token endpoint URL or the issuer.
@@ -434,7 +434,7 @@ func unsigned(tb testing.TB, claims map[string]any) string {
 
 // REQ-JWTAUTH-1, REQ-JWTAUTH-2, REQ-JWTAUTH-3, REQ-JWTAUTH-4,
 // REQ-JWTAUTH-5, REQ-JWTAUTH-7, REQ-JWTAUTH-8, REQ-ASSERT-1, REQ-ASSERT-2,
-// REQ-CORE-14, REQ-CORE-15, REQ-CORE-16, REQ-CORE-17, REQ-CORE-18,
+// REQ-CORE-31, REQ-CORE-32, REQ-CORE-33, REQ-CORE-34, REQ-CORE-35,
 // REQ-JWTBCP-1, REQ-JWTBCP-2, REQ-JWTBCP-3, REQ-DISC-10: a client
 // assertion fails with invalid_client unless it is one JWT, signed by a
 // key jwt registered, with that key's algorithm, naming jwt as its issuer
@@ -527,7 +527,7 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 	}
 }
 
-// REQ-JWTAUTH-4, REQ-JWTAUTH-6, REQ-CORE-16, REQ-CORE-17: an assertion
+// REQ-JWTAUTH-4, REQ-JWTAUTH-6, REQ-CORE-33, REQ-CORE-34: an assertion
 // authenticates once, and not at or after its exp. Its jti is refused,
 // even in a new assertion, until the assertion that first used it
 // expires, and not after.
@@ -576,7 +576,7 @@ func TestTokenPrivateKeyJWTReplay(t *testing.T) {
 	})
 }
 
-// REQ-JWTAUTH-6, REQ-CORE-16: of token requests that present one assertion
+// REQ-JWTAUTH-6, REQ-CORE-33: of token requests that present one assertion
 // at once, each with its own code, at most one authenticates.
 func TestTokenPrivateKeyJWTConcurrentReplay(t *testing.T) {
 	t.Parallel()
