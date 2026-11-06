@@ -122,9 +122,8 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	var challenge string
 	if verifier := params.Get("code_verifier"); verifier != "" {
 		// A verifier of another form than RFC 7636 §4.1 gives is refused
-		// even if its challenge matches, since a short one could be
-		// guessed (§7.1). It gets invalid_grant, as a verifier that does
-		// not match does (§4.6).
+		// even if its challenge matches, as Keycloak refuses it. It gets
+		// invalid_grant, as a verifier that does not match does (§4.6).
 		if !validPKCEValue(verifier) {
 			return nil, badRequest(errInvalidGrant, "The code_verifier must be 43 to 128 unreserved characters.")
 		}
@@ -238,9 +237,9 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // issueTokens redeems code, for client and redirectURI, and returns the
 // tokens issued for it. The code must have been issued with challenge, the
 // code challenge of the request's code_verifier, or "" if it sent none. A
-// code_verifier that does not match uses up the code, so that a code can
-// be tried with one verifier only, and a weak verifier cannot be guessed
-// in the code's lifetime. The code is redeemed and the access token recorded
+// code_verifier that does not match uses up the code, so that only one
+// verifier of the form RFC 7636 §4.1 allows can be tried against a code,
+// and a weak one cannot be guessed in the code's lifetime. The code is redeemed and the access token recorded
 // in one transaction, so that a code is redeemed at most once, and only
 // when its token is recorded. The tokens are signed after it commits, so
 // that the code's row is not locked meanwhile; signing fails only before
