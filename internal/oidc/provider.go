@@ -24,6 +24,11 @@ const (
 	// longest lifetime of anything the OP signs, so that a key that no
 	// longer signs stays published for at least as long (internal/signing).
 	TokenLifetime = 10 * time.Minute
+	// familyLifetime is how long a Refresh Token Family lasts from the
+	// redemption of the code that started it, however often it is
+	// refreshed, so that no Client keeps offline access indefinitely from
+	// one decision of the End-User's.
+	familyLifetime = 30 * 24 * time.Hour
 )
 
 // codeSize is the number of random bytes in an authorization code: 256
@@ -106,6 +111,12 @@ func newCode() (code string, hash []byte) {
 	_, _ = rand.Read(b) // crypto/rand.Read never returns an error.
 	code = base64.RawURLEncoding.EncodeToString(b)
 	return code, hashCode(code)
+}
+
+// newRefreshToken returns a new refresh token and the hash under which it
+// is stored, made and stored as a code is.
+func newRefreshToken() (token string, hash []byte) {
+	return newCode()
 }
 
 // hashCode returns the hash under which code is stored, so that a copy of

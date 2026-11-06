@@ -8,6 +8,8 @@ package queries
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const deleteAccessTokensOfCode = `-- name: DeleteAccessTokensOfCode :exec
@@ -83,21 +85,24 @@ func (q *Queries) FindAccessToken(ctx context.Context, arg FindAccessTokenParams
 }
 
 const insertAccessToken = `-- name: InsertAccessToken :exec
-INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
-VALUES ($1, $2, $3, $4)
+INSERT INTO access_tokens (jti, code_hash, family_id, userinfo_claims, expiry)
+VALUES ($1, $2, $3, $4, $5)
 `
 
 type InsertAccessTokenParams struct {
 	Jti            string
 	CodeHash       []byte
+	FamilyID       pgtype.Int8
 	UserinfoClaims []byte
 	Expiry         time.Time
 }
 
+// family_id is NULL for an access token issued in no Refresh Token Family.
 func (q *Queries) InsertAccessToken(ctx context.Context, arg InsertAccessTokenParams) error {
 	_, err := q.db.Exec(ctx, insertAccessToken,
 		arg.Jti,
 		arg.CodeHash,
+		arg.FamilyID,
 		arg.UserinfoClaims,
 		arg.Expiry,
 	)
@@ -172,6 +177,54 @@ func (q *Queries) InsertClientAssertion(ctx context.Context, arg InsertClientAss
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertRefreshToken = `-- name: InsertRefreshToken :exec
+INSERT INTO refresh_tokens (token_hash, family_id)
+VALUES ($1, $2)
+`
+
+type InsertRefreshTokenParams struct {
+	TokenHash []byte
+	FamilyID  int64
+}
+
+func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error {
+	_, err := q.db.Exec(ctx, insertRefreshToken, arg.TokenHash, arg.FamilyID)
+	return err
+}
+
+const insertRefreshTokenFamily = `-- name: InsertRefreshTokenFamily :one
+INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, auth_time, expiry)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id
+`
+
+type InsertRefreshTokenFamilyParams struct {
+	CodeHash []byte
+	ClientID string
+	Subject  string
+	Scopes   []string
+	Claims   []byte
+	AuthTime time.Time
+	Expiry   time.Time
+}
+
+// Starts the Refresh Token Family of the code whose hash is code_hash, and
+// returns its id.
+func (q *Queries) InsertRefreshTokenFamily(ctx context.Context, arg InsertRefreshTokenFamilyParams) (int64, error) {
+	row := q.db.QueryRow(ctx, insertRefreshTokenFamily,
+		arg.CodeHash,
+		arg.ClientID,
+		arg.Subject,
+		arg.Scopes,
+		arg.Claims,
+		arg.AuthTime,
+		arg.Expiry,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const lockAuthorizationCode = `-- name: LockAuthorizationCode :one

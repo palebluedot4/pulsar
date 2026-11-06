@@ -9,11 +9,14 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/palebluedot4/pulsar/internal/login"
 	"github.com/palebluedot4/pulsar/internal/oidc/internal/queries"
 	"github.com/palebluedot4/pulsar/internal/registry"
 )
@@ -36,6 +39,9 @@ type tokenResponse struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int64  `json:"expires_in"`
 	IDToken     string `json:"id_token"`
+	// Sent only for a code issued with offline access, from which a
+	// Refresh Token Family starts (RFC 6749 §1.5).
+	RefreshToken string `json:"refresh_token,omitempty"`
 	// Always sent, since the scope granted may differ from the one
 	// requested, which RFC 6749 §5.1 then requires.
 	Scope string `json:"scope"`
@@ -53,7 +59,8 @@ type tokenError struct {
 // a Client that authenticates with client_secret_basic, client_secret_post
 // or private_key_jwt, whichever it registered, or for a public Client that
 // sends its client_id. A code issued with a PKCE code challenge is
-// redeemed only with its code_verifier (RFC 7636 §4.6).
+// redeemed only with its code_verifier (RFC 7636 §4.6). A code issued with
+// offline access is redeemed for a refresh token too.
 func (p *Provider) HandleToken() http.Handler {
 	return http.HandlerFunc(p.token)
 }
@@ -254,16 +261,23 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // valid replay after the code has expired revokes too, for as long as the
 // code's record is kept.
 //
+// A code issued with offline access starts a Refresh Token Family, which
+// ends familyLifetime after the code is redeemed, and is redeemed for the
+// family's first refresh token too. The access token is recorded as the
+// family's.
+//
 // The code is redeemed and the access token recorded in one transaction,
-// so that a code is redeemed at most once, and only when its token is
-// recorded. The tokens are signed after it commits, so
-// that the code's row is not locked meanwhile; signing fails only before
-// the signing keys are loaded, when the endpoint is not served.
+// with the family and its refresh token, if any, so that a code is
+// redeemed at most once, and only when its tokens are recorded. The tokens
+// are signed after it commits, so that the code's row is not locked
+// meanwhile; signing fails only before the signing keys are loaded, when
+// the endpoint is not served.
 func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI, challenge string) (*tokenResponse, error) {
 	now := time.Now()
 	exp := now.Add(TokenLifetime)
 	hash := hashCode(code)
 	jti := rand.Text()
+	var refreshToken string
 	var row queries.RedeemAuthorizationCodeRow
 	var claims claimsRequest
 	// Whether the code is refused, after the transaction commits what the
@@ -324,7 +338,28 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		if err != nil {
 			return err
 		}
-		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, UserinfoClaims: userInfoClaims, Expiry: exp})
+		var familyID pgtype.Int8
+		if slices.Contains(row.Scopes, login.OfflineAccess) {
+			id, err := q.InsertRefreshTokenFamily(ctx, queries.InsertRefreshTokenFamilyParams{
+				CodeHash: hash,
+				ClientID: client.ID,
+				Subject:  row.Subject,
+				Scopes:   row.Scopes,
+				Claims:   row.Claims,
+				AuthTime: row.AuthTime,
+				Expiry:   now.Add(familyLifetime),
+			})
+			if err != nil {
+				return err
+			}
+			var refreshHash []byte
+			refreshToken, refreshHash = newRefreshToken()
+			if err := q.InsertRefreshToken(ctx, queries.InsertRefreshTokenParams{TokenHash: refreshHash, FamilyID: id}); err != nil {
+				return err
+			}
+			familyID = pgtype.Int8{Int64: id, Valid: true}
+		}
+		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, FamilyID: familyID, UserinfoClaims: userInfoClaims, Expiry: exp})
 	})
 	if err != nil {
 		return nil, err
@@ -383,11 +418,12 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		return nil, err
 	}
 	return &tokenResponse{
-		AccessToken: accessToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   int64(TokenLifetime / time.Second),
-		IDToken:     idToken,
-		Scope:       scope,
+		AccessToken:  accessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(TokenLifetime / time.Second),
+		IDToken:      idToken,
+		RefreshToken: refreshToken,
+		Scope:        scope,
 	}, nil
 }
 

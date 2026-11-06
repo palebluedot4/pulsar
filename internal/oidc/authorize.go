@@ -31,6 +31,17 @@ var supportedScopes = []login.Scope{
 	{Value: "phone", Description: "your phone number"},
 }
 
+// offlineAccessScope asks for a refresh token (OpenID Connect Core 1.0
+// §11). It is granted only with prompt=consent, and never from a Consent
+// (see login.OfflineAccess).
+//
+// TODO(#51): list it in discovery, with the refresh_token grant that
+// redeems its refresh tokens.
+var offlineAccessScope = login.Scope{
+	Value:       login.OfflineAccess,
+	Description: "access while you are away, so that the client can keep acting for you when you are not signed in",
+}
+
 // scopeValues returns the values of scopes.
 func scopeValues(scopes []login.Scope) []string {
 	values := make([]string, len(scopes))
@@ -43,6 +54,9 @@ func scopeValues(scopes []login.Scope) []string {
 // supportedScope returns the scope whose value is value, if pulsar
 // supports it.
 func supportedScope(value string) (login.Scope, bool) {
+	if value == offlineAccessScope.Value {
+		return offlineAccessScope, true
+	}
 	i := slices.IndexFunc(supportedScopes, func(s login.Scope) bool { return s.Value == value })
 	if i < 0 {
 		return login.Scope{}, false
@@ -396,6 +410,12 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	prompt := strings.Fields(params.Get("prompt"))
 	if slices.Contains(prompt, "none") && slices.ContainsFunc(prompt, func(v string) bool { return v != "none" }) {
 		return req, errInvalidRequest, "The prompt value none cannot be combined with another."
+	}
+	// Offline access is asked of the End-User on the consent page, which
+	// prompt=consent always shows. Without it, offline_access is ignored
+	// (OpenID Connect Core 1.0 §11).
+	if !slices.Contains(prompt, "consent") {
+		scopes = slices.DeleteFunc(scopes, func(s string) bool { return s == offlineAccessScope.Value })
 	}
 
 	maxAge := int64(-1)

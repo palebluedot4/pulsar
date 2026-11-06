@@ -53,8 +53,20 @@ WHERE expiry <= @now
     AND (NOT redeemed OR expiry <= @redeemed_expiry);
 
 -- name: InsertAccessToken :exec
-INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
-VALUES (@jti, @code_hash, @userinfo_claims, @expiry);
+-- family_id is NULL for an access token issued in no Refresh Token Family.
+INSERT INTO access_tokens (jti, code_hash, family_id, userinfo_claims, expiry)
+VALUES (@jti, @code_hash, sqlc.narg('family_id'), @userinfo_claims, @expiry);
+
+-- name: InsertRefreshTokenFamily :one
+-- Starts the Refresh Token Family of the code whose hash is code_hash, and
+-- returns its id.
+INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, auth_time, expiry)
+VALUES (@code_hash, @client_id, @subject, @scopes, @claims, @auth_time, @expiry)
+RETURNING id;
+
+-- name: InsertRefreshToken :exec
+INSERT INTO refresh_tokens (token_hash, family_id)
+VALUES (@token_hash, @family_id);
 
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
