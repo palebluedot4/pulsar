@@ -9,6 +9,19 @@
 // then reloads the signing keys once a minute, and serves until it
 // receives an interrupt or SIGTERM, when it shuts down gracefully.
 //
+// Usage:
+//
+//	pulsar
+//	pulsar keys rotate
+//
+// `pulsar keys rotate` stores a new signing key and exits. Every replica
+// publishes the key in its JWK Set at its next reload, and signs with it
+// from two minutes after it is stored: one reload interval plus the JWK
+// Set's cache lifetime, so that every replica and every cached JWK Set
+// has it first. The key it replaces stays in the JWK Set until every
+// token it signed has expired. The command reads the same environment as
+// the server, and refuses a database pulsar has never started against.
+//
 // Configuration is read from the environment:
 //
 //	PULSAR_ADDR		address to listen on (default ":8080")
@@ -33,6 +46,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,18 +80,33 @@ func main() {
 	}
 }
 
-// run starts the server and blocks until ctx is canceled or a signal
-// arrives. Its parameters stand in for the process environment so that tests
-// can drive the whole program.
-func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reader, stdout, _ io.Writer) error {
+// usage is the command line pulsar accepts.
+const usage = "usage: pulsar [keys rotate]"
+
+// run runs the command that args name: with none, it starts the server
+// and blocks until ctx is canceled or a signal arrives. Its parameters
+// stand in for the process environment so that tests can drive the whole
+// program.
+func run(ctx context.Context, args []string, getenv func(string) string, _ io.Reader, stdout, _ io.Writer) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	var command string
+	if len(args) > 1 {
+		command = strings.Join(args[1:], " ")
+	}
+	if command != "" && command != "keys rotate" {
+		return fmt.Errorf("unknown command %q; %s", command, usage)
+	}
 
 	cfg, err := config.Load(getenv)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
+	if command == "keys rotate" {
+		return rotateKeys(ctx, cfg, logger)
+	}
 
 	// The registry and the certificate are loaded before the database is
 	// touched, so that a local mistake is reported as such rather than
@@ -207,6 +236,23 @@ wait:
 	}
 	pool.Close()
 	return runErr
+}
+
+// rotateKeys stores a new signing key, which serving replicas publish at
+// their next reload and sign with once signing.ActivationDelay has passed,
+// and reports its kid and when it starts signing.
+func rotateKeys(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("open the database at PULSAR_DATABASE_URL: %w", err)
+	}
+	defer pool.Close()
+	rotated, err := signing.New(pool, cfg.Secret).Rotate(ctx)
+	if err != nil {
+		return fmt.Errorf("rotate the signing key: %w", err)
+	}
+	logger.InfoContext(ctx, "signing key stored", "kid", rotated.KID, "signs_from", rotated.SignsFrom)
+	return nil
 }
 
 // prepare migrates the database and then loads the signing keys,

@@ -1,8 +1,9 @@
 -- name: ListSigningKeys :many
--- Oldest first, so that the newest key comes last.
-SELECT kid, sealed_private_key
+-- In the order they start signing, so that the key signing now is the last
+-- whose activates_at has passed.
+SELECT kid, sealed_private_key, activates_at
 FROM signing_keys
-ORDER BY created_at, kid;
+ORDER BY activates_at, kid;
 
 -- name: HasSigningKey :one
 SELECT EXISTS (SELECT FROM signing_keys);
@@ -12,5 +13,5 @@ SELECT EXISTS (SELECT FROM signing_keys);
 SELECT pg_advisory_xact_lock(@lock_id::bigint);
 
 -- name: InsertSigningKey :exec
-INSERT INTO signing_keys (kid, sealed_private_key, created_at)
-VALUES (@kid, @sealed_private_key, @created_at);
+INSERT INTO signing_keys (kid, sealed_private_key, created_at, activates_at)
+VALUES (@kid, @sealed_private_key, @created_at, @activates_at);

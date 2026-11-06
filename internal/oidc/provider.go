@@ -20,8 +20,10 @@ const (
 	// short, as RFC 6749 §4.1.2 requires, so that a leaked code is soon
 	// useless.
 	codeLifetime = 60 * time.Second
-	// tokenLifetime is how long an ID token or access token is valid.
-	tokenLifetime = 10 * time.Minute
+	// TokenLifetime is how long an ID token or access token is valid: the
+	// longest lifetime of anything the OP signs, so that a key that no
+	// longer signs stays published for at least as long (internal/signing).
+	TokenLifetime = 10 * time.Minute
 )
 
 // codeSize is the number of random bytes in an authorization code: 256
