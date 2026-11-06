@@ -35,10 +35,19 @@ func (q *Queries) DeleteExpiredAccessTokens(ctx context.Context, now time.Time) 
 const deleteExpiredAuthorizationCodes = `-- name: DeleteExpiredAuthorizationCodes :exec
 DELETE FROM authorization_codes
 WHERE expiry <= $1
+    AND (NOT redeemed OR expiry <= $2)
 `
 
-func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, now time.Time) error {
-	_, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, now)
+type DeleteExpiredAuthorizationCodesParams struct {
+	Now            time.Time
+	RedeemedExpiry time.Time
+}
+
+// Deletes the codes that have expired, except a redeemed one whose access
+// tokens may not have: it is kept until @redeemed_expiry, so that a second
+// redemption can still show its parameters are the code's and revoke them.
+func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, arg DeleteExpiredAuthorizationCodesParams) error {
+	_, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, arg.Now, arg.RedeemedExpiry)
 	return err
 }
 

@@ -16,10 +16,10 @@ reach it. UserInfo returns the End-User's `sub` and the claims of the
 `profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
 with the access token in the `Authorization` header or the body; the
 `claims` parameter requests individual claims in the ID token or from
-UserInfo. A second redemption of a code by its own Client, with its
-redirect URI and any `code_verifier` it needs, revokes the access tokens
-issued from it while the code's record is kept, and `pulsar keys rotate`
-rotates the signing key. The OpenID
+UserInfo. A second redemption of a code that is otherwise valid, by its
+own Client, with its redirect URI, and with a matching `code_verifier`
+exactly when the code has a challenge, revokes the access tokens issued
+from it, and `pulsar keys rotate` rotates the signing key. The OpenID
 conformance suite's Config OP and Basic OP plans run against it in CI;
 on 2026-11-06, at commit `8d6ab47`, they finished with no failures, as
 [Checking conformance](#checking-conformance) details. The next

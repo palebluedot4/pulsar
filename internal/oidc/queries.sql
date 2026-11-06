@@ -45,8 +45,12 @@ DELETE FROM access_tokens
 WHERE code_hash = @code_hash;
 
 -- name: DeleteExpiredAuthorizationCodes :exec
+-- Deletes the codes that have expired, except a redeemed one whose access
+-- tokens may not have: it is kept until @redeemed_expiry, so that a second
+-- redemption can still show its parameters are the code's and revoke them.
 DELETE FROM authorization_codes
-WHERE expiry <= @now;
+WHERE expiry <= @now
+    AND (NOT redeemed OR expiry <= @redeemed_expiry);
 
 -- name: InsertAccessToken :exec
 INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
