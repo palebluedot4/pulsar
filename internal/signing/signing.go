@@ -45,8 +45,7 @@ const ReloadInterval = time.Minute
 // jwksCacheLifetime is how long Clients may cache the JWK Set: one reload
 // interval. [ActivationDelay] includes it, so that every JWK Set a Client
 // holds by the time a new key signs has it; at a minute that delay is two,
-// a fifth of the token lifetime, and a Client fetches the set at most once
-// a minute.
+// a fifth of the token lifetime.
 const jwksCacheLifetime = time.Minute
 
 // jwksCacheControl is the Cache-Control of the JWK Set.
@@ -55,7 +54,9 @@ var jwksCacheControl = "public, max-age=" + strconv.Itoa(int(jwksCacheLifetime/t
 // ActivationDelay is how long after [KeySet.Rotate] stores a key it starts
 // signing: one reload interval, by which every replica that reloads on
 // time publishes it, plus the JWK Set's cache lifetime, by which every
-// JWK Set a Client cached before then has expired.
+// JWK Set a Client cached before then has expired. It is counted by the
+// clock of the process that stores the key, and compared with each
+// replica's own, so it holds as long as their clocks agree.
 const ActivationDelay = ReloadInterval + jwksCacheLifetime
 
 // retention is how long a key stays published once the next key's time to
@@ -93,7 +94,7 @@ const encryptionKeySize = 32
 var errNotLoaded = errors.New("signing: the key set is not loaded yet")
 
 // errNoKey is returned by [KeySet.Rotate] when there is no key to rotate.
-var errNoKey = errors.New("the database holds no signing key to rotate; start pulsar against it first, which generates one")
+var errNoKey = errors.New("signing: the database holds no signing key to rotate; start pulsar against it first, which generates one")
 
 // Key is a signing key: a [crypto.Signer] that signs with RS256, and the
 // kid that names its public half in the JWK Set.

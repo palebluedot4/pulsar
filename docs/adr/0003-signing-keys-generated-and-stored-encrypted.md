@@ -17,8 +17,8 @@ distribute and rotate those files across replicas. The evidence is in
   `pulsar keys rotate` stores a new key that replicas publish in their JWKS
   at their next reload, and that none signs with until a reload interval
   plus the JWKS cache lifetime has passed. Provided every replica reloads on
-  time and Clients honor `Cache-Control`, every JWKS a Client holds then
-  has the key. A replica that cannot reach PostgreSQL fails its readiness
+  time, their clocks agree, and Clients honor `Cache-Control`, every JWKS a
+  Client holds then has the key. A replica that cannot reach PostgreSQL fails its readiness
   check and stops receiving traffic, so it does not serve a stale JWKS for
   long. Auth0 likewise publishes its next key before signing with it.
 - A retired key's public half stays in the JWKS until every token it signed

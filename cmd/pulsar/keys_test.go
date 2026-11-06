@@ -14,9 +14,10 @@ import (
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
-// rotate runs `pulsar keys rotate` with env, completed as start completes
-// it, and returns run's result and its log lines.
-func rotate(t *testing.T, env map[string]string, args ...string) ([]logLine, error) {
+// runCommand runs pulsar with args after the program name and env,
+// completed as start completes it, and returns its log lines and run's
+// result.
+func runCommand(t *testing.T, env map[string]string, args ...string) ([]logLine, error) {
 	t.Helper()
 	var out bytes.Buffer
 	err := run(t.Context(), append([]string{"pulsar"}, args...), environment(env), strings.NewReader(""), &out, io.Discard)
@@ -44,9 +45,10 @@ func kids(set jwkSet) []string {
 }
 
 // REQ-JWK-2: `pulsar keys rotate`, run beside a serving replica, stores a
-// new key under a kid of its own, reports it, and exits; pulsar then
-// publishes it beside the old key. When it signs is internal/signing's
-// to test, under testing/synctest.
+// new key under a kid of its own, reports it, and exits; pulsar, started
+// again, publishes it beside the old key. That a serving replica publishes
+// it at its next reload, and when it signs, are internal/signing's to
+// test, under testing/synctest.
 func TestRunKeysRotate(t *testing.T) {
 	t.Parallel()
 
@@ -59,7 +61,7 @@ func TestRunKeysRotate(t *testing.T) {
 	p.waitKeysLoaded()
 	before := kids(fetchJWKS(t, "http://"+addr+"/jwks"))
 
-	lines, err := rotate(t, env, "keys", "rotate")
+	lines, err := runCommand(t, env, "keys", "rotate")
 	if err != nil {
 		t.Fatalf("run(keys rotate) = %v, want nil", err)
 	}
@@ -92,7 +94,7 @@ func TestRunKeysRotate(t *testing.T) {
 
 // pulsar refuses a command it does not know, and a rotation in a database
 // that holds no key to rotate, with an error saying why.
-func TestRunKeysRotateRefuses(t *testing.T) {
+func TestRunRefusesCommand(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -123,7 +125,7 @@ func TestRunKeysRotateRefuses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := rotate(t, map[string]string{
+			_, err := runCommand(t, map[string]string{
 				"PULSAR_ISSUER":       loopbackIssuer,
 				"PULSAR_DATABASE_URL": tt.databaseURL(t),
 			}, tt.args...)
