@@ -12,7 +12,11 @@ authenticate with `client_secret_basic`, `client_secret_post` or
 A public Client cannot prove its identity, so the consent page asks for it
 every time rather than remembering. The token endpoint sends no CORS
 headers, so a public Client running in a browser on another origin cannot
-reach it. UserInfo is next.
+reach it. UserInfo returns the End-User's `sub` and the claims of the
+`profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
+with the access token in the `Authorization` header or the body; the
+`claims` parameter requests individual claims in the ID token or from
+UserInfo. Revoking the tokens of a code redeemed twice is next.
 
 ## Running it
 

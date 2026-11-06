@@ -253,6 +253,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	hash := hashCode(code)
 	jti := rand.Text()
 	var row queries.RedeemAuthorizationCodeRow
+	var claims claimsRequest
 	var mismatch bool
 	// Read committed whatever the database's default, so that a second
 	// redemption waits for the first and then finds the code redeemed,
@@ -280,7 +281,16 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			mismatch = true
 			return nil
 		}
-		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, Expiry: exp})
+		// The token is recorded with the claims requested from UserInfo,
+		// which UserInfo returns with those of its scopes.
+		if claims, err = decodeClaimsRequest(row.Claims); err != nil {
+			return err
+		}
+		userInfoClaims, err := claimsRequest{UserInfo: claims.UserInfo}.encode()
+		if err != nil {
+			return err
+		}
+		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, UserinfoClaims: userInfoClaims, Expiry: exp})
 	})
 	if err != nil {
 		return nil, err
@@ -308,16 +318,33 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	if err != nil {
 		return nil, err
 	}
-	idToken, err := p.keys.SignJWT("JWT", idTokenClaims{
-		Issuer:          p.issuer.String(),
-		Subject:         row.Subject,
-		Audience:        client.ID,
-		Expiry:          exp.Unix(),
-		IssuedAt:        now.Unix(),
-		AuthTime:        row.AuthTime.Unix(),
-		Nonce:           row.Nonce,
-		AccessTokenHash: accessTokenHash(accessToken),
-	})
+	// The claims of an ID token (OpenID Connect Core 1.0 §2, §3.1.3.6),
+	// and those the claims parameter requests in it (§5.5), which are
+	// Standard Claims other than sub and so never one of them. The claims
+	// of the scopes granted are not among them: they are returned from
+	// UserInfo, since an access token is issued (§5.4).
+	idClaims := map[string]any{
+		"iss":       p.issuer.String(),
+		"sub":       row.Subject,
+		"aud":       client.ID,
+		"exp":       exp.Unix(),
+		"iat":       now.Unix(),
+		"auth_time": row.AuthTime.Unix(),
+		"at_hash":   accessTokenHash(accessToken),
+	}
+	if row.Nonce != "" {
+		idClaims["nonce"] = row.Nonce
+	}
+	// An End-User removed from the registry since the code was issued has
+	// no claims to release, and no error follows from that (§5.5.1).
+	if u, ok := p.registry.EndUser(row.Subject); ok && len(claims.IDToken) > 0 {
+		all, err := endUserClaims(u)
+		if err != nil {
+			return nil, err
+		}
+		claims.IDToken.release(idClaims, all)
+	}
+	idToken, err := p.keys.SignJWT("JWT", idClaims)
 	if err != nil {
 		return nil, err
 	}
@@ -328,19 +355,6 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		IDToken:     idToken,
 		Scope:       scope,
 	}, nil
-}
-
-// idTokenClaims are the claims of an ID token (OpenID Connect Core 1.0 §2,
-// §3.1.3.6).
-type idTokenClaims struct {
-	Issuer          string `json:"iss"`
-	Subject         string `json:"sub"`
-	Audience        string `json:"aud"`
-	Expiry          int64  `json:"exp"`
-	IssuedAt        int64  `json:"iat"`
-	AuthTime        int64  `json:"auth_time"`
-	Nonce           string `json:"nonce,omitempty"`
-	AccessTokenHash string `json:"at_hash"`
 }
 
 // accessTokenClaims are the claims of a JWT access token (RFC 9068 §2.2).

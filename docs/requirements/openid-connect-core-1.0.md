@@ -200,6 +200,109 @@ that pulsar, as an OP, must or should meet.
 
   `at_hash` is OPTIONAL in this flow; pulsar always includes it.
 
+## UserInfo (§5.3)
+
+- REQ-CORE-36 (§5.3): "The UserInfo Endpoint MUST support the use of the
+  HTTP GET and HTTP POST methods defined in RFC 7231 [RFC7231]."
+- REQ-CORE-37 (§5.3): "The UserInfo Endpoint MUST accept Access Tokens as
+  OAuth 2.0 Bearer Token Usage [RFC6750]."
+
+  In the `Authorization` header, or, by POST, in the form-encoded body
+  (REQ-BEARER-1, REQ-BEARER-2). The token is validated as RFC 9068 §4
+  requires of a resource server (REQ-AT-6 to REQ-AT-11), and its record
+  must be current: it has not expired, and would be gone had it been
+  revoked.
+
+- REQ-CORE-38 (§5.3.2): "The sub (subject) Claim MUST always be returned
+  in the UserInfo Response."
+- REQ-CORE-39 (§5.3.2): "If a Claim is not returned, that Claim Name SHOULD
+  be omitted from the JSON object representing the Claims; it SHOULD NOT
+  be present with a null or empty string value."
+- REQ-CORE-40 (§5.3.2): "The content-type of the HTTP response MUST be
+  application/json if the response body is a text JSON object"
+
+  Every response, success or error, also carries `Cache-Control: no-store`
+  (#11), since it is about an End-User or a credential.
+
+- REQ-CORE-41 (§5.3.3): "When an error condition occurs, the UserInfo
+  Endpoint returns an Error Response as defined in Section 3 of OAuth 2.0
+  Bearer Token Usage [RFC6750]."
+
+§5.3 also says the UserInfo Endpoint "SHOULD support the use of
+Cross-Origin Resource Sharing (CORS) [CORS] and/or other methods as
+appropriate to enable JavaScript Clients and other Browser-Based Clients
+to access it." pulsar departs from this: no endpoint but discovery sends
+CORS headers, and a browser-based Client that cannot reach the token
+endpoint has no access token to send to UserInfo. CORS at UserInfo alone
+would serve no Client.
+
+## Claims (§5.4, §5.5)
+
+- REQ-CORE-49 (§5.4): "The Claims requested by the profile, email,
+  address, and phone scope values are returned from the UserInfo Endpoint,
+  as described in Section 5.3.2, when a response_type value is used that
+  results in an Access Token being issued."
+
+  `code` always issues an access token, so the claims of the scopes
+  granted are returned from UserInfo and never in the ID token. They are
+  those §5.4 lists for each scope, which together are every Standard Claim
+  (§5.1) but `sub`.
+
+- REQ-CORE-42 (§5.5): "The claims parameter value is represented in an
+  OAuth 2.0 request as UTF-8 encoded JSON (which ends up being
+  form-urlencoded when passed as an OAuth parameter)."
+
+  A value that is not a JSON object, whose `userinfo` or `id_token` member
+  is neither an object nor null, whose individual requests are neither
+  objects nor null, or that gives a member twice, is answered with
+  `invalid_request`, as is the parameter repeated.
+
+- REQ-CORE-43 (§5.5, `userinfo`): "Requests that the listed individual
+  Claims be returned from the UserInfo Endpoint. If present, the listed
+  Claims are being requested to be added to any Claims that are being
+  requested using scope values."
+- REQ-CORE-44 (§5.5, `id_token`): "Requests that the listed individual
+  Claims be returned in the ID Token. If present, the listed Claims are
+  being requested to be added to the default Claims in the ID Token."
+- REQ-CORE-45 (§5.5, §5.5.1): "Any members used that are not understood
+  MUST be ignored."
+
+  So is a requested claim pulsar cannot release: one that is not a
+  Standard Claim, or carries a language tag (§5.5.2). `essential` makes no
+  difference, since "the Authorization Server MUST NOT generate an error
+  when Claims are not returned, whether they are Essential or Voluntary"
+  (§5.5.1).
+
+- REQ-CORE-46 (§5.5.1, `value` and `values`): "When the Claim value does
+  not match the requested value, the Claim is not included in the
+  response." and "When the Claim value does not match any of the requested
+  values, the Claim is not included in the response."
+
+  Values are compared as decoded JSON values. A claim that a scope granted
+  also requests is returned whatever its value: the claims parameter adds
+  to what the scopes request (REQ-CORE-43).
+
+- REQ-CORE-47 (§5.5.1): "Note that when the claims request parameter is
+  supported, the scope values that request Claims, as defined in Section
+  5.4, are effectively shorthand methods for requesting sets of individual
+  Claims."
+
+  A claim requested individually is released only with the End-User's
+  Consent to the scope that requests it (REQ-CORE-28). The consent page
+  asks for that scope, and allowing it remembers it, so the page may ask
+  for more than the request releases, never less.
+
+- REQ-CORE-48 (§3.1.2.2): "If the sub (subject) Claim is requested with a
+  specific value for the ID Token, the Authorization Server MUST only send
+  a positive response if the End-User identified by that sub value has an
+  active session with the Authorization Server or has been Authenticated
+  as a result of the request."
+
+  It is handled as `id_token_hint` is (REQ-CORE-24), and `values` as a set
+  of such values. A value that is not a string, an empty `values`, or
+  values of which none is the End-User an `id_token_hint` names, are
+  answered with `invalid_request`.
+
 ## Request objects (§6)
 
 - REQ-CORE-8 (§6.1): "Should an OP not support this parameter and an RP

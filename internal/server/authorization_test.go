@@ -48,10 +48,25 @@ const (
 	bobSubject   = "0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b"
 )
 
-// flowRegistry returns a registry of five Clients and the End-Users alice
-// and bob: rp and other authenticate with client_secret_basic, post with
-// client_secret_post, and jwt with private_key_jwt, by the public keys of
-// jwtKeys; public is a public Client.
+// aliceClaims are alice's claims in flowRegistry: every Standard Claim of
+// OpenID Connect Core 1.0 §5.1 other than sub. bob has none.
+const aliceClaims = `{
+	"name": "Alice Smith", "given_name": "Alice", "family_name": "Smith", "middle_name": "Jane",
+	"nickname": "Ally", "preferred_username": "alice", "profile": "https://alice.example/profile",
+	"picture": "https://alice.example/me.jpg", "website": "https://alice.example",
+	"email": "alice@example.com", "email_verified": true, "gender": "female",
+	"birthdate": "1990-05-04", "zoneinfo": "Europe/Paris", "locale": "en-US",
+	"phone_number": "+1 555 0100", "phone_number_verified": false,
+	"address": {"formatted": "1 Main St, Springfield, 12345, US", "street_address": "1 Main St",
+		"locality": "Springfield", "region": "IL", "postal_code": "12345", "country": "US"},
+	"updated_at": 1700000000
+}`
+
+// flowRegistry returns a registry of five Clients and the End-Users alice,
+// with aliceClaims, and bob: rp and other authenticate with
+// client_secret_basic, post with client_secret_post, and jwt with
+// private_key_jwt, by the public keys of jwtKeys; public is a public
+// Client.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
 	reg, err := registry.Parse([]byte(`{
@@ -67,7 +82,8 @@ func flowRegistry(tb testing.TB) *registry.Registry {
 			{"client_id": "public", "token_endpoint_auth_method": "none", "redirect_uris": ["` + publicRedirectURI + `"]}
 		],
 		"end_users": [
-			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `"},
+			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `",
+			 "claims": ` + aliceClaims + `},
 			{"sub": "` + bobSubject + `", "username": "bob", "password_hash": "` + hashPassword(tb, bobPassword) + `"}
 		]
 	}`))
@@ -997,6 +1013,8 @@ func FuzzAuthorizationRequest(f *testing.F) {
 	f.Add("client_id=rp&redirect_uri=https%3A%2F%2Frp.example%2Fcb%3Ftenant%3Da&request=x&state=%00")
 	f.Add("client_id=rp&client_id=other&redirect_uri=https%3A%2F%2Fevil.example")
 	f.Add("client_id=rp;redirect_uri=x&%zz")
+	f.Add(requestWith(url.Values{"claims": {`{"id_token": {"sub": {"values": ["a", 1]}}, "userinfo": {"name": {"value": null}}}`}}).Encode())
+	f.Add(requestWith(url.Values{"claims": {`{"userinfo": {"email": {"values": []}}, "userinfo": null}`}}).Encode())
 	f.Add("")
 
 	handler := newFlowHandlerWithoutDatabase(f)

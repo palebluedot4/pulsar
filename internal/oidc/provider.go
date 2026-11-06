@@ -29,24 +29,30 @@ const (
 // 6749 §10.10 recommends.
 const codeSize = 32
 
-// JWTSigner signs JWTs with the OP's active signing key, as
-// signing.KeySet does. It is an interface because signing depends,
-// through config, on this package's Issuer.
-type JWTSigner interface {
+// JWTKeys signs JWTs with the OP's active signing key, and verifies them
+// against the keys it publishes, as signing.KeySet does. It is an
+// interface because signing depends, through config, on this package's
+// Issuer.
+type JWTKeys interface {
 	// SignJWT returns a JWT in the JWS Compact Serialization whose claims
 	// are claims, encoded as JSON, and whose header names typ as its type.
 	SignJWT(typ string, claims any) (string, error)
+	// VerifyJWT reports whether token is a JWT that one of the published
+	// keys signed, and if so returns its header's typ and its claims, as
+	// JSON.
+	VerifyJWT(token string) (typ string, claims []byte, ok bool)
 }
 
-// Provider serves the authorization and token endpoints, which share the
-// authorization codes one issues and the other redeems. It is safe for
-// concurrent use.
+// Provider serves the authorization, token and UserInfo endpoints, which
+// share the authorization codes the first issues and the second redeems,
+// and the access tokens the second issues and the third accepts. It is
+// safe for concurrent use.
 type Provider struct {
 	issuer   *Issuer
 	registry *registry.Registry
 	sessions *login.Sessions
 	consents *login.Consents
-	keys     JWTSigner
+	keys     JWTKeys
 	db       *pgxpool.Pool
 	queries  *queries.Queries
 	logger   *slog.Logger
@@ -54,9 +60,9 @@ type Provider struct {
 
 // NewProvider returns the endpoints of the OP at issuer, for the Clients
 // and End-Users of reg, reading Login Sessions from sessions and Consents
-// from consents, signing with keys and keeping codes and access tokens in
+// from consents, signing and verifying with keys and keeping codes and access tokens in
 // the database behind db. It logs to logger any error that ends a request.
-func NewProvider(issuer *Issuer, reg *registry.Registry, sessions *login.Sessions, consents *login.Consents, keys JWTSigner, db *pgxpool.Pool, logger *slog.Logger) *Provider {
+func NewProvider(issuer *Issuer, reg *registry.Registry, sessions *login.Sessions, consents *login.Consents, keys JWTKeys, db *pgxpool.Pool, logger *slog.Logger) *Provider {
 	return &Provider{
 		issuer:   issuer,
 		registry: reg,
@@ -81,6 +87,13 @@ func AuthorizationPath(issuer *Issuer) string {
 // publishes.
 func TokenPath(issuer *Issuer) string {
 	return issuer.Route(tokenPath)
+}
+
+// UserInfoPath returns the path at which the UserInfo endpoint for issuer
+// is served: the path of the userinfo_endpoint that the discovery document
+// publishes.
+func UserInfoPath(issuer *Issuer) string {
+	return issuer.Route(userinfoPath)
 }
 
 // newCode returns a new authorization code and the hash under which it is

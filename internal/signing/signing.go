@@ -178,6 +178,33 @@ func (s *KeySet) SignJWT(typ string, claims any) (string, error) {
 	return jws.CompactSerialize()
 }
 
+// VerifyJWT reports whether token is a JWT in the JWS Compact
+// Serialization signed with RS256, never none, by the key of the set that
+// its header's kid names: one the JWK Set publishes. If it is, VerifyJWT
+// returns its header's typ and its claims, as JSON. Before the key set is
+// loaded, no token verifies.
+func (s *KeySet) VerifyJWT(token string) (typ string, claims []byte, ok bool) {
+	snap := s.loaded.Load()
+	if snap == nil {
+		return "", nil, false
+	}
+	jws, err := jose.ParseSignedCompact(token, []jose.SignatureAlgorithm{algorithm})
+	if err != nil {
+		return "", nil, false
+	}
+	header := jws.Signatures[0].Header // A compact JWS has exactly one.
+	key, found := snap.keys[header.KeyID]
+	if !found {
+		return "", nil, false
+	}
+	claims, err = jws.Verify(&key.PublicKey)
+	if err != nil {
+		return "", nil, false
+	}
+	typ, _ = header.ExtraHeaders[jose.HeaderType].(string)
+	return typ, claims, true
+}
+
 // HandleJWKS serves the public halves of the keys as a JWK Set (RFC 7517
 // §5), each with its kid, use and alg. Before the key set is loaded it
 // answers 503, which no cache may keep.

@@ -46,6 +46,9 @@ func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, poo
 	mux.Handle("GET "+authorizationPath, authorization)
 	mux.Handle("POST "+authorizationPath, authorization)
 	mux.Handle("POST "+oidc.TokenPath(issuer), whenReady(ready, op.HandleToken()))
+	userInfo := whenReady(ready, op.HandleUserInfo())
+	mux.Handle("GET "+oidc.UserInfoPath(issuer), userInfo)
+	mux.Handle("POST "+oidc.UserInfoPath(issuer), userInfo)
 }
 
 // whenReady answers 503, which no cache may keep, until ready is closed,

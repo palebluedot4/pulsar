@@ -87,15 +87,14 @@ func TestDiscovery(t *testing.T) {
 	}
 }
 
-// REQ-DISC-12: the document and the JWK Set are served under the issuer's
-// path only, and the UserInfo endpoint, which a later ticket implements,
-// answers 404 until then.
+// REQ-DISC-12: the document, the JWK Set and the UserInfo endpoint are
+// served under the issuer's path only.
 func TestNotFound(t *testing.T) {
 	t.Parallel()
 
 	paths := []string{
 		"/.well-known/openid-configuration",
-		"/tenant/userinfo",
+		"/userinfo",
 		"/jwks",
 	}
 	for _, path := range paths {
