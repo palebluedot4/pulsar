@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -61,6 +63,15 @@ var jwtKeys = sync.OnceValue(func() []clientKey {
 		{kid: "es", alg: jose.ES256, key: es},
 	}
 })
+
+// jwtKey returns jwt's key for alg.
+func jwtKey(alg jose.SignatureAlgorithm) clientKey {
+	i := slices.IndexFunc(jwtKeys(), func(k clientKey) bool { return k.alg == alg })
+	if i < 0 {
+		panic("jwt has no key for " + string(alg))
+	}
+	return jwtKeys()[i]
+}
 
 // jwtJWKS returns the JWK Set that jwt registers: the public keys of
 // jwtKeys, each with its kid and alg.
@@ -123,12 +134,12 @@ func TestTokenClientSecretPost(t *testing.T) {
 		"client_secret": {postSecret},
 	}
 	if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "post" {
-		t.Errorf("ID token aud = %v, want %q", got, "post")
+		t.Errorf("POST %s ID token aud = %v, want %q", tokenPath, got, "post")
 	}
 }
 
-// tokenError returns the error code of a token error response, failing the
-// test unless the response has status and the headers of RFC 6749 §5.2.
+// tokenErrorCode returns the error code of a token error response,
+// failing the test unless the response has status and the headers of RFC 6749 §5.2.
 func tokenErrorCode(t *testing.T, resp response, status int) string {
 	t.Helper()
 	if resp.status != status {
@@ -150,6 +161,11 @@ func tokenErrorCode(t *testing.T, resp response, status int) string {
 	return body.Error
 }
 
+// credentials are a client_id and secret.
+type credentials struct {
+	id, secret string
+}
+
 // REQ-OAUTH-22, REQ-OAUTH-23, REQ-OAUTH-24, REQ-ASSERT-2: a Client that
 // authenticates by a method other than the one it registered, or by more
 // than one, fails; with invalid_client, unless the methods are HTTP Basic
@@ -162,7 +178,7 @@ func TestTokenClientAuthenticationMethod(t *testing.T) {
 		name        string
 		clientID    string // the Client the code is issued to
 		redirectURI string
-		basic       []string // the client_id and secret of HTTP Basic authentication, if any
+		basic       credentials // of HTTP Basic authentication, if any
 		query       url.Values
 		body        url.Values
 		wantStatus  int
@@ -175,7 +191,7 @@ func TestTokenClientAuthenticationMethod(t *testing.T) {
 		},
 		{
 			name: "client_secret_post Client by Basic", clientID: "post", redirectURI: postRedirectURI,
-			basic:      []string{"post", postSecret},
+			basic:      credentials{"post", postSecret},
 			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
 		},
 		{
@@ -200,13 +216,13 @@ func TestTokenClientAuthenticationMethod(t *testing.T) {
 		},
 		{
 			name: "Basic and the body", clientID: "post", redirectURI: postRedirectURI,
-			basic:      []string{"post", postSecret},
+			basic:      credentials{"post", postSecret},
 			body:       url.Values{"client_id": {"post"}, "client_secret": {postSecret}},
 			wantStatus: http.StatusBadRequest, wantError: "invalid_request",
 		},
 		{
 			name: "Basic and an assertion", clientID: "rp", redirectURI: rpRedirectURI,
-			basic:      []string{"rp", rpSecret},
+			basic:      credentials{"rp", rpSecret},
 			body:       url.Values{"client_assertion_type": {jwtBearer}, "client_assertion": {"x"}},
 			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
 		},
@@ -227,8 +243,8 @@ func TestTokenClientAuthenticationMethod(t *testing.T) {
 			maps.Copy(form, tt.body)
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+tokenPath+"?"+tt.query.Encode(), strings.NewReader(form.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			if tt.basic != nil {
-				req.SetBasicAuth(url.QueryEscape(tt.basic[0]), url.QueryEscape(tt.basic[1]))
+			if tt.basic.id != "" {
+				req.SetBasicAuth(url.QueryEscape(tt.basic.id), url.QueryEscape(tt.basic.secret))
 			}
 			resp := (&browser{t: t, handler: handler}).do(req)
 			if got := tokenErrorCode(t, resp, tt.wantStatus); got != tt.wantError {
@@ -255,9 +271,9 @@ func assertionClaims() map[string]any {
 	}
 }
 
-// signAssertion returns a JWT with claims, signed with key by alg, whose
-// header names kid unless it is "".
-func signAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, claims map[string]any) string {
+// signJWS returns a JWS of claims, signed with key by alg, whose header
+// names kid unless it is "".
+func signJWS(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, claims map[string]any) *jose.JSONWebSignature {
 	tb.Helper()
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: jose.JSONWebKey{Key: key, KeyID: kid}}, nil)
 	if err != nil {
@@ -271,7 +287,13 @@ func signAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid stri
 	if err != nil {
 		tb.Fatalf("Sign() error = %v", err)
 	}
-	s, err := jws.CompactSerialize()
+	return jws
+}
+
+// signAssertion returns signJWS's JWS in the compact serialization: a JWT.
+func signAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, claims map[string]any) string {
+	tb.Helper()
+	s, err := signJWS(tb, alg, key, kid, claims).CompactSerialize()
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -299,26 +321,26 @@ func TestTokenPrivateKeyJWT(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	keys := jwtKeys()
+	rs, ps, es := jwtKey(jose.RS256), jwtKey(jose.PS256), jwtKey(jose.ES256)
 	tests := []struct {
 		name string
 		key  clientKey
 		kid  string // the header's kid
 		edit func(claims map[string]any, form url.Values)
 	}{
-		{name: "RS256", key: keys[0], kid: keys[0].kid},
-		{name: "PS256", key: keys[1], kid: keys[1].kid},
-		{name: "ES256", key: keys[2], kid: keys[2].kid},
-		{name: "no kid", key: keys[2]},
-		{name: "aud the issuer", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { c["aud"] = loginIssuer }},
+		{name: "RS256", key: rs, kid: rs.kid},
+		{name: "PS256", key: ps, kid: ps.kid},
+		{name: "ES256", key: es, kid: es.kid},
+		{name: "no kid", key: es},
+		{name: "aud the issuer", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { c["aud"] = loginIssuer }},
 		{
-			name: "aud an array holding the issuer", key: keys[0], kid: keys[0].kid,
+			name: "aud an array holding the issuer", key: rs, kid: rs.kid,
 			edit: func(c map[string]any, _ url.Values) { c["aud"] = []string{"https://other.example", loginIssuer} },
 		},
-		{name: "no iat", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { delete(c, "iat") }},
-		{name: "nbf now", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { c["nbf"] = time.Now().Unix() }},
-		{name: "claims pulsar does not know", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { c["x-unknown"] = true }},
-		{name: "client_id in the body", key: keys[0], kid: keys[0].kid, edit: func(_ map[string]any, f url.Values) { f.Set("client_id", "jwt") }},
+		{name: "no iat", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { delete(c, "iat") }},
+		{name: "nbf now", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { c["nbf"] = time.Now().Unix() }},
+		{name: "claims pulsar does not know", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { c["x-unknown"] = true }},
+		{name: "client_id in the body", key: rs, kid: rs.kid, edit: func(_ map[string]any, f url.Values) { f.Set("client_id", "jwt") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -331,16 +353,16 @@ func TestTokenPrivateKeyJWT(t *testing.T) {
 			c := code(t, handler, clientParams("jwt", jwtRedirectURI))
 			maps.Copy(form, jwtForm(c, signAssertion(t, tt.key.alg, tt.key.key, tt.kid, claims)))
 			if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
-				t.Errorf("ID token aud = %v, want %q", got, "jwt")
+				t.Errorf("POST %s ID token aud = %v, want %q", tokenPath, got, "jwt")
 			}
 		})
 	}
 }
 
-// REQ-DISC-10, REQ-JWTBCP-2: every algorithm discovery lists for client
-// assertions authenticates a Client; together with the algorithms
-// TestTokenPrivateKeyJWTRejected and TestRunRefusesRegistry refuse, the
-// list is the allow-list.
+// REQ-DISC-10, REQ-JWTBCP-2: an assertion authenticates by exactly the
+// algorithms discovery lists. Each listed one does, with jwt's key for it;
+// every other algorithm pulsar's JOSE library signs with, with a key of
+// the type it takes under one of jwt's kids, does not.
 func TestDiscoveryAssertionAlgorithms(t *testing.T) {
 	t.Parallel()
 
@@ -351,22 +373,49 @@ func TestDiscoveryAssertionAlgorithms(t *testing.T) {
 		Algs []jose.SignatureAlgorithm `json:"token_endpoint_auth_signing_alg_values_supported"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &metadata); err != nil {
-		t.Fatalf("discovery document is not JSON: %v", err)
+		t.Fatalf("GET discovery document body is not JSON: %v", err)
 	}
-	if len(metadata.Algs) == 0 {
-		t.Fatal("discovery lists no token_endpoint_auth_signing_alg_values_supported")
+
+	rs, ps, es := jwtKey(jose.RS256), jwtKey(jose.PS256), jwtKey(jose.ES256)
+	p384, errP384 := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	p521, errP521 := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	_, ed, errEd := ed25519.GenerateKey(rand.Reader)
+	if err := errors.Join(errP384, errP521, errEd); err != nil {
+		t.Fatal(err)
 	}
-	for _, alg := range metadata.Algs {
-		t.Run(string(alg), func(t *testing.T) {
+	secret := bytes.Repeat([]byte("k"), 64) // the least HS512 takes, and enough for HS256 and HS384
+	tests := []struct {
+		alg jose.SignatureAlgorithm
+		key any
+		kid string
+	}{
+		{alg: jose.RS256, key: rs.key, kid: rs.kid},
+		{alg: jose.RS384, key: rs.key, kid: rs.kid},
+		{alg: jose.RS512, key: rs.key, kid: rs.kid},
+		{alg: jose.PS256, key: ps.key, kid: ps.kid},
+		{alg: jose.PS384, key: ps.key, kid: ps.kid},
+		{alg: jose.PS512, key: ps.key, kid: ps.kid},
+		{alg: jose.ES256, key: es.key, kid: es.kid},
+		{alg: jose.ES384, key: p384, kid: es.kid},
+		{alg: jose.ES512, key: p521, kid: es.kid},
+		{alg: jose.EdDSA, key: ed, kid: es.kid},
+		{alg: jose.HS256, key: secret, kid: rs.kid},
+		{alg: jose.HS384, key: secret, kid: rs.kid},
+		{alg: jose.HS512, key: secret, kid: rs.kid},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.alg), func(t *testing.T) {
 			t.Parallel()
-			i := slices.IndexFunc(jwtKeys(), func(k clientKey) bool { return k.alg == alg })
-			if i < 0 {
-				t.Fatalf("discovery lists %s, for which the test has no key", alg)
+			form := jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), signAssertion(t, tt.alg, tt.key, tt.kid, assertionClaims()))
+			resp := postTokenRequest(t, handler, form)
+			if !slices.Contains(metadata.Algs, tt.alg) {
+				if got := tokenErrorCode(t, resp, http.StatusUnauthorized); got != "invalid_client" {
+					t.Errorf("POST %s with an assertion by %s, which discovery does not list: error = %q, want %q", tokenPath, tt.alg, got, "invalid_client")
+				}
+				return
 			}
-			k := jwtKeys()[i]
-			form := jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), signAssertion(t, k.alg, k.key, k.kid, assertionClaims()))
-			if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
-				t.Errorf("ID token aud = %v, want %q", got, "jwt")
+			if got := idTokenAudience(t, handler, resp); got != "jwt" {
+				t.Errorf("POST %s ID token aud = %v, want %q", tokenPath, got, "jwt")
 			}
 		})
 	}
@@ -395,8 +444,7 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	keys := jwtKeys()
-	rs, ps, es := keys[0], keys[1], keys[2]
+	rs, ps, es := jwtKey(jose.RS256), jwtKey(jose.PS256), jwtKey(jose.ES256)
 	unregistered, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -418,18 +466,6 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 	}
 	confidential := assertionClaims()
 	confidential["iss"], confidential["sub"] = "rp", "rp"
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: rs.alg, Key: jose.JSONWebKey{Key: rs.key, KeyID: rs.kid}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(assertionClaims())
-	if err != nil {
-		t.Fatal(err)
-	}
-	jws, err := signer.Sign(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Now()
 	// The assertions are signed before any subtest runs, and expire a
 	// minute later, long after the last subtest.
@@ -475,7 +511,7 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 		{name: "no client_assertion", edit: func(f url.Values) { f.Del("client_assertion") }},
 		{name: "not a JWT", assertion: "not a JWT"},
 		{name: "two JWTs", assertion: sign(assertionClaims()) + " " + sign(assertionClaims())},
-		{name: "the JWS JSON serialization", assertion: jws.FullSerialize()},
+		{name: "the JWS JSON serialization", assertion: signJWS(t, rs.alg, rs.key, rs.kid, assertionClaims()).FullSerialize()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -501,7 +537,7 @@ func TestTokenPrivateKeyJWTReplay(t *testing.T) {
 	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 	synctest.Test(t, func(t *testing.T) {
 		handler := newBubbleFlowHandler(t, databaseURL)
-		k := jwtKeys()[0]
+		k := jwtKey(jose.RS256)
 		// redeem redeems a new code for jwt with assertion.
 		redeem := func(assertion string) response {
 			return postTokenRequest(t, handler, jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), assertion))
@@ -547,7 +583,7 @@ func TestTokenPrivateKeyJWTConcurrentReplay(t *testing.T) {
 
 	const requests = 8
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	k := jwtKeys()[0]
+	k := jwtKey(jose.RS256)
 	assertion := signAssertion(t, k.alg, k.key, k.kid, assertionClaims())
 	forms := make([]url.Values, requests)
 	for i := range forms {
@@ -592,7 +628,7 @@ func verifiesWithJWTKey(raw string) bool {
 // assertion, invalid_grant for the unknown code; it accepts only an
 // assertion that one of jwt's keys verifies, and never fails itself.
 func FuzzClientAssertion(f *testing.F) {
-	k := jwtKeys()[0]
+	k := jwtKey(jose.RS256)
 	valid := signAssertion(f, k.alg, k.key, k.kid, assertionClaims())
 	parts := strings.Split(valid, ".")
 	f.Add(valid)

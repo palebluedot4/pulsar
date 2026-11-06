@@ -222,7 +222,7 @@ are those of `private_key_jwt`.
   pulsar accepts its token endpoint URL or its issuer (REQ-JWTAUTH-3).
 
 - REQ-CORE-16 (§9, `jti`): "These tokens MUST only be used once, unless
-  conditions for reuse were negotiated between the parties"
+  conditions for reuse were negotiated between the parties [...]"
 
   None are negotiated. A `jti` is kept per Client until its assertion's
   `exp`, after which the assertion is refused for its `exp` alone.

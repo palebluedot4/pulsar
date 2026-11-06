@@ -31,17 +31,17 @@ const maxAssertionLifetime = time.Hour
 // invalid_client (RFC 7521 §4.2.1).
 func (p *Provider) authenticateAssertion(ctx context.Context, params url.Values) (*registry.Client, *tokenError) {
 	if params.Get("client_assertion_type") != jwtBearer {
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 	now := time.Now()
 	client, claims, ok := p.verifyAssertion(params.Get("client_assertion"), now)
 	if !ok {
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 	// RFC 7521 §4.2: a client_id, which is optional, names the Client the
 	// assertion does.
 	if id := params.Get("client_id"); id != "" && id != client.ID {
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 
 	jtiHash := sha256.Sum256([]byte(claims.ID))
@@ -58,7 +58,7 @@ func (p *Provider) authenticateAssertion(ctx context.Context, params url.Values)
 	if n == 0 {
 		// The assertion, or another of this Client's with its jti, has
 		// authenticated before and not yet expired.
-		return nil, unauthorized
+		return nil, unauthorized()
 	}
 	// Recording an assertion is when expired ones are deleted. A failure
 	// leaves them for the next and does not fail this one.

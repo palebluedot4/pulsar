@@ -1,8 +1,9 @@
 -- The client assertions that have authenticated a Client at the token
 -- endpoint (internal/oidc), so that none authenticates twice (OpenID Connect
--- Core 1.0 §9). A row is written when an assertion is accepted, and deleted
--- once the assertion has expired, after which it is refused for its expiry
--- alone.
+-- Core 1.0 §9). A row is written when an assertion is accepted. Once the
+-- assertion has expired, the assertion is refused for its expiry alone, and
+-- the row no longer refuses its jti: the next assertion with that jti
+-- replaces it, and the next one recorded with any jti deletes it.
 
 -- +goose Up
 CREATE TABLE client_assertions (
