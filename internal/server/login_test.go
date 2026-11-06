@@ -164,10 +164,7 @@ func TestLoginPage(t *testing.T) {
 		"X-Frame-Options":         "DENY",
 		"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
 	}
-	gotHeader := make(map[string]string, len(wantHeader))
-	for k := range wantHeader {
-		gotHeader[k] = resp.header.Get(k)
-	}
+	gotHeader := headers(resp.header, wantHeader)
 	if diff := cmp.Diff(wantHeader, gotHeader); diff != "" {
 		t.Errorf("GET %s headers mismatch (-want +got):\n%s", loginPath, diff)
 	}

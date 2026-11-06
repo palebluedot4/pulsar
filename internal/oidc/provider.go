@@ -25,8 +25,8 @@ const (
 )
 
 // codeSize is the number of random bytes in an authorization code: 256
-// bits, beyond the 160 below which RFC 6749 §10.10 says the chance of
-// guessing one should not rise.
+// bits, so that the chance of guessing one is below the 2^(-160) that RFC
+// 6749 §10.10 recommends.
 const codeSize = 32
 
 // JWTSigner signs JWTs with the OP's active signing key, as
