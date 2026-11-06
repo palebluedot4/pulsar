@@ -56,6 +56,7 @@ var authorizationParams = []string{
 	"client_id", "redirect_uri", "response_type", "response_mode",
 	"scope", "state", "nonce", "request", "request_uri",
 	"prompt", "max_age", "login_hint", "id_token_hint",
+	"code_challenge", "code_challenge_method",
 }
 
 // Error codes of an authorization error response (RFC 6749 §4.1.2.1,
@@ -298,6 +299,7 @@ type authorizationRequest struct {
 	redirectURI string
 	scopes      []string // the scope values granted
 	nonce       string
+	challenge   string   // the S256 code_challenge (RFC 7636 §4.3), or "" if it was not sent
 	prompt      []string // the values of the prompt parameter (OpenID Connect Core 1.0 §3.1.2.1)
 	maxAge      int64    // the max_age parameter, in seconds, or -1 if it sets no limit
 	hintSubject string   // the Subject that id_token_hint names, if it was sent
@@ -327,6 +329,22 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	}
 	if mode := params.Get("response_mode"); mode != "" && mode != "query" {
 		return req, errInvalidRequest, "Only the response_mode query is supported."
+	}
+
+	// PKCE is required of a public Client only (ADR 0002), and S256 is the
+	// only method; one not sent means plain (RFC 7636 §4.3). Each is
+	// refused with invalid_request (RFC 7636 §4.4.1).
+	challenge, method := params.Get("code_challenge"), params.Get("code_challenge_method")
+	switch {
+	case challenge == "" && method != "":
+		return req, errInvalidRequest, "The parameter code_challenge_method requires code_challenge."
+	case challenge == "" && client.Public():
+		return req, errInvalidRequest, "A public client must send code_challenge: PKCE is required."
+	case challenge == "":
+	case method != "S256":
+		return req, errInvalidRequest, "Only the code_challenge_method S256 is supported."
+	case !validChallenge(challenge):
+		return req, errInvalidRequest, "The code_challenge is not the base64url encoding of a SHA-256 hash."
 	}
 
 	var scopes []string
@@ -372,6 +390,7 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 		redirectURI: redirectURI,
 		scopes:      scopes,
 		nonce:       params.Get("nonce"),
+		challenge:   challenge,
 		prompt:      prompt,
 		maxAge:      maxAge,
 		hintSubject: hintSubject,
@@ -444,15 +463,18 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 		p.logger.ErrorContext(ctx, "delete expired authorization codes", "error", err)
 	}
 	code, hash := newCode()
+	// The code challenge is stored with the code, so that the token
+	// endpoint can verify the code_verifier against it (RFC 7636 §4.4).
 	err := p.queries.InsertAuthorizationCode(ctx, queries.InsertAuthorizationCodeParams{
-		CodeHash:    hash,
-		ClientID:    req.client.ID,
-		RedirectUri: req.redirectURI,
-		Subject:     auth.EndUser.Subject,
-		Scopes:      req.scopes,
-		Nonce:       req.nonce,
-		AuthTime:    auth.Time,
-		Expiry:      now.Add(codeLifetime),
+		CodeHash:      hash,
+		ClientID:      req.client.ID,
+		RedirectUri:   req.redirectURI,
+		Subject:       auth.EndUser.Subject,
+		Scopes:        req.scopes,
+		Nonce:         req.nonce,
+		CodeChallenge: req.challenge,
+		AuthTime:      auth.Time,
+		Expiry:        now.Add(codeLifetime),
 	})
 	if err != nil {
 		return "", err

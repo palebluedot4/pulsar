@@ -48,10 +48,10 @@ const (
 	bobSubject   = "0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b"
 )
 
-// flowRegistry returns a registry of four Clients and the End-Users alice
+// flowRegistry returns a registry of five Clients and the End-Users alice
 // and bob: rp and other authenticate with client_secret_basic, post with
 // client_secret_post, and jwt with private_key_jwt, by the public keys of
-// jwtKeys.
+// jwtKeys; public is a public Client.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
 	reg, err := registry.Parse([]byte(`{
@@ -63,7 +63,8 @@ func flowRegistry(tb testing.TB) *registry.Registry {
 			{"client_id": "post", "token_endpoint_auth_method": "client_secret_post", "client_secret_hash": "` + hashPassword(tb, postSecret) + `",
 			 "redirect_uris": ["` + postRedirectURI + `"]},
 			{"client_id": "jwt", "token_endpoint_auth_method": "private_key_jwt", "jwks": ` + jwtJWKS(tb) + `,
-			 "redirect_uris": ["` + jwtRedirectURI + `"]}
+			 "redirect_uris": ["` + jwtRedirectURI + `"]},
+			{"client_id": "public", "token_endpoint_auth_method": "none", "redirect_uris": ["` + publicRedirectURI + `"]}
 		],
 		"end_users": [
 			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `"},
@@ -519,9 +520,11 @@ func TestAuthorizationErrorPage(t *testing.T) {
 }
 
 // REQ-OAUTH-5, REQ-OAUTH-9, REQ-OAUTH-17, REQ-OAUTH-18, REQ-ISS-2,
-// REQ-CORE-6, REQ-CORE-8, REQ-CORE-9: once the Client and redirect URI are valid, an invalid
-// request is redirected to the redirect URI with the error, state and
-// iss, before any login; the redirect URI keeps its own query.
+// REQ-CORE-6, REQ-CORE-8, REQ-CORE-9, REQ-PKCE-1, REQ-PKCE-2, REQ-PKCE-3:
+// once the Client and redirect URI are valid, an invalid request is
+// redirected to the redirect URI with the error, state and iss, before any
+// login; the redirect URI keeps its own query. A public Client must send
+// an S256 code_challenge, and any Client that sends one must name S256.
 func TestAuthorizationErrorRedirect(t *testing.T) {
 	t.Parallel()
 
@@ -622,6 +625,74 @@ func TestAuthorizationErrorRedirect(t *testing.T) {
 			edit:        func(v url.Values) { v.Set("redirect_uri", rpQueryRedirectURI); v.Del("response_type") },
 			redirectURI: rpQueryRedirectURI,
 			want:        url.Values{"tenant": {"a"}, "error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name:        "public Client without code_challenge",
+			edit:        asPublic,
+			redirectURI: publicRedirectURI,
+			want:        url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name:        "public Client with code_challenge_method plain",
+			edit:        func(v url.Values) { asPublic(v); withPKCE(v); v.Set("code_challenge_method", "plain") },
+			redirectURI: publicRedirectURI,
+			want:        url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name:        "public Client with code_challenge and no code_challenge_method",
+			edit:        func(v url.Values) { asPublic(v); withPKCE(v); v.Del("code_challenge_method") },
+			redirectURI: publicRedirectURI,
+			want:        url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge_method plain",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge_method", "plain") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge and no code_challenge_method",
+			edit: func(v url.Values) { withPKCE(v); v.Del("code_challenge_method") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge_method s256 in another case",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge_method", "s256") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge_method unknown",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge_method", "S512") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge_method and no code_challenge",
+			edit: func(v url.Values) { withPKCE(v); v.Del("code_challenge") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge one character short",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", pkceChallenge[1:]) },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge padded",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", pkceChallenge+"=") },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge in standard base64",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", strings.ReplaceAll(pkceChallenge, "-", "+")) },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "code_challenge longer than a SHA-256 hash",
+			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", pkceChallenge+pkceChallenge) },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
+		},
+		{
+			name: "repeated code_challenge",
+			edit: func(v url.Values) { withPKCE(v); v.Add("code_challenge", pkceChallenge) },
+			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
 		},
 	}
 	for _, tt := range tests {

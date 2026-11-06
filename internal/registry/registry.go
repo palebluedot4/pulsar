@@ -85,6 +85,12 @@ type Client struct {
 	secretHash *passwordHash // for client_secret_basic and client_secret_post
 }
 
+// Public reports whether c is a public Client: one registered for the
+// method none, with no credentials to authenticate with (RFC 6749 §2.1).
+func (c *Client) Public() bool {
+	return c.AuthMethod == None
+}
+
 // EndUser is a registered End-User.
 type EndUser struct {
 	Subject  string
