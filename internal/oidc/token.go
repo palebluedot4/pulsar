@@ -247,8 +247,7 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // so that UserInfo refuses them. They are found by the code's hash, which
 // only one who holds the code can present, so they are revoked whichever
 // Client presents it, and also after the code has expired, until they
-// expire themselves. node-oidc-provider and Ory Hydra (fosite) likewise
-// revoke what a code issued by an identifier taken from it.
+// expire themselves.
 //
 // The code is redeemed and the access token recorded in one transaction,
 // so that a code is redeemed at most once, and only when its token is
