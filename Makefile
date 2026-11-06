@@ -45,7 +45,7 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh conforman
 .DEFAULT_GOAL := help
 .PHONY: help setup tools node-tools check verify fmt lint format-check \
 	markdown-lint shell-lint spell test tidy-check repocheck workflow-check \
-	sqlc sqlc-check vulncheck build conformance hooks eval
+	sqlc sqlc-check dockerfile-check vulncheck build conformance hooks eval
 
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -56,7 +56,7 @@ setup: tools hooks ## Once per clone: tools, git hooks, and the plugin that need
 tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(ZIZMOR) $(NODE_TOOLS) ## Install every pinned tool
 	$(GO) -C tools mod download
 
-check: tidy-check sqlc-check lint format-check markdown-lint shell-lint spell repocheck workflow-check test ## Fast gate
+check: tidy-check sqlc-check dockerfile-check lint format-check markdown-lint shell-lint spell repocheck workflow-check test ## Fast gate
 
 verify: check vulncheck build ## Full gate: check, reachable vulnerabilities, build
 
@@ -106,6 +106,15 @@ sqlc: ## Regenerate the query code from queries.sql files and migrations
 sqlc-check: ## Fail if the generated query code is stale
 	$(TOOL) sqlc diff
 
+# The official golang image pins GOTOOLCHAIN=local, so the Dockerfile builds
+# only while its Go release is the one go.mod names; make verify never builds
+# the image, so this keeps the two in step.
+GO_MOD_VERSION := $(shell awk '$$1 == "go" { print $$2 }' go.mod)
+
+dockerfile-check: ## Fail if the Dockerfile's Go release is not the one go.mod names
+	@grep -q '^FROM golang:$(GO_MOD_VERSION)-' Dockerfile \
+		|| { echo "Dockerfile: the golang image must be Go $(GO_MOD_VERSION), the release go.mod names" >&2; exit 1; }
+
 repocheck: ## Requirement traceability and TODO(#N) form
 	$(GO) run ./internal/cmd/repocheck
 
@@ -133,18 +142,25 @@ build: ## Build every package
 # ends, on success, an error or an interrupt, the log of every service but
 # the runner, whose output is the target's own, is saved beside the exported
 # results in conformance/results, and the stack and its volumes are removed.
+# The cleanup goes on past a failed step and ignores a second interrupt, so
+# that it always reaches the removal.
 # Needs Docker with Compose v2, openssl and jq; inside the sandbox it cannot
 # reach Docker (docs/harness.md).
 CONFORMANCE_COMPOSE := docker compose --file conformance/compose.yaml
-# Each expected-results file, with the one result its entries may accept.
+# Each expected-results file, with the one result its entries may accept,
+# and what jq requires of every entry: each field the suite's runner reads
+# (it fails with a KeyError, after running the whole plan, on one that is
+# missing), the file's own result, and a reason.
 CONFORMANCE_EXPECTED := failure:conformance/expected-failures.json warning:conformance/expected-warnings.json
+CONFORMANCE_ENTRY := type == "array" and all(.[]; \
+	(["test-name", "variant", "configuration-filename", "current-block", "condition"] - keys) == [] \
+	and .["expected-result"] == $$result and (.comment | type) == "string" and .comment != "")
 
 conformance: ## Run the OpenID conformance suite's Config OP plan against pulsar; needs Docker
 	@for e in $(CONFORMANCE_EXPECTED); do \
 		result=$${e%%:*}; f=$${e#*:}; \
-		jq -e --arg result "$$result" 'type == "array" and all(.[]; \
-			.["expected-result"] == $$result and (.comment | type) == "string" and .comment != "")' "$$f" >/dev/null \
-			|| { echo "$$f: must be a JSON array of $$result entries, each giving its reason in \"comment\"" >&2; exit 1; }; \
+		jq -e --arg result "$$result" '$(CONFORMANCE_ENTRY)' "$$f" >/dev/null \
+			|| { echo "$$f: must be a JSON array of $$result entries, each with every field the runner reads and its reason in \"comment\"" >&2; exit 1; }; \
 	done
 	rm -rf conformance/tls conformance/results
 	mkdir -p conformance/tls conformance/results
@@ -155,7 +171,8 @@ conformance: ## Run the OpenID conformance suite's Config OP plan against pulsar
 	CONFORMANCE_USER="$$(id -u):$$(id -g)"; PULSAR_SECRET="$$(openssl rand -base64 32)"; \
 	export CONFORMANCE_USER PULSAR_SECRET; \
 	$(CONFORMANCE_COMPOSE) down --volumes --remove-orphans --timeout 0; \
-	trap 'for s in $$($(CONFORMANCE_COMPOSE) config --services | grep -vx runner); do \
+	trap 'set +e; trap "" INT TERM; \
+		for s in $$($(CONFORMANCE_COMPOSE) config --services | grep -vx runner); do \
 			$(CONFORMANCE_COMPOSE) logs --no-color "$$s" > "conformance/results/$$s.log" 2>&1; \
 		done; \
 		$(CONFORMANCE_COMPOSE) down --volumes --remove-orphans --timeout 0' EXIT; \

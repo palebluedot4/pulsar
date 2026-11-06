@@ -8,15 +8,16 @@ set -eu
 
 ready_url=https://pulsar:9443/readyz
 
+wait_seconds=60
+
 # pulsar's certificate is self-signed for this run, so it is not verified.
-tries=0
+deadline=$(($(date +%s) + wait_seconds))
 until python3 -c '
 import ssl, sys, urllib.request
 urllib.request.urlopen(sys.argv[1], context=ssl._create_unverified_context(), timeout=2)
 ' "$ready_url" 2>/dev/null; do
-	tries=$((tries + 1))
-	if [ "$tries" -ge 60 ]; then
-		echo "run.sh: pulsar did not become ready at $ready_url within 60 seconds" >&2
+	if [ "$(date +%s)" -ge "$deadline" ]; then
+		echo "run.sh: pulsar was not ready at $ready_url after $wait_seconds seconds; see conformance/results/pulsar.log" >&2
 		exit 1
 	fi
 	sleep 1
