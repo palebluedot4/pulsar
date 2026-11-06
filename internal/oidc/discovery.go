@@ -69,7 +69,7 @@ func HandleDiscovery(issuer *Issuer) http.Handler {
 		TokenEndpoint:                     issuer.endpointURL(tokenPath),
 		UserinfoEndpoint:                  issuer.endpointURL(userinfoPath),
 		JWKSURI:                           issuer.endpointURL(jwksPath),
-		ScopesSupported:                   []string{"openid", "profile", "email", "address", "phone"},
+		ScopesSupported:                   scopeValues(supportedScopes),
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},
 		GrantTypesSupported:               []string{"authorization_code"},

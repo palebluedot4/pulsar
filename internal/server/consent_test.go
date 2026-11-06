@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"html"
 	"maps"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -21,10 +24,11 @@ const consentPath = "/tenant/consent"
 
 // What the consent page shows, as its template writes it.
 var (
-	consentClient = regexp.MustCompile(`<strong id="client">([^<]*)</strong>`)
-	consentScope  = regexp.MustCompile(`<li><code>([^<]*)</code>`)
-	consentAction = regexp.MustCompile(`<form method="post" action="([^"]*)">`)
-	consentHidden = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
+	consentClient           = regexp.MustCompile(`<strong id="client">([^<]*)</strong>`)
+	consentScope            = regexp.MustCompile(`<li><code>([^<]*)</code>`)
+	consentAction           = regexp.MustCompile(`<form method="post" action="([^"]*)">`)
+	consentScopeDescription = regexp.MustCompile(`<li><code>([^<]*)</code>: ([^<]*)</li>`)
+	consentHidden           = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
 )
 
 // consentPage is a consent page: the Client it names, the scopes it lists,
@@ -186,6 +190,84 @@ func TestConsentDecisionBoundToEndUser(t *testing.T) {
 	parseConsentPage(t, resp)
 	if !strings.Contains(resp.body, "Signed in as bob.") {
 		t.Errorf("consent page after alice's page was allowed while bob is signed in = %q, want bob's", resp.body)
+	}
+}
+
+// REQ-CORE-16, REQ-CORE-28: a decision on the consent page counts for 10
+// minutes. Past that, the request it was made for, sent again with
+// prompt=consent, shows the page again.
+func TestConsentDecisionExpires(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		b := &browser{t: t, handler: newBubbleFlowHandler(t, databaseURL)}
+		wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
+
+		params := requestWith(url.Values{"prompt": {"consent"}})
+		page := parseConsentPage(t, b.authorize(http.MethodGet, params))
+		b.submitConsent(page, url.Values{"decision": {"allow"}}, nil)
+		time.Sleep(10 * time.Minute)
+		parseConsentPage(t, b.authorize(http.MethodGet, params))
+	})
+}
+
+// REQ-CORE-16, REQ-CORE-28: a decision is not left to answer a later
+// request when the request it was made for fails. The code for a request
+// with prompt=consent cannot be stored, so it gets server_error; the same
+// request sent again shows the consent page.
+//
+// The failure is made by renaming the table of authorization codes, the
+// one way to fail that request alone through a real database.
+func TestConsentDecisionAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	b := &browser{t: t, handler: newFlowHandler(t, pool)}
+	wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
+
+	params := requestWith(url.Values{"prompt": {"consent"}})
+	page := parseConsentPage(t, b.authorize(http.MethodGet, params))
+	next := location(t, b.submitConsent(page, url.Values{"decision": {"allow"}}, nil))
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := pool.Exec(t.Context(), sql); err != nil {
+			t.Fatalf("Exec(%q) error = %v", sql, err)
+		}
+	}
+	exec("ALTER TABLE authorization_codes RENAME TO authorization_codes_away")
+	want := url.Values{"error": {"server_error"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
+	if diff := cmp.Diff(want, errorResponse(t, b.send(http.MethodGet, next.RequestURI(), nil))); diff != "" {
+		t.Errorf("request whose code cannot be stored: error response mismatch (-want +got):\n%s", diff)
+	}
+	exec("ALTER TABLE authorization_codes_away RENAME TO authorization_codes")
+
+	parseConsentPage(t, b.authorize(http.MethodGet, params))
+}
+
+// REQ-CORE-28: the consent page describes every scope the discovery
+// document says pulsar supports.
+func TestConsentPageDescribesEveryScope(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	b := &browser{t: t, handler: handler}
+	var discovery struct {
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+	resp := b.send(http.MethodGet, "/tenant/.well-known/openid-configuration", nil)
+	if err := json.Unmarshal([]byte(resp.body), &discovery); err != nil {
+		t.Fatalf("discovery document %q is not JSON: %v", resp.body, err)
+	}
+	resp = b.signIn(b.authorize(http.MethodGet, withScope(strings.Join(discovery.ScopesSupported, " "))))
+	described := map[string]string{}
+	for _, m := range consentScopeDescription.FindAllStringSubmatch(resp.body, -1) {
+		described[html.UnescapeString(m[1])] = html.UnescapeString(m[2])
+	}
+	for _, s := range discovery.ScopesSupported {
+		if described[s] == "" {
+			t.Errorf("consent page for scopes %q describes %q as %q, want a description", discovery.ScopesSupported, s, described[s])
+		}
 	}
 }
 

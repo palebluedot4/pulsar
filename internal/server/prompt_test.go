@@ -291,6 +291,29 @@ func TestForcedLoginRecordExpires(t *testing.T) {
 	}
 }
 
+// REQ-CORE-20: a max_age shorter than the time the End-User takes on the
+// consent page that follows a login made for the request does not send
+// them back to log in: the decision they make there for the same request
+// completes it, with that login's auth_time. (A consent page left
+// unanswered does not: TestForcedLoginRecordExpires.)
+func TestMaxAgeWithConsentPage(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		handler := newBubbleFlowHandler(t, databaseURL)
+		start := time.Now().Unix()
+		b := &browser{t: t, handler: handler}
+		page := b.signIn(b.authorize(http.MethodGet, requestWith(url.Values{"max_age": {"1"}})))
+		time.Sleep(2 * time.Second)
+		resp := b.decide(page, "allow")
+		wantCode(t, resp, "allowed 2 seconds after a login for max_age=1")
+		if got := authTime(t, handler, resp); got != start {
+			t.Errorf("ID token auth_time = %d, want %d, the login's", got, start)
+		}
+	})
+}
+
 // REQ-CORE-19: a signed-in End-User with a Consent who sends a request
 // with a prompt value pulsar does not know gets a code, as without it.
 func TestPromptUnknownValueSignedIn(t *testing.T) {

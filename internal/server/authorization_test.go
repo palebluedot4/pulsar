@@ -293,6 +293,11 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 
 				b := &browser{t: t, handler: handler}
 				resp := b.authorize(method, params)
+				if method == http.MethodPost {
+					// A POST without the Login Session cookie is first
+					// sent back by GET (TestAuthorizationPOSTWithoutLoginSessionCookie).
+					resp = b.send(http.MethodGet, location(t, resp).RequestURI(), nil)
+				}
 				loginURL := location(t, resp)
 				if diff := cmp.Diff(params, loginURL.Query()); diff != "" {
 					t.Errorf("redirect to the login page carries parameters mismatch (-want +got):\n%s", diff)
@@ -391,34 +396,64 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 	}
 }
 
-// REQ-CORE-4: an authorization request a Client sends by POST from its
-// own site arrives without the Login Session cookie, which is
-// SameSite=Lax, so it is sent to the login page; the browser sends the
-// cookie on that navigation, and a signed-in End-User goes straight back
-// to the authorization endpoint and on to the Client.
+// REQ-CORE-4, REQ-CORE-14: an authorization request a Client sends by
+// POST from its own site arrives without the Login Session cookie, which
+// is SameSite=Lax. It is sent back to the authorization endpoint by GET,
+// once, with the same parameters, a navigation on which the browser sends
+// the cookie; that request is answered as any other. So a signed-in
+// End-User gets a code, with prompt=none too, and one not signed in is
+// sent to log in, or with prompt=none gets login_required.
 func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
 	t.Parallel()
 
-	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	b := &browser{t: t, handler: handler}
-	b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow")
-	session := b.session
-
-	// The cross-site POST: the browser withholds the cookie.
-	b.session = nil
-	loginURL := location(t, b.authorize(http.MethodPost, authorizationParams()))
-	if loginURL.Path != loginPath {
-		t.Fatalf("POST %s without the cookie redirected to %q, want the login page %q", authorizationPath, loginURL, loginPath)
+	loginRequired := url.Values{"error": {"login_required"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
+	tests := []struct {
+		name      string
+		signedIn  bool
+		set       url.Values // parameters set on the request
+		wantLogin bool       // whether the GET is sent to the login page
+		want      url.Values // the error response; nil for a code or the login page
+	}{
+		{name: "signed in", signedIn: true},
+		{name: "signed in, prompt=none", signedIn: true, set: url.Values{"prompt": {"none"}}},
+		{name: "not signed in", wantLogin: true},
+		{name: "not signed in, prompt=none", set: url.Values{"prompt": {"none"}}, want: loginRequired},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b := &browser{t: t, handler: newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))}
+			if tt.signedIn {
+				wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
+			}
+			session := b.session
 
-	b.session = session
-	next := location(t, b.send(http.MethodGet, loginURL.RequestURI(), nil))
-	if next.Path != authorizationPath {
-		t.Fatalf("GET %s while signed in redirected to %q, want %q", loginURL.RequestURI(), next, authorizationPath)
-	}
-	callback := location(t, b.send(http.MethodGet, next.RequestURI(), nil))
-	if got := withoutQuery(callback); got != rpRedirectURI || callback.Query().Get("code") == "" {
-		t.Errorf("authorization request after the login page redirected to %q, want a code at %q", callback, rpRedirectURI)
+			// The cross-site POST: the browser withholds the cookie.
+			b.session = nil
+			params := requestWith(tt.set)
+			next := location(t, b.authorize(http.MethodPost, params))
+			if next.Path != authorizationPath {
+				t.Fatalf("POST %s without the cookie redirected to %q, want %q", authorizationPath, next, authorizationPath)
+			}
+			if diff := cmp.Diff(params, next.Query()); diff != "" {
+				t.Errorf("redirect to GET %s carries parameters mismatch (-want +got):\n%s", authorizationPath, diff)
+			}
+
+			b.session = session
+			resp := b.send(http.MethodGet, next.RequestURI(), nil)
+			switch {
+			case tt.wantLogin:
+				if u := location(t, resp); u.Path != loginPath {
+					t.Errorf("GET %s redirected to %q, want the login page %q", authorizationPath, u, loginPath)
+				}
+			case tt.want != nil:
+				if diff := cmp.Diff(tt.want, errorResponse(t, resp)); diff != "" {
+					t.Errorf("GET %s error response mismatch (-want +got):\n%s", authorizationPath, diff)
+				}
+			default:
+				wantCode(t, resp, "GET "+authorizationPath)
+			}
+		})
 	}
 }
 
@@ -882,8 +917,9 @@ func TestTokenConcurrentRedemption(t *testing.T) {
 
 // REQ-OAUTH-10: whatever the parameters of an authorization request, by
 // GET or POST, the endpoint answers with an error page, a redirect to the
-// login page, or a redirect to one of the redirect URIs rp registered
-// with iss; never a redirect anywhere else.
+// login page, a POST with a redirect to itself, or a redirect to one of
+// the redirect URIs rp registered with iss; never a redirect anywhere
+// else.
 func FuzzAuthorizationRequest(f *testing.F) {
 	f.Add(authorizationParams().Encode())
 	f.Add("client_id=rp&redirect_uri=https%3A%2F%2Frp.example%2Fcallback")
@@ -913,7 +949,7 @@ func FuzzAuthorizationRequest(f *testing.F) {
 					t.Errorf("%s %s?%q status 400 has Location %q, want none", method, authorizationPath, raw, loc)
 				}
 			case http.StatusSeeOther:
-				if strings.HasPrefix(loc, loginPath+"?") {
+				if strings.HasPrefix(loc, loginPath+"?") || (method == http.MethodPost && strings.HasPrefix(loc, authorizationPath+"?")) {
 					continue
 				}
 				if !redirectsTo(loc, registered) {

@@ -19,9 +19,36 @@ import (
 	"github.com/palebluedot4/pulsar/internal/registry"
 )
 
-// supportedScopes are the scope values pulsar grants. A Client may request
-// others; they are ignored, as RFC 6749 §3.3 allows.
-var supportedScopes = []string{"openid", "profile", "email", "address", "phone"}
+// supportedScopes are the scope values pulsar supports, each with what it
+// releases, as the consent page says, in the order the discovery document
+// lists them. A Client may request others; they are ignored, as RFC 6749
+// §3.3 allows.
+var supportedScopes = []login.Scope{
+	{Value: "openid", Description: "your identifier at this provider"},
+	{Value: "profile", Description: "your name and other profile details"},
+	{Value: "email", Description: "your email address"},
+	{Value: "address", Description: "your postal address"},
+	{Value: "phone", Description: "your phone number"},
+}
+
+// scopeValues returns the values of scopes.
+func scopeValues(scopes []login.Scope) []string {
+	values := make([]string, len(scopes))
+	for i, s := range scopes {
+		values[i] = s.Value
+	}
+	return values
+}
+
+// supportedScope returns the scope whose value is value, if pulsar
+// supports it.
+func supportedScope(value string) (login.Scope, bool) {
+	i := slices.IndexFunc(supportedScopes, func(s login.Scope) bool { return s.Value == value })
+	if i < 0 {
+		return login.Scope{}, false
+	}
+	return supportedScopes[i], true
+}
 
 // authorizationParams are the parameters of an authorization request that
 // pulsar reads. Every other parameter is ignored (RFC 6749 §3.1).
@@ -127,25 +154,44 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	// The parameters as the login page and the consent form carry them,
 	// and as the Login Session keys what the End-User did for them.
 	query := params.Encode()
-	ctx := r.Context()
-	// fail logs err, a failure of pulsar's own, and tells the Client.
-	fail := func(err error) {
-		p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
-		resp.redirectError(w, r, errServerError, "")
+
+	// A request a Client sends by POST from its own site arrives without
+	// the SameSite=Lax Login Session cookie. It is sent back here by GET,
+	// once, with the same parameters: a top-level navigation, on which the
+	// browser sends the cookie, so that a signed-in End-User is found, with
+	// prompt=none too. A GET is answered as it comes. 303, so that the
+	// browser retrieves it by GET.
+	if r.Method == http.MethodPost && !p.sessions.HasCookie(r) {
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, AuthorizationPath(p.issuer)+"?"+query, http.StatusSeeOther) //nolint:gosec // G710: the endpoint's own path, on this origin; the query cannot change it.
+		return
 	}
+
+	ctx := r.Context()
 	inter, err := p.sessions.Interaction(r, query) //nolint:contextcheck // r carries the request's context, which Interaction uses.
 	if err != nil {
-		fail(err)
+		p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
+		resp.redirectError(w, r, errServerError, "")
 		return
 	}
 	// respond saves the Login Session, which must precede any part of the
 	// response, and then answers with answer.
 	respond := func(answer func()) { //nolint:contextcheck // Save uses the context of r, which Interaction keeps.
 		if err := inter.Save(w); err != nil {
-			fail(err)
+			p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
+			resp.redirectError(w, r, errServerError, "")
 			return
 		}
 		answer()
+	}
+	// fail logs err, a failure of pulsar's own, and tells the Client. The
+	// request ends there, so what the Login Session records for it is
+	// removed, as long as the Login Session can still be saved, so that a
+	// decision made for it does not answer the same request sent again.
+	fail := func(err error) {
+		p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
+		inter.Finish()
+		respond(func() { resp.redirectError(w, r, errServerError, "") })
 	}
 	// ask shows the End-User a page, with show; but with prompt=none, no
 	// page is shown, and what the page would ask for is answered with the
@@ -171,16 +217,16 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		ask(errLoginRequired, "The End-User is not signed in.", toLogin)
 		return
 	}
-	// A login the request asks for whatever the time is one made on the
-	// login page for this request (see login.Interaction). An End-User
-	// other than the one id_token_hint names is sent to log in once; if
-	// that login is not the named End-User's either, the request fails
-	// (OpenID Connect Core 1.0 §3.1.2.1).
+	// A login the request asks for is one made on the login page for this
+	// request (see login.Interaction and needsLogin). An End-User other
+	// than the one id_token_hint names is sent to log in once; if that
+	// login is not the named End-User's either, the request fails (OpenID
+	// Connect Core 1.0 §3.1.2.1).
 	subject := auth.EndUser.Subject
 	otherEndUser := req.hintSubject != "" && req.hintSubject != subject
 	fresh := inter.SignedInForRequest()
-	if (otherEndUser && !fresh) || req.needsLogin(auth.Time, time.Now(), fresh) {
-		inter.AskLogin()
+	decided := inter.Decision() != login.Undecided
+	if (otherEndUser && !fresh) || req.needsLogin(auth.Time, time.Now(), fresh, fresh && decided) {
 		ask(errLoginRequired, "The request requires a new login.", toLogin)
 		return
 	}
@@ -221,8 +267,11 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 					ClientID: req.client.ID,
 					Subject:  subject,
 					Username: auth.EndUser.Username,
-					Scopes:   req.scopes,
 					Action:   paths.consent + "?" + query,
+				}
+				for _, s := range req.scopes {
+					scope, _ := supportedScope(s) // req.scopes holds supported scopes only.
+					page.Scopes = append(page.Scopes, scope)
 				}
 				if err := login.WriteConsentPage(w, page); err != nil {
 					p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
@@ -282,7 +331,7 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 
 	var scopes []string
 	for s := range strings.FieldsSeq(params.Get("scope")) {
-		if slices.Contains(supportedScopes, s) && !slices.Contains(scopes, s) {
+		if _, ok := supportedScope(s); ok && !slices.Contains(scopes, s) {
 			scopes = append(scopes, s)
 		}
 	}
@@ -357,15 +406,24 @@ func idTokenSubject(idToken, issuer string) (string, bool) {
 
 // needsLogin reports whether the request asks the End-User, who
 // authenticated at authTime, to authenticate again now (OpenID Connect
-// Core 1.0 §3.1.2.1). A max_age the time since authTime exceeds always
-// does. prompt=login, prompt=select_account (a Login Session holds one
+// Core 1.0 §3.1.2.1).
+//
+// prompt=login, prompt=select_account (a Login Session holds one
 // End-User, and the login page is where they choose another) and
 // max_age=0, which §3.1.2.1 equates with prompt=login, ask whatever the
 // time, unless fresh: the End-User signed in on the login page for this
 // request, which seconds are too coarse to tell from a login just before
 // it.
-func (req authorizationRequest) needsLogin(authTime, now time.Time, fresh bool) bool {
-	if req.maxAge > 0 && now.Unix()-authTime.Unix() > req.maxAge {
+//
+// A max_age the time since authTime exceeds asks too, unless answered:
+// after that login for this request, the End-User also decided on the
+// consent page for it, so the request was re-authenticated, as max_age
+// asks, and is now complete. Otherwise an End-User slower on the consent
+// page than max_age would be sent to log in, which clears the decision,
+// and around again. A consent page left unanswered is no answer, and the
+// same request sent again later is measured from the login.
+func (req authorizationRequest) needsLogin(authTime, now time.Time, fresh, answered bool) bool {
+	if req.maxAge > 0 && !answered && now.Unix()-authTime.Unix() > req.maxAge {
 		return true
 	}
 	return !fresh && (req.prompts("login") || req.prompts("select_account") || req.maxAge == 0)
