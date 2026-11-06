@@ -53,7 +53,11 @@ that pulsar, as an OP, must or should meet.
   fulfill other conditions for processing the request."
 
   pulsar asks for nothing but a login and a Consent, so it answers
-  `login_required` or `consent_required`, never `interaction_required`.
+  `login_required` or `consent_required`, never `interaction_required`. A
+  request a Client sends by POST from its own site arrives without the
+  SameSite=Lax Login Session cookie; with or without `prompt=none`, it is
+  first sent back to the authorization endpoint by GET, which carries the
+  cookie, and is answered there.
 
 - REQ-CORE-15 (§3.1.2.3): "The Authentication Request contains the prompt
   parameter with the value login. In this case, the Authorization Server
@@ -93,9 +97,13 @@ that pulsar, as an OP, must or should meet.
   ... Note that max_age=0 is equivalent to prompt=login."
 
   The elapsed time is counted in whole seconds, as `auth_time` is, and from
-  any login, including one made for the same request. `max_age=0`, like
-  `prompt=login`, is satisfied by a login on the login page for that
-  request, made in the last 10 minutes. A value that is not a non-negative
+  any login, including one made for the same request, until the End-User
+  has also decided on the consent page for that request, after that login
+  and in the last 10 minutes: the request was then re-authenticated, and
+  measuring again would send an End-User slower than `max_age` back to log
+  in, around and around. `max_age=0`, like `prompt=login`, is satisfied by
+  a login on the login page for that request, made in the last 10
+  minutes. A value that is not a non-negative
   integer is `invalid_request`; one too large for 64 bits sets no limit.
 
 - REQ-CORE-21 (§3.1.2.1, `display`): "If an OP receives a display value

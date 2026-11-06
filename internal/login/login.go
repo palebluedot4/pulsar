@@ -201,11 +201,10 @@ func (s *Sessions) endUser(r *http.Request) (*registry.EndUser, bool) {
 // browser on to continuePath with the same query: that is how an
 // authorization request, sent to the login page with its parameters,
 // resumes after login, and the login is recorded as made for that request
-// (see [Interaction]). A visit to such a page by a browser already signed
-// in goes straight on too, unless the authorization endpoint asked for a
-// new login for that request. The form's username is filled with the
-// request's login_hint. Any other login sends the browser back to the
-// page. It logs to logger any error that ends a request.
+// (see [Interaction]). Such a page shows the form even to a browser
+// already signed in, and fills its username with the request's
+// login_hint. Any other login sends the browser back to the page. It logs
+// to logger any error that ends a request.
 func (s *Sessions) Handler(path, continuePath string, logger *slog.Logger) http.Handler {
 	h := &handler{path: path, continuePath: continuePath, sessions: s, logger: logger}
 	return http.NewCrossOriginProtection().Handler(h)
@@ -237,24 +236,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.login(w, r)
 		return
 	}
-	query := r.URL.RawQuery
 	// The username the authorization request suggests, if any (OpenID
 	// Connect Core 1.0 §3.1.2.1).
 	p := page{Username: r.URL.Query().Get("login_hint")}
-	if u, ok := h.sessions.endUser(r); ok {
-		switch {
-		case query != "" && !h.sessions.loginAsked(r, query):
-			// An authorization request reached the login page without the
-			// Login Session cookie, as one a Client sends by POST from
-			// its own site does, since the cookie is SameSite=Lax. The
-			// browser has sent it now, so the request goes back.
-			h.continueAfterLogin(w, r)
-			return
-		case query == "":
-			p.SignedInAs = u.Username
-		}
-		// Otherwise the authorization endpoint asked for a new login for
-		// this request, and the form is shown.
+	// A page for an authorization request always shows the form: the
+	// authorization endpoint sends a signed-in End-User here only to log
+	// in again.
+	if u, ok := h.sessions.endUser(r); ok && r.URL.RawQuery == "" {
+		p.SignedInAs = u.Username
 	}
 	h.render(w, r, p)
 }

@@ -65,7 +65,7 @@ type ConsentPage struct {
 	// page asks. A decision counts only for that Subject.
 	Subject  string
 	Username string
-	Scopes   []string // the scope values the Client asks for
+	Scopes   []Scope // the scopes the Client asks for
 	// Action is where the form is submitted: the consent form's path, with
 	// the authorization request's parameters as its query.
 	Action string
@@ -83,18 +83,14 @@ type consentPageData struct {
 	Allow, Deny  string
 }
 
-// scopeDescriptions say what each scope value pulsar knows releases.
-var scopeDescriptions = map[string]string{
-	"openid":  "your identifier at this provider",
-	"profile": "your name and other profile details",
-	"email":   "your email address",
-	"address": "your postal address",
-	"phone":   "your phone number",
+// Scope is a scope value the consent page lists, with what it releases,
+// as the page says it to the End-User.
+type Scope struct {
+	Value       string
+	Description string
 }
 
-var consentTemplate = template.Must(template.New("consent").Funcs(template.FuncMap{
-	"describe": func(scope string) string { return scopeDescriptions[scope] },
-}).Parse(`<!doctype html>
+var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -108,7 +104,7 @@ var consentTemplate = template.Must(template.New("consent").Funcs(template.FuncM
 <p>The client <strong id="client">{{.ClientID}}</strong> asks to receive:</p>
 <ul>
 {{- range .Scopes}}
-<li><code>{{.}}</code>: {{describe .}}</li>
+<li><code>{{.Value}}</code>: {{.Description}}</li>
 {{- end}}
 </ul>
 <form method="post" action="{{.Action}}">
