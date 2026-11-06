@@ -15,3 +15,14 @@ sql:
         overrides:
           - db_type: timestamptz
             go_type: time.Time
+  - engine: postgresql
+    schema: internal/postgres/migrations
+    queries: internal/login/queries.sql
+    gen:
+      go:
+        package: queries
+        out: internal/login/internal/queries
+        sql_package: pgx/v5
+        overrides:
+          - db_type: timestamptz
+            go_type: time.Time

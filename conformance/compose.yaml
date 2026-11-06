@@ -44,10 +44,13 @@ services:
       PULSAR_ISSUER: https://pulsar:9443
       PULSAR_DATABASE_URL: postgres://postgres@postgres:5432/postgres?sslmode=disable
       PULSAR_SECRET: ${PULSAR_SECRET:?run through make conformance}
+      # Empty until the Basic OP plan needs a Client and an End-User (#24).
+      PULSAR_REGISTRY: /conformance/registry.json
       PULSAR_TLS_CERT: /tls/cert.pem
       PULSAR_TLS_KEY: /tls/key.pem
     volumes:
       - ./tls:/tls:ro
+      - ./registry.json:/conformance/registry.json:ro
     depends_on:
       postgres:
         condition: service_healthy

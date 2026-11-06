@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+type LoginSession struct {
+	Token  string
+	Data   []byte
+	Expiry time.Time
+}
+
 type SigningKey struct {
 	Kid              string
 	SealedPrivateKey []byte

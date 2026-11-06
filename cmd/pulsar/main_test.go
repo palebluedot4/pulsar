@@ -41,6 +41,10 @@ const loopbackIssuer = "http://127.0.0.1"
 // in base64. start supplies it when a test gives none.
 const testSecret = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" //nolint:gosec // G101: a test value, guarding nothing.
 
+// testRegistry is a valid PULSAR_REGISTRY, with no Client or End-User.
+// start supplies it when a test gives none.
+const testRegistry = "testdata/registry.json"
+
 func TestRun(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +198,7 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 			env["PULSAR_ADDR"] = "127.0.0.1:0"
 			env["PULSAR_DATABASE_URL"] = databaseURL
 			env["PULSAR_SECRET"] = testSecret
+			env["PULSAR_REGISTRY"] = testRegistry
 			getenv := func(key string) string { return env[key] }
 			err := run(ctx, nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tt.setting) {
@@ -255,6 +260,7 @@ func TestRunRefusesDatabaseURL(t *testing.T) {
 				"PULSAR_ISSUER":       loopbackIssuer,
 				"PULSAR_DATABASE_URL": tt.databaseURL,
 				"PULSAR_SECRET":       testSecret,
+				"PULSAR_REGISTRY":     testRegistry,
 			}
 			getenv := func(key string) string { return env[key] }
 			err := run(t.Context(), nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
@@ -736,7 +742,8 @@ type pulsar struct {
 }
 
 // start runs pulsar on a free loopback port with env, and nothing else, as
-// its environment; PULSAR_SECRET is testSecret unless env sets it.
+// its environment; PULSAR_SECRET is testSecret and PULSAR_REGISTRY is
+// testRegistry unless env sets them.
 func start(t *testing.T, env map[string]string) *pulsar {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -744,6 +751,9 @@ func start(t *testing.T, env map[string]string) *pulsar {
 	env["PULSAR_ADDR"] = "127.0.0.1:0"
 	if _, ok := env["PULSAR_SECRET"]; !ok {
 		env["PULSAR_SECRET"] = testSecret
+	}
+	if _, ok := env["PULSAR_REGISTRY"]; !ok {
+		env["PULSAR_REGISTRY"] = testRegistry
 	}
 	getenv := func(key string) string { return env[key] }
 	logs, stdout := io.Pipe()

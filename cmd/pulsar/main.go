@@ -1,9 +1,10 @@
 // Pulsar is an OpenID Provider.
 //
-// It serves HTTP from the start, and meanwhile applies any pending database
-// migrations, holding a lock so that replicas starting together migrate
-// once, and then loads its signing keys, generating the first if there is
-// none. /readyz and the JWK Set answer 503 until both are done, and pulsar
+// It reads its Clients and End-Users from the registry file, and refuses
+// to start if the file is invalid. It serves HTTP from the start, and
+// meanwhile applies any pending database migrations, holding a lock so
+// that replicas starting together migrate once, and then loads its signing
+// keys, generating the first if there is none. /readyz and the JWK Set answer 503 until both are done, and pulsar
 // exits if either fails. It then reloads the signing keys once a minute,
 // and serves until it receives an interrupt or SIGTERM, when it shuts down
 // gracefully.
@@ -16,6 +17,7 @@
 //	PULSAR_SECRET		32 random bytes in standard, padded base64, e.g. from `openssl rand -base64 32`,
 //				from which the key encrypting the stored signing keys is derived; every
 //				start against a database needs the same value (required)
+//	PULSAR_REGISTRY		path of the registry file listing the Clients and End-Users (required)
 //	PULSAR_TLS_CERT		PEM certificate chain to serve TLS with (with PULSAR_TLS_KEY)
 //	PULSAR_TLS_KEY		PEM private key for PULSAR_TLS_CERT
 package main
@@ -38,6 +40,7 @@ import (
 
 	"github.com/palebluedot4/pulsar/internal/config"
 	"github.com/palebluedot4/pulsar/internal/postgres"
+	"github.com/palebluedot4/pulsar/internal/registry"
 	"github.com/palebluedot4/pulsar/internal/server"
 	"github.com/palebluedot4/pulsar/internal/signing"
 )
@@ -76,8 +79,13 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 
-	// The certificate is loaded before the database is touched, so that a
-	// local mistake is reported as such rather than after a connection.
+	// The registry and the certificate are loaded before the database is
+	// touched, so that a local mistake is reported as such rather than
+	// after a connection.
+	reg, err := registry.Load(cfg.RegistryFile)
+	if err != nil {
+		return fmt.Errorf("load the registry at PULSAR_REGISTRY: %w", err)
+	}
 	var tlsConfig *tls.Config
 	if cfg.TLSCertFile != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -113,7 +121,7 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	// until ready is closed, once the signing keys are loaded too.
 	ready := make(chan struct{})
 	srv := &http.Server{
-		Handler:           server.New(cfg.Issuer, pool, keys, ready),
+		Handler:           server.New(logger, cfg.Issuer, pool, keys, reg, ready),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,

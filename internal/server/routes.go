@@ -2,12 +2,15 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/palebluedot4/pulsar/internal/login"
 	"github.com/palebluedot4/pulsar/internal/oidc"
+	"github.com/palebluedot4/pulsar/internal/registry"
 	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
@@ -15,13 +18,19 @@ import (
 // makes the replica unready rather than the request hang.
 const readyTimeout = 2 * time.Second
 
-// addRoutes maps pulsar's entire HTTP surface. The protocol endpoints sit
-// under the issuer's path; the operational ones at the root.
-func addRoutes(mux *http.ServeMux, issuer *oidc.Issuer, pool *pgxpool.Pool, keys *signing.KeySet, ready <-chan struct{}) {
+// addRoutes maps pulsar's entire HTTP surface. The protocol endpoints and
+// the login page sit under the issuer's path; the operational ones at the
+// root.
+func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, pool *pgxpool.Pool, keys *signing.KeySet, reg *registry.Registry, ready <-chan struct{}) {
 	mux.Handle("GET /livez", handleLive())
 	mux.Handle("GET /readyz", handleReady(pool, ready))
 	mux.Handle("GET "+oidc.DiscoveryPath(issuer), oidc.HandleDiscovery(issuer))
 	mux.Handle("GET "+oidc.JWKSPath(issuer), keys.HandleJWKS())
+
+	loginPath := issuer.Route(login.Path)
+	loginPage := login.Handler(loginPath, pool, reg, logger)
+	mux.Handle("GET "+loginPath, loginPage)
+	mux.Handle("POST "+loginPath, loginPage)
 }
 
 // handleLive reports that the process is serving requests. It checks no
