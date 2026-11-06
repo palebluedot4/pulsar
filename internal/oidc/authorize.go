@@ -84,17 +84,23 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, loginPath s
 		p.errorPage(w, "The authorization request names a client_id that is not registered.")
 		return
 	}
-	redirectURI := params["redirect_uri"]
-	if len(redirectURI) != 1 || !slices.Contains(client.RedirectURIs, redirectURI[0]) {
+	i := -1
+	if v := params["redirect_uri"]; len(v) == 1 {
+		i = slices.Index(client.RedirectURIs, v[0])
+	}
+	if i < 0 {
 		p.errorPage(w, "The authorization request's redirect_uri is not one the client registered.")
 		return
 	}
+	// The registered URI, which the request's equals, is the one
+	// redirected to.
+	redirectURI := client.RedirectURIs[i]
 
-	resp := authorizationResponse{redirectURI: redirectURI[0], issuer: p.issuer.String()}
+	resp := authorizationResponse{redirectURI: redirectURI, issuer: p.issuer.String()}
 	if state := params["state"]; len(state) > 0 {
 		resp.state = state[0]
 	}
-	req, errCode, errDesc := parseAuthorizationRequest(client, params)
+	req, errCode, errDesc := parseAuthorizationRequest(client, redirectURI, params)
 	if errCode != "" {
 		resp.redirectError(w, r, errCode, errDesc)
 		return
@@ -133,9 +139,9 @@ type authorizationRequest struct {
 }
 
 // parseAuthorizationRequest checks the parameters of an authorization
-// request for client, whose redirect URI is valid, and returns the request,
+// request for client, with redirectURI, one it registered, and returns the request,
 // or the error code and description to redirect with.
-func parseAuthorizationRequest(client *registry.Client, params url.Values) (req authorizationRequest, errCode, errDesc string) {
+func parseAuthorizationRequest(client *registry.Client, redirectURI string, params url.Values) (req authorizationRequest, errCode, errDesc string) {
 	if name, ok := repeated(params, authorizationParams); ok {
 		return req, errInvalidRequest, "The parameter " + name + " is repeated."
 	}
@@ -169,7 +175,7 @@ func parseAuthorizationRequest(client *registry.Client, params url.Values) (req 
 
 	return authorizationRequest{
 		client:      client,
-		redirectURI: params.Get("redirect_uri"),
+		redirectURI: redirectURI,
 		scopes:      scopes,
 		nonce:       params.Get("nonce"),
 	}, "", ""
