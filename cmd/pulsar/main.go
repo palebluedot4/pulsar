@@ -135,17 +135,17 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 
 	// Migrate and load the signing keys, report the result on startErr,
 	// and then, if both succeeded, reload the keys until the run ends.
-	bgCtx, cancelBg := context.WithCancel(ctx)
-	defer cancelBg()
+	keysCtx, stopKeys := context.WithCancel(ctx)
+	defer stopKeys()
 	startErr := make(chan error, 1)
-	bgDone := make(chan struct{})
+	keysDone := make(chan struct{})
 	go func() {
-		defer close(bgDone)
-		err := prepare(bgCtx, pool, keys, logger)
+		defer close(keysDone)
+		err := prepare(keysCtx, pool, keys, logger)
 		startErr <- err
 		if err == nil {
 			close(ready)
-			keys.Run(bgCtx, logger)
+			keys.Run(keysCtx, logger)
 		}
 	}()
 
@@ -171,7 +171,7 @@ wait:
 			break wait
 		}
 	}
-	cancelBg()
+	stopKeys()
 	if startErr != nil {
 		// The run is already ending for another reason; only a failure
 		// that is not the cancellation itself is worth reporting with it.
@@ -181,7 +181,7 @@ wait:
 	}
 	// Wait until migrating, loading or reloading has stopped and released
 	// its connection.
-	<-bgDone
+	<-keysDone
 
 	if serving {
 		logger.InfoContext(ctx, "shutting down")
@@ -214,10 +214,7 @@ func prepare(ctx context.Context, pool *pgxpool.Pool, keys *signing.KeySet, logg
 	if err := keys.Load(ctx); err != nil {
 		return fmt.Errorf("load the signing keys: %w", err)
 	}
-	active, err := keys.Active()
-	if err != nil {
-		return fmt.Errorf("load the signing keys: %w", err)
-	}
+	active, _ := keys.Active() // Load has succeeded, so Active cannot fail.
 	logger.InfoContext(ctx, "signing keys loaded", "kid", active.KID)
 	return nil
 }

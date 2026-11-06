@@ -115,19 +115,20 @@ func (Secret) MarshalText() ([]byte, error) {
 	return []byte(redacted), nil
 }
 
+// secretForm is the form PULSAR_SECRET takes, as its errors describe it.
+var secretForm = fmt.Sprintf("%d random bytes in standard, padded base64, such as `openssl rand -base64 %[1]d` prints", SecretSize)
+
 // parseSecret decodes PULSAR_SECRET: SecretSize bytes in the standard,
 // padded base64 alphabet of RFC 4648 §4, as `openssl rand -base64 32`
 // prints them. Its errors never include the value, nor where in it
 // decoding failed.
 func parseSecret(raw string) (Secret, error) {
 	if raw == "" {
-		return Secret{}, errors.New("PULSAR_SECRET is required: 32 random bytes in standard, padded base64, " +
-			"such as `openssl rand -base64 32` prints")
+		return Secret{}, errors.New("PULSAR_SECRET is required: " + secretForm)
 	}
 	b, err := base64.StdEncoding.Strict().DecodeString(raw)
 	if err != nil || len(b) != SecretSize {
-		return Secret{}, errors.New("PULSAR_SECRET must be 32 random bytes in standard, padded base64, " +
-			"such as `openssl rand -base64 32` prints")
+		return Secret{}, errors.New("PULSAR_SECRET must be " + secretForm)
 	}
 	return Secret(b), nil
 }
