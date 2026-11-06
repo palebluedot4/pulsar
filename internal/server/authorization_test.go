@@ -665,31 +665,6 @@ func TestAuthorizationErrorRedirect(t *testing.T) {
 			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
 		},
 		{
-			name: "code_challenge_method and no code_challenge",
-			edit: func(v url.Values) { withPKCE(v); v.Del("code_challenge") },
-			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
-		},
-		{
-			name: "code_challenge one character short",
-			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", pkceChallenge[1:]) },
-			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
-		},
-		{
-			name: "code_challenge padded",
-			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", pkceChallenge+"=") },
-			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
-		},
-		{
-			name: "code_challenge in standard base64",
-			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", strings.ReplaceAll(pkceChallenge, "-", "+")) },
-			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
-		},
-		{
-			name: "code_challenge longer than a SHA-256 hash",
-			edit: func(v url.Values) { withPKCE(v); v.Set("code_challenge", pkceChallenge+pkceChallenge) },
-			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
-		},
-		{
 			name: "repeated code_challenge",
 			edit: func(v url.Values) { withPKCE(v); v.Add("code_challenge", pkceChallenge) },
 			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},

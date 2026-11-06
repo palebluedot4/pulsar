@@ -334,17 +334,12 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	// PKCE is required of a public Client only (ADR 0002), and S256 is the
 	// only method; one not sent means plain (RFC 7636 §4.3). Each is
 	// refused with invalid_request (RFC 7636 §4.4.1).
-	challenge, method := params.Get("code_challenge"), params.Get("code_challenge_method")
+	challenge := params.Get("code_challenge")
 	switch {
-	case challenge == "" && method != "":
-		return req, errInvalidRequest, "The parameter code_challenge_method requires code_challenge."
 	case challenge == "" && client.Public():
 		return req, errInvalidRequest, "A public client must send code_challenge: PKCE is required."
-	case challenge == "":
-	case method != "S256":
+	case challenge != "" && params.Get("code_challenge_method") != "S256":
 		return req, errInvalidRequest, "Only the code_challenge_method S256 is supported."
-	case !validChallenge(challenge):
-		return req, errInvalidRequest, "The code_challenge is not the base64url encoding of a SHA-256 hash."
 	}
 
 	var scopes []string

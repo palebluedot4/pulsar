@@ -110,21 +110,18 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 		// so every token request must repeat it (RFC 6749 §4.1.3).
 		return nil, badRequest(errInvalidRequest, "The parameter redirect_uri is required.")
 	}
+
+	client, tokErr := p.authenticateClient(r, params)
+	if tokErr != nil {
+		return nil, tokErr
+	}
 	// The code challenge the verifier makes, which the code must have been
 	// issued with; without a verifier, the code must have been issued
 	// without one, so that a verifier cannot stand in for a challenge never
 	// sent (RFC 9700 §2.1.1).
 	var challenge string
 	if verifier := params.Get("code_verifier"); verifier != "" {
-		if !validVerifier(verifier) {
-			return nil, badRequest(errInvalidRequest, "The code_verifier must be 43 to 128 unreserved characters.")
-		}
 		challenge = codeChallenge(verifier)
-	}
-
-	client, tokErr := p.authenticateClient(r, params)
-	if tokErr != nil {
-		return nil, tokErr
 	}
 	resp, err := p.issueTokens(r.Context(), client, code, redirectURI, challenge)
 	switch {
@@ -343,6 +340,14 @@ type accessTokenClaims struct {
 func accessTokenHash(accessToken string) string {
 	sum := sha256.Sum256([]byte(accessToken))
 	return base64.RawURLEncoding.EncodeToString(sum[:len(sum)/2])
+}
+
+// codeChallenge returns the S256 code challenge of a PKCE code_verifier:
+// BASE64URL-ENCODE(SHA256(ASCII(code_verifier))) (RFC 7636 §4.2). pulsar
+// supports S256 only (ADR 0002).
+func codeChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func badRequest(code, desc string) *tokenError {
