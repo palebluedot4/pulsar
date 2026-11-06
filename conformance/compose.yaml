@@ -1,0 +1,94 @@
+# The stack `make conformance` runs: pulsar and its PostgreSQL, the OpenID
+# conformance suite's prebuilt images (as its docker-compose-prebuilt.yml at
+# release-v5.3.4 runs them), and the suite's CI runner. Everything talks over
+# the Compose network, where pulsar's issuer is its service name. No port is
+# published to the host: the suite runs in its development mode, whose API
+# needs no authentication.
+#
+# Images are pinned by tag and digest: the tag says which release, the digest
+# is what is pulled. They are bumped by hand, with a changelog entry in
+# docs/harness.md.
+#
+# make conformance sets CONFORMANCE_USER, PULSAR_SECRET and the files in tls/;
+# run the stack through it.
+
+name: pulsar-conformance
+
+services:
+  postgres:
+    # The same image as CI's test database.
+    image: postgres:17.11@sha256:653186fe15006c099d2fb3bc1d8461c1dee9d036c43f2e5fdaf4f22e5e601876
+    environment:
+      # Reachable only from this network, and removed with it.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  pulsar:
+    build:
+      context: ..
+    # The invoking user, so that pulsar can read the key make conformance
+    # wrote, which only that user may read.
+    user: ${CONFORMANCE_USER:?run through make conformance}
+    environment:
+      PULSAR_ADDR: ":9443"
+      PULSAR_ISSUER: https://pulsar:9443
+      PULSAR_DATABASE_URL: postgres://postgres@postgres:5432/postgres?sslmode=disable
+      PULSAR_SECRET: ${PULSAR_SECRET:?run through make conformance}
+      PULSAR_TLS_CERT: /tls/cert.pem
+      PULSAR_TLS_KEY: /tls/key.pem
+    volumes:
+      - ./tls:/tls:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mongodb:
+    image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
+
+  server:
+    image: registry.gitlab.com/openid/conformance-suite:release-v5.3.4@sha256:dcc4bd1fb7e9c00f048a67373fe2bec5ecf9feb45a6b5d55e237e5c30e5312c6
+    environment:
+      BASE_URL: https://localhost.emobix.co.uk:8443
+      BASE_MTLS_URL: https://localhost.emobix.co.uk:8444
+      MONGODB_HOST: mongodb
+      SPRING_PROFILES_ACTIVE: dev
+      # Placeholders, as the suite's prebuilt compose file sets them: the
+      # image passes these to the server, which refuses to start when one
+      # is empty. They name no real client; nothing here logs in to the
+      # suite.
+      OIDC_GOOGLE_CLIENTID: google-client
+      OIDC_GOOGLE_SECRET: google-secret
+      OIDC_GITLAB_CLIENTID: gitlab-client
+      OIDC_GITLAB_SECRET: gitlab-secret
+    depends_on:
+      - mongodb
+
+  nginx:
+    image: registry.gitlab.com/openid/conformance-suite/nginx:release-v5.3.4@sha256:9a7850826fcc8690cd43373528f50e9551ba33bf8e4a40b67b13267b0aca3675
+    networks:
+      default:
+        aliases:
+          # The suite's public name, so that its requests to itself reach
+          # nginx rather than the container's own loopback.
+          - localhost.emobix.co.uk
+    depends_on:
+      - server
+
+  runner:
+    build: ./runner
+    # The invoking user, so that the exported results belong to them.
+    user: ${CONFORMANCE_USER:?run through make conformance}
+    environment:
+      CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
+      # No token; and the suite's self-signed certificate is not verified.
+      CONFORMANCE_DEV_MODE: "1"
+    volumes:
+      - .:/conformance:ro
+      - ./results:/results
+    depends_on:
+      - nginx
+      - pulsar

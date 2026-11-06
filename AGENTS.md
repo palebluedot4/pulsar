@@ -9,11 +9,12 @@ This file is a map. Detail lives where it is linked.
 
 ## Commands
 
-| Command       | What it does                                                                                                                                                                                                                              |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `make check`  | Tidy, stale generated query code, lint and formatting, spelling, requirement traceability, workflow lint, tests against PostgreSQL at `PULSAR_TEST_DATABASE_URL`. Runs when an agent stops, unless that working tree was already checked. |
-| `make verify` | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                                                                                                        |
-| `make fmt`    | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                                                                                                      |
+| Command            | What it does                                                                                                                                                                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make check`       | Tidy, stale generated query code, lint and formatting, spelling, requirement traceability, workflow lint, tests against PostgreSQL at `PULSAR_TEST_DATABASE_URL`. Runs when an agent stops, unless that working tree was already checked. |
+| `make verify`      | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                                                                                                        |
+| `make fmt`         | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                                                                                                      |
+| `make conformance` | The OpenID conformance suite's Config OP plan against pulsar, in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.                                                                 |
 
 Work is not done until `make verify` passes. Run `make help` for the rest.
 Tools are installed by `make setup`, which the maintainer runs outside the
@@ -28,6 +29,7 @@ sandbox; if one is missing, say so rather than installing it.
 | `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                                 |
 | `internal/harness/`            | Tests for the harness scripts that have failed before: the Stop hook and the commit check.          |
 | `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                              |
+| `conformance/`                 | The conformance suite's stack, configuration and expected results; see its README.                  |
 | `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                             |
 | `examples/`                    | Planned: consumers, a separate Go module that must not require pulsar; they reach it over the wire. |
 | `docs/research/`               | Dated surveys with sources. Decisions cite them.                                                    |

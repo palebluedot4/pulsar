@@ -21,7 +21,7 @@
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": false,
     "enableWeakerNetworkIsolation": true,
-    "excludedCommands": ["gh *", "git push *"],
+    "excludedCommands": ["docker compose *", "gh *", "git push *"],
     "filesystem": {
       "allowWrite": [
         "~/go",

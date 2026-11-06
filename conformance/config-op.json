@@ -1,0 +1,7 @@
+{
+  "alias": "pulsar",
+  "description": "pulsar, run by make conformance",
+  "server": {
+    "discoveryUrl": "https://pulsar:9443/.well-known/openid-configuration"
+  }
+}

@@ -51,6 +51,23 @@ make setup     # once per clone: pinned tools, git hooks, Claude Code plugin
 make verify    # what CI runs
 ```
 
+### Checking conformance
+
+With Docker (and Compose v2), openssl and jq installed:
+
+```sh
+make conformance
+```
+
+This runs pulsar and the
+[OpenID conformance suite](https://gitlab.com/openid/conformance-suite)
+at `release-v5.3.4` in Docker Compose, and the suite's
+`oidcc-config-certification-test-plan`, which checks the discovery document
+and the JWK Set. It exits non-zero on a failure or a warning that
+`conformance/` does not list with a reason, and leaves the results in
+`conformance/results/`. CI runs the same target on every pull request.
+[conformance/README.md](conformance/README.md) describes the files it uses.
+
 ## How it is built
 
 [AGENTS.md](AGENTS.md) is the map agents work from.

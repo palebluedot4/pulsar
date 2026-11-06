@@ -7,6 +7,10 @@ coverage.*
 /bin/
 /node_modules/
 
+# Per run of `make conformance`: its certificate and key, and its results
+/conformance/tls/
+/conformance/results/
+
 # macOS
 .DS_Store
 
