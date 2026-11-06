@@ -382,7 +382,8 @@ func TestUserInfoRequestErrors(t *testing.T) {
 }
 
 // REQ-BEARER-1: the Bearer scheme is matched without regard to case, and
-// a POST whose token is in its header may have a body of any type.
+// a POST whose token is in its header may have a body of any type, or a
+// form body that cannot be read.
 func TestUserInfoHeaderForms(t *testing.T) {
 	t.Parallel()
 
@@ -393,14 +394,16 @@ func TestUserInfoHeaderForms(t *testing.T) {
 		method      string
 		auth        string
 		contentType string
+		body        string
 	}{
 		{name: "lowercase scheme", method: http.MethodGet, auth: "bearer " + accessToken},
-		{name: "POST, JSON body", method: http.MethodPost, auth: "Bearer " + accessToken, contentType: "application/json"},
+		{name: "POST, JSON body", method: http.MethodPost, auth: "Bearer " + accessToken, contentType: "application/json", body: "{}"},
+		{name: "POST, malformed form body", method: http.MethodPost, auth: "Bearer " + accessToken, contentType: "application/x-www-form-urlencoded", body: "%zz"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			req := httptest.NewRequestWithContext(t.Context(), tt.method, "https://op.example"+userInfoPath, strings.NewReader("{}"))
+			req := httptest.NewRequestWithContext(t.Context(), tt.method, "https://op.example"+userInfoPath, strings.NewReader(tt.body))
 			req.Header.Set("Authorization", tt.auth)
 			if tt.contentType != "" {
 				req.Header.Set("Content-Type", tt.contentType)
@@ -410,5 +413,25 @@ func TestUserInfoHeaderForms(t *testing.T) {
 				t.Errorf("UserInfo claims mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// REQ-CORE-41: a UserInfo request that fails for a reason of the OP's own,
+// here its database gone, gets 500 without a Bearer challenge, since the
+// access token is not at fault.
+func TestUserInfoServerError(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	accessToken, _ := issuedTokens(t, handler, withScope("openid"))
+	pool.Close()
+	resp := userInfo(t, handler, getHeader, accessToken)
+	want := map[string]string{"Cache-Control": "no-store", "WWW-Authenticate": ""}
+	if resp.status != http.StatusInternalServerError {
+		t.Errorf("UserInfo with the database closed status = %d, want %d", resp.status, http.StatusInternalServerError)
+	}
+	if diff := cmp.Diff(want, headers(resp.header, want)); diff != "" {
+		t.Errorf("UserInfo with the database closed headers mismatch (-want +got):\n%s", diff)
 	}
 }

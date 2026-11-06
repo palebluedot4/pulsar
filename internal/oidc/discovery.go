@@ -92,16 +92,12 @@ func HandleDiscovery(issuer *Issuer) http.Handler {
 		// against, and so never none (Discovery §3).
 		TokenEndpointAuthSigningAlgValuesSupported: assertionAlgorithmNames(),
 		CodeChallengeMethodsSupported:              []string{"S256"},
-		ClaimsSupported: []string{
-			// Claims of the ID Token (Core §2).
-			"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
-			// Standard Claims (Core §5.1), as the registry may declare them.
-			"name", "given_name", "family_name", "middle_name", "nickname",
-			"preferred_username", "profile", "picture", "website",
-			"email", "email_verified", "gender", "birthdate", "zoneinfo",
-			"locale", "phone_number", "phone_number_verified", "address",
-			"updated_at",
-		},
+		// Claims of the ID Token (Core §2), and the Standard Claims (Core
+		// §5.1) that the scopes request and the registry may declare.
+		ClaimsSupported: append(
+			[]string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce"},
+			standardClaims()...,
+		),
 		ClaimsParameterSupported:                   true,
 		RequestParameterSupported:                  false,
 		RequestURIParameterSupported:               false,
