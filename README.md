@@ -17,7 +17,8 @@ succeeds, and 503 when one fails.
 
 The private keys are stored encrypted under a key derived from
 `PULSAR_SECRET`, 32 random bytes in base64. Keep it: with another secret,
-pulsar cannot decrypt its keys and refuses to start.
+pulsar cannot decrypt its keys, so it never becomes ready; it answers
+`/livez` until it has tried, and then exits with an error.
 
 ```sh
 # Once per database; every later start needs the same value.

@@ -227,8 +227,8 @@ func TestRunDoesNotEchoIssuerPassword(t *testing.T) {
 	}
 }
 
-// pulsar refuses to start when PULSAR_DATABASE_URL is unusable, with an
-// error that names the setting and never repeats the password in it.
+// pulsar ends with an error when PULSAR_DATABASE_URL is unusable, one that
+// names the setting and never repeats the password in it.
 func TestRunRefusesDatabaseURL(t *testing.T) {
 	t.Parallel()
 
@@ -344,7 +344,7 @@ func TestRunReusesSigningKey(t *testing.T) {
 
 // REQ-JWK-4: no stored value holds the private key in the clear, and the
 // key cannot be used without the secret it was stored under: a start with
-// another PULSAR_SECRET refuses to serve.
+// another PULSAR_SECRET ends with an error before it is ready.
 //
 // A stored private key in PKCS #1 or PKCS #8 DER, raw or in PEM, contains
 // each prime factor of the modulus as 128 consecutive octets, so the test
