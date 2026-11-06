@@ -1,0 +1,629 @@
+package server
+
+import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
+)
+
+// The redirect URIs that the Clients post and jwt registered in
+// flowRegistry.
+const (
+	postRedirectURI = "https://post.example/callback"
+	jwtRedirectURI  = "https://jwt.example/callback"
+)
+
+// jwtBearer is the client_assertion_type of a JWT that authenticates a
+// Client (RFC 7523 §2.2).
+const jwtBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" //nolint:gosec // G101: a URN that names a format, not a credential.
+
+// clientKey is a private key of the private_key_jwt Client jwt, with the
+// kid and the one algorithm it is registered for.
+type clientKey struct {
+	kid string
+	alg jose.SignatureAlgorithm
+	key crypto.Signer
+}
+
+// jwtKeys returns jwt's keys: one for each algorithm pulsar allows. They
+// are generated once, since RSA keys are slow to generate; their values do
+// not matter, so the tests share them.
+var jwtKeys = sync.OnceValue(func() []clientKey {
+	rs, errRS := rsa.GenerateKey(rand.Reader, 2048)
+	ps, errPS := rsa.GenerateKey(rand.Reader, 2048)
+	es, errES := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err := errors.Join(errRS, errPS, errES); err != nil {
+		panic(err)
+	}
+	return []clientKey{
+		{kid: "rs", alg: jose.RS256, key: rs},
+		{kid: "ps", alg: jose.PS256, key: ps},
+		{kid: "es", alg: jose.ES256, key: es},
+	}
+})
+
+// jwtJWKS returns the JWK Set that jwt registers: the public keys of
+// jwtKeys, each with its kid and alg.
+func jwtJWKS(tb testing.TB) string {
+	tb.Helper()
+	var set jose.JSONWebKeySet
+	for _, k := range jwtKeys() {
+		set.Keys = append(set.Keys, jose.JSONWebKey{Key: k.key.Public(), KeyID: k.kid, Algorithm: string(k.alg), Use: "sig"})
+	}
+	b, err := json.Marshal(set)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return string(b)
+}
+
+// clientParams returns the parameters of a valid authorization request
+// from clientID, for redirectURI.
+func clientParams(clientID, redirectURI string) url.Values {
+	params := authorizationParams()
+	params.Set("client_id", clientID)
+	params.Set("redirect_uri", redirectURI)
+	return params
+}
+
+// postTokenRequest sends a token request with form, with no Authorization
+// header: whatever authenticates the Client is in form.
+func postTokenRequest(t *testing.T, handler http.Handler, form url.Values) response {
+	t.Helper()
+	return tokenRequest(t, handler, "", "", form)
+}
+
+// idTokenAudience returns the aud of the ID token in a successful token
+// response, failing the test for any other response.
+func idTokenAudience(t *testing.T, handler http.Handler, resp response) any {
+	t.Helper()
+	if resp.status != http.StatusOK {
+		t.Fatalf("POST %s status = %d, want %d; body %q", tokenPath, resp.status, http.StatusOK, resp.body)
+	}
+	var tokens struct {
+		IDToken string `json:"id_token"`
+	}
+	if err := json.Unmarshal([]byte(resp.body), &tokens); err != nil {
+		t.Fatalf("POST %s body is not a token response: %v", tokenPath, err)
+	}
+	return verify(t, handler, tokens.IDToken).claims["aud"]
+}
+
+// REQ-OAUTH-23: a Client registered for client_secret_post redeems its code
+// with its client_id and secret in the request body.
+func TestTokenClientSecretPost(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code(t, handler, clientParams("post", postRedirectURI))},
+		"redirect_uri":  {postRedirectURI},
+		"client_id":     {"post"},
+		"client_secret": {postSecret},
+	}
+	if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "post" {
+		t.Errorf("ID token aud = %v, want %q", got, "post")
+	}
+}
+
+// tokenError returns the error code of a token error response, failing the
+// test unless the response has status and the headers of RFC 6749 §5.2.
+func tokenErrorCode(t *testing.T, resp response, status int) string {
+	t.Helper()
+	if resp.status != status {
+		t.Errorf("POST %s status = %d, want %d; body %q", tokenPath, resp.status, status, resp.body)
+	}
+	wantHeader := map[string]string{"Content-Type": "application/json", "Cache-Control": "no-store", "Pragma": "no-cache"}
+	if status == http.StatusUnauthorized {
+		wantHeader["WWW-Authenticate"] = `Basic realm="` + loginIssuer + `"`
+	}
+	if diff := cmp.Diff(wantHeader, headers(resp.header, wantHeader)); diff != "" {
+		t.Errorf("POST %s headers mismatch (-want +got):\n%s", tokenPath, diff)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp.body), &body); err != nil {
+		t.Fatalf("POST %s body %q is not JSON: %v", tokenPath, resp.body, err)
+	}
+	return body.Error
+}
+
+// REQ-OAUTH-22, REQ-OAUTH-23, REQ-OAUTH-24, REQ-ASSERT-2: a Client that
+// authenticates by a method other than the one it registered, or by more
+// than one, fails; with invalid_client, unless the methods are HTTP Basic
+// and the request body, which RFC 6749 §5.2 makes invalid_request.
+func TestTokenClientAuthenticationMethod(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name        string
+		clientID    string // the Client the code is issued to
+		redirectURI string
+		basic       []string // the client_id and secret of HTTP Basic authentication, if any
+		query       url.Values
+		body        url.Values
+		wantStatus  int
+		wantError   string
+	}{
+		{
+			name: "client_secret_basic Client by the body", clientID: "rp", redirectURI: rpRedirectURI,
+			body:       url.Values{"client_id": {"rp"}, "client_secret": {rpSecret}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
+			name: "client_secret_post Client by Basic", clientID: "post", redirectURI: postRedirectURI,
+			basic:      []string{"post", postSecret},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
+			name: "client_secret_post Client with a wrong secret", clientID: "post", redirectURI: postRedirectURI,
+			body:       url.Values{"client_id": {"post"}, "client_secret": {rpSecret}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
+			name: "client_secret_post Client without client_id", clientID: "post", redirectURI: postRedirectURI,
+			body:       url.Values{"client_secret": {postSecret}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
+			name: "client_secret_post credentials in the request URI", clientID: "post", redirectURI: postRedirectURI,
+			query:      url.Values{"client_id": {"post"}, "client_secret": {postSecret}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
+			name: "private_key_jwt Client by the body", clientID: "jwt", redirectURI: jwtRedirectURI,
+			body:       url.Values{"client_id": {"jwt"}, "client_secret": {postSecret}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
+			name: "Basic and the body", clientID: "post", redirectURI: postRedirectURI,
+			basic:      []string{"post", postSecret},
+			body:       url.Values{"client_id": {"post"}, "client_secret": {postSecret}},
+			wantStatus: http.StatusBadRequest, wantError: "invalid_request",
+		},
+		{
+			name: "Basic and an assertion", clientID: "rp", redirectURI: rpRedirectURI,
+			basic:      []string{"rp", rpSecret},
+			body:       url.Values{"client_assertion_type": {jwtBearer}, "client_assertion": {"x"}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
+			name: "the body and an assertion", clientID: "post", redirectURI: postRedirectURI,
+			body:       url.Values{"client_id": {"post"}, "client_secret": {postSecret}, "client_assertion_type": {jwtBearer}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			form := url.Values{
+				"grant_type":   {"authorization_code"},
+				"code":         {code(t, handler, clientParams(tt.clientID, tt.redirectURI))},
+				"redirect_uri": {tt.redirectURI},
+			}
+			maps.Copy(form, tt.body)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+tokenPath+"?"+tt.query.Encode(), strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tt.basic != nil {
+				req.SetBasicAuth(url.QueryEscape(tt.basic[0]), url.QueryEscape(tt.basic[1]))
+			}
+			resp := (&browser{t: t, handler: handler}).do(req)
+			if got := tokenErrorCode(t, resp, tt.wantStatus); got != tt.wantError {
+				t.Errorf("POST %s error = %q, want %q", tokenPath, got, tt.wantError)
+			}
+		})
+	}
+}
+
+// tokenEndpoint is the token endpoint URL of the OP at loginIssuer.
+const tokenEndpoint = loginIssuer + "/token"
+
+// assertionClaims returns the claims of a valid client assertion from jwt,
+// for the token endpoint, expiring a minute from now.
+func assertionClaims() map[string]any {
+	now := time.Now()
+	return map[string]any{
+		"iss": "jwt",
+		"sub": "jwt",
+		"aud": tokenEndpoint,
+		"exp": now.Add(time.Minute).Unix(),
+		"iat": now.Unix(),
+		"jti": rand.Text(),
+	}
+}
+
+// signAssertion returns a JWT with claims, signed with key by alg, whose
+// header names kid unless it is "".
+func signAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, claims map[string]any) string {
+	tb.Helper()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: jose.JSONWebKey{Key: key, KeyID: kid}}, nil)
+	if err != nil {
+		tb.Fatalf("jose.NewSigner(%s) error = %v", alg, err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		tb.Fatalf("Sign() error = %v", err)
+	}
+	s, err := jws.CompactSerialize()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return s
+}
+
+// jwtForm returns the form of a token request that redeems code for jwt,
+// authenticated by assertion.
+func jwtForm(code, assertion string) url.Values {
+	return url.Values{
+		"grant_type":            {"authorization_code"},
+		"code":                  {code},
+		"redirect_uri":          {jwtRedirectURI},
+		"client_assertion_type": {jwtBearer},
+		"client_assertion":      {assertion},
+	}
+}
+
+// REQ-JWTAUTH-1, REQ-JWTAUTH-2, REQ-JWTAUTH-3, REQ-JWTAUTH-4,
+// REQ-JWTAUTH-7, REQ-ASSERT-1, REQ-CORE-14, REQ-CORE-15, REQ-CORE-17,
+// REQ-JWTBCP-2: a Client registered for private_key_jwt redeems its code
+// with an assertion signed by any of its keys, by the key's algorithm,
+// whose audience is the token endpoint URL or the issuer.
+func TestTokenPrivateKeyJWT(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	keys := jwtKeys()
+	tests := []struct {
+		name string
+		key  clientKey
+		kid  string // the header's kid
+		edit func(claims map[string]any, form url.Values)
+	}{
+		{name: "RS256", key: keys[0], kid: keys[0].kid},
+		{name: "PS256", key: keys[1], kid: keys[1].kid},
+		{name: "ES256", key: keys[2], kid: keys[2].kid},
+		{name: "no kid", key: keys[2]},
+		{name: "aud the issuer", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { c["aud"] = loginIssuer }},
+		{
+			name: "aud an array holding the issuer", key: keys[0], kid: keys[0].kid,
+			edit: func(c map[string]any, _ url.Values) { c["aud"] = []string{"https://other.example", loginIssuer} },
+		},
+		{name: "no iat", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { delete(c, "iat") }},
+		{name: "nbf now", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { c["nbf"] = time.Now().Unix() }},
+		{name: "claims pulsar does not know", key: keys[0], kid: keys[0].kid, edit: func(c map[string]any, _ url.Values) { c["x-unknown"] = true }},
+		{name: "client_id in the body", key: keys[0], kid: keys[0].kid, edit: func(_ map[string]any, f url.Values) { f.Set("client_id", "jwt") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			claims := assertionClaims()
+			form := url.Values{}
+			if tt.edit != nil {
+				tt.edit(claims, form)
+			}
+			c := code(t, handler, clientParams("jwt", jwtRedirectURI))
+			maps.Copy(form, jwtForm(c, signAssertion(t, tt.key.alg, tt.key.key, tt.kid, claims)))
+			if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
+				t.Errorf("ID token aud = %v, want %q", got, "jwt")
+			}
+		})
+	}
+}
+
+// REQ-DISC-10, REQ-JWTBCP-2: every algorithm discovery lists for client
+// assertions authenticates a Client; together with the algorithms
+// TestTokenPrivateKeyJWTRejected and TestRunRefusesRegistry refuse, the
+// list is the allow-list.
+func TestDiscoveryAssertionAlgorithms(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://op.example/tenant/.well-known/openid-configuration", http.NoBody))
+	var metadata struct {
+		Algs []jose.SignatureAlgorithm `json:"token_endpoint_auth_signing_alg_values_supported"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &metadata); err != nil {
+		t.Fatalf("discovery document is not JSON: %v", err)
+	}
+	if len(metadata.Algs) == 0 {
+		t.Fatal("discovery lists no token_endpoint_auth_signing_alg_values_supported")
+	}
+	for _, alg := range metadata.Algs {
+		t.Run(string(alg), func(t *testing.T) {
+			t.Parallel()
+			i := slices.IndexFunc(jwtKeys(), func(k clientKey) bool { return k.alg == alg })
+			if i < 0 {
+				t.Fatalf("discovery lists %s, for which the test has no key", alg)
+			}
+			k := jwtKeys()[i]
+			form := jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), signAssertion(t, k.alg, k.key, k.kid, assertionClaims()))
+			if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
+				t.Errorf("ID token aud = %v, want %q", got, "jwt")
+			}
+		})
+	}
+}
+
+// unsigned returns a JWT with claims and the alg none, unsigned.
+func unsigned(tb testing.TB, claims map[string]any) string {
+	tb.Helper()
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"none"}`)) + "." + enc(payload) + "."
+}
+
+// REQ-JWTAUTH-1, REQ-JWTAUTH-2, REQ-JWTAUTH-3, REQ-JWTAUTH-4,
+// REQ-JWTAUTH-5, REQ-JWTAUTH-7, REQ-JWTAUTH-8, REQ-ASSERT-1, REQ-ASSERT-2,
+// REQ-CORE-14, REQ-CORE-15, REQ-CORE-16, REQ-CORE-17, REQ-CORE-18,
+// REQ-JWTBCP-1, REQ-JWTBCP-2, REQ-JWTBCP-3, REQ-DISC-10: a client
+// assertion fails with invalid_client unless it is one JWT, signed by a
+// key jwt registered, with that key's algorithm, naming jwt as its issuer
+// and subject and the OP as its audience, with a jti, and with an exp that
+// has not passed and is at most an hour away.
+func TestTokenPrivateKeyJWTRejected(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	keys := jwtKeys()
+	rs, ps, es := keys[0], keys[1], keys[2]
+	unregistered, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// sign signs claims with rs, as jwt registered it.
+	sign := func(claims map[string]any) string {
+		return signAssertion(t, rs.alg, rs.key, rs.kid, claims)
+	}
+	// with returns assertionClaims with name set to value, or removed if
+	// value is nil.
+	with := func(name string, value any) map[string]any {
+		c := assertionClaims()
+		if value == nil {
+			delete(c, name)
+		} else {
+			c[name] = value
+		}
+		return c
+	}
+	confidential := assertionClaims()
+	confidential["iss"], confidential["sub"] = "rp", "rp"
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: rs.alg, Key: jose.JSONWebKey{Key: rs.key, KeyID: rs.kid}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(assertionClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	// The assertions are signed before any subtest runs, and expire a
+	// minute later, long after the last subtest.
+	tests := []struct {
+		name      string
+		assertion string
+		edit      func(form url.Values) // edits the form after the assertion is set
+	}{
+		{name: "an unregistered key under a registered kid", assertion: signAssertion(t, jose.RS256, unregistered, rs.kid, assertionClaims())},
+		{name: "an unregistered key without kid", assertion: signAssertion(t, jose.RS256, unregistered, "", assertionClaims())},
+		{name: "a registered key under a kid jwt did not register", assertion: signAssertion(t, jose.ES256, es.key, "unknown", assertionClaims())},
+		{name: "alg none", assertion: unsigned(t, assertionClaims())},
+		{name: "alg HS256", assertion: signAssertion(t, jose.HS256, []byte("a secret of 32 bytes, as HS256 w"), rs.kid, assertionClaims())},
+		{name: "alg RS384, not allowed", assertion: signAssertion(t, jose.RS384, rs.key, rs.kid, assertionClaims())},
+		{name: "PS256 with the RS256 key", assertion: signAssertion(t, jose.PS256, rs.key, rs.kid, assertionClaims())},
+		{name: "RS256 with the PS256 key", assertion: signAssertion(t, jose.RS256, ps.key, ps.kid, assertionClaims())},
+		{name: "iss another Client", assertion: sign(with("iss", "rp"))},
+		{name: "iss in another case", assertion: sign(with("iss", "JWT"))},
+		{name: "no iss", assertion: sign(with("iss", nil))},
+		{name: "sub another Client", assertion: sign(with("sub", "post"))},
+		{name: "no sub", assertion: sign(with("sub", nil))},
+		{name: "iss and sub a client_secret_basic Client", assertion: sign(confidential)},
+		{name: "aud another server", assertion: sign(with("aud", "https://other.example/token"))},
+		{name: "aud the issuer with a slash", assertion: sign(with("aud", loginIssuer+"/"))},
+		{name: "aud the authorization endpoint", assertion: sign(with("aud", loginIssuer+"/authorize"))},
+		{name: "no aud", assertion: sign(with("aud", nil))},
+		{name: "no exp", assertion: sign(with("exp", nil))},
+		{name: "exp now", assertion: sign(with("exp", now.Unix()))},
+		{name: "exp passed", assertion: sign(with("exp", now.Add(-time.Minute).Unix()))},
+		{name: "exp more than an hour away", assertion: sign(with("exp", now.Add(time.Hour+time.Minute).Unix()))},
+		{name: "exp not a number", assertion: sign(with("exp", "soon"))},
+		{name: "nbf to come", assertion: sign(with("nbf", now.Add(time.Minute).Unix()))},
+		{name: "no jti", assertion: sign(with("jti", nil))},
+		{name: "client_id another Client", assertion: sign(assertionClaims()), edit: func(f url.Values) { f.Set("client_id", "post") }},
+		{
+			name:      "client_assertion_type another type",
+			assertion: sign(assertionClaims()),
+			edit: func(f url.Values) {
+				f.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:saml2-bearer")
+			},
+		},
+		{name: "no client_assertion_type", assertion: sign(assertionClaims()), edit: func(f url.Values) { f.Del("client_assertion_type") }},
+		{name: "no client_assertion", edit: func(f url.Values) { f.Del("client_assertion") }},
+		{name: "not a JWT", assertion: "not a JWT"},
+		{name: "two JWTs", assertion: sign(assertionClaims()) + " " + sign(assertionClaims())},
+		{name: "the JWS JSON serialization", assertion: jws.FullSerialize()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			form := jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), tt.assertion)
+			if tt.edit != nil {
+				tt.edit(form)
+			}
+			if got := tokenErrorCode(t, postTokenRequest(t, handler, form), http.StatusUnauthorized); got != "invalid_client" {
+				t.Errorf("POST %s error = %q, want %q", tokenPath, got, "invalid_client")
+			}
+		})
+	}
+}
+
+// REQ-JWTAUTH-4, REQ-JWTAUTH-6, REQ-CORE-16, REQ-CORE-17: an assertion
+// authenticates once, and not at or after its exp. Its jti is refused,
+// even in a new assertion, until the assertion that first used it
+// expires, and not after.
+func TestTokenPrivateKeyJWTReplay(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		handler := newBubbleFlowHandler(t, databaseURL)
+		k := jwtKeys()[0]
+		// redeem redeems a new code for jwt with assertion.
+		redeem := func(assertion string) response {
+			return postTokenRequest(t, handler, jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), assertion))
+		}
+
+		first := assertionClaims() // exp a minute from now
+		first["jti"] = "reused"
+		assertion := signAssertion(t, k.alg, k.key, k.kid, first)
+		if resp := redeem(assertion); resp.status != http.StatusOK {
+			t.Fatalf("POST %s with a new assertion status = %d, want %d; body %q", tokenPath, resp.status, http.StatusOK, resp.body)
+		}
+
+		time.Sleep(30 * time.Second)
+		if got := tokenErrorCode(t, redeem(assertion), http.StatusUnauthorized); got != "invalid_client" {
+			t.Errorf("POST %s with the assertion again error = %q, want %q", tokenPath, got, "invalid_client")
+		}
+
+		second := assertionClaims()
+		second["jti"] = "reused"
+		second["exp"] = time.Now().Add(time.Minute).Unix()
+		later := signAssertion(t, k.alg, k.key, k.kid, second)
+		time.Sleep(29 * time.Second)
+		if got := tokenErrorCode(t, redeem(later), http.StatusUnauthorized); got != "invalid_client" {
+			t.Errorf("POST %s with the jti 59s into the first assertion's minute error = %q, want %q", tokenPath, got, "invalid_client")
+		}
+
+		// The first assertion's exp: it is refused for that alone, since
+		// its jti is no longer kept.
+		time.Sleep(time.Second)
+		if got := tokenErrorCode(t, redeem(assertion), http.StatusUnauthorized); got != "invalid_client" {
+			t.Errorf("POST %s with the first assertion at its exp error = %q, want %q", tokenPath, got, "invalid_client")
+		}
+		if resp := redeem(later); resp.status != http.StatusOK {
+			t.Errorf("POST %s with the jti once the first assertion expired status = %d, want %d; body %q", tokenPath, resp.status, http.StatusOK, resp.body)
+		}
+	})
+}
+
+// REQ-JWTAUTH-6, REQ-CORE-16: of token requests that present one assertion
+// at once, each with its own code, at most one authenticates.
+func TestTokenPrivateKeyJWTConcurrentReplay(t *testing.T) {
+	t.Parallel()
+
+	const requests = 8
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	k := jwtKeys()[0]
+	assertion := signAssertion(t, k.alg, k.key, k.kid, assertionClaims())
+	forms := make([]url.Values, requests)
+	for i := range forms {
+		forms[i] = jwtForm(code(t, handler, clientParams("jwt", jwtRedirectURI)), assertion)
+	}
+	statuses := make([]int, requests)
+	var wg sync.WaitGroup
+	for i := range requests {
+		wg.Go(func() {
+			statuses[i] = postTokenRequest(t, handler, forms[i]).status
+		})
+	}
+	wg.Wait()
+	counts := map[int]int{}
+	for _, s := range statuses {
+		counts[s]++
+	}
+	want := map[int]int{http.StatusOK: 1, http.StatusUnauthorized: requests - 1}
+	if diff := cmp.Diff(want, counts); diff != "" {
+		t.Errorf("statuses of %d concurrent requests with one assertion mismatch (-want +got):\n%s", requests, diff)
+	}
+}
+
+// verifiesWithJWTKey reports whether raw is a JWS in the compact
+// serialization that one of jwtKeys verifies, by the algorithm it is
+// registered for, whatever its claims: the least an assertion must be to
+// authenticate jwt.
+func verifiesWithJWTKey(raw string) bool {
+	for _, k := range jwtKeys() {
+		jws, err := jose.ParseSignedCompact(raw, []jose.SignatureAlgorithm{k.alg})
+		if err == nil {
+			if _, err := jws.Verify(k.key.Public()); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// REQ-JWTAUTH-7, REQ-JWTAUTH-8, REQ-ASSERT-2: whatever a client assertion
+// holds, the token endpoint answers invalid_client, or, if it accepted the
+// assertion, invalid_grant for the unknown code; it accepts only an
+// assertion that one of jwt's keys verifies, and never fails itself.
+func FuzzClientAssertion(f *testing.F) {
+	k := jwtKeys()[0]
+	valid := signAssertion(f, k.alg, k.key, k.kid, assertionClaims())
+	parts := strings.Split(valid, ".")
+	f.Add(valid)
+	f.Add(unsigned(f, assertionClaims()))
+	f.Add(signAssertion(f, jose.HS256, []byte("a secret of 32 bytes, as HS256 w"), k.kid, assertionClaims()))
+	f.Add(parts[0] + "." + parts[1] + ".")
+	f.Add(parts[0] + ".." + parts[2])
+	f.Add(valid + "." + parts[2])
+	f.Add(`{"payload":"e30","signatures":[]}`)
+	f.Add("e30.e30.e30")
+	f.Add("..")
+	f.Add("")
+
+	handler := newFlowHandler(f, postgrestest.Open(f, postgrestest.NewDatabase(f)))
+	f.Fuzz(func(t *testing.T, raw string) {
+		form := jwtForm("unknown", raw)
+		resp := postTokenRequest(t, handler, form)
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(resp.body), &body); err != nil {
+			t.Fatalf("POST %s with client_assertion %q: body %q is not JSON: %v", tokenPath, raw, resp.body, err)
+		}
+		switch {
+		case resp.status == http.StatusUnauthorized && body.Error == "invalid_client":
+		case resp.status == http.StatusBadRequest && body.Error == "invalid_grant":
+			if !verifiesWithJWTKey(raw) {
+				t.Errorf("POST %s with client_assertion %q authenticated jwt, though none of its keys verifies it", tokenPath, raw)
+			}
+		default:
+			t.Errorf("POST %s with client_assertion %q = %d %q, want %d invalid_client or %d invalid_grant", tokenPath, raw, resp.status, body.Error, http.StatusUnauthorized, http.StatusBadRequest)
+		}
+	})
+}

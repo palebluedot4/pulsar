@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"os"
@@ -42,10 +45,18 @@ func endUser() entry {
 	}
 }
 
-// jwks returns a JWK Set holding key, which is a public or private key.
+// jwks returns a JWK Set holding key, which is a public or private P-256
+// key, for ES256.
 func jwks(t *testing.T, key any) map[string]any {
 	t.Helper()
-	b, err := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: key, KeyID: "k1", Algorithm: "ES256", Use: "sig"}}})
+	return jwksFor(t, key, "ES256", "sig")
+}
+
+// jwksFor returns a JWK Set holding key, with alg and use, each left out
+// if "".
+func jwksFor(t *testing.T, key any, alg, use string) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: key, KeyID: "k1", Algorithm: alg, Use: use}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,20 +106,29 @@ func with(e entry, key string, value any) entry {
 // REQ-CORE-1: a Subject is unique, at most 255 ASCII characters and
 // compared as a case-sensitive string, so it is a UUID in its one
 // lowercase form.
+// REQ-JWTBCP-1, REQ-JWTBCP-2, REQ-JWA-1: a private_key_jwt Client's key
+// names the one algorithm it signs with, which is on the allow-list, and
+// is a key that algorithm takes: RSA of at least 2048 bits, or P-256.
 func TestRunRefusesRegistry(t *testing.T) {
 	t.Parallel()
 
-	// Not cryptotest.SetGlobalRandom: the key's value does not matter, only
-	// that the registry holds a public or a private key, and the tests run
-	// in parallel, which a process-wide source forbids.
-	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
+	// Not cryptotest.SetGlobalRandom: the keys' values do not matter, only
+	// their types and sizes, and the tests run in parallel, which a
+	// process-wide source forbids.
+	ecKey, errEC := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	p384Key, errP384 := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	rsa1024Key, errRSA := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // G403: a key too small, for the registry to refuse.
+	edKey, _, errEd := ed25519.GenerateKey(rand.Reader)
+	if err := errors.Join(errEC, errP384, errRSA, errEd); err != nil {
 		t.Fatal(err)
 	}
 	publicJWKS := jwks(t, &ecKey.PublicKey)
 	privateJWKS := jwks(t, ecKey)
 	jwtClient := with(with(secretClient(), "client_secret_hash", nil), "token_endpoint_auth_method", "private_key_jwt")
 	jwtClient["jwks"] = publicJWKS
+	withKey := func(key any, alg, use string) string {
+		return registryJSON(t, []entry{with(jwtClient, "jwks", jwksFor(t, key, alg, use))}, nil)
+	}
 	publicClient := with(with(secretClient(), "client_secret_hash", nil), "token_endpoint_auth_method", "none")
 	alice := endUser()
 	bob := with(with(endUser(), "username", "bob"), "sub", "0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b")
@@ -141,6 +161,14 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "private_key_jwt client with empty JWKS", registry: registryJSON(t, []entry{with(jwtClient, "jwks", map[string]any{"keys": []any{}})}, nil), problem: "jwks"},
 		{name: "private_key_jwt client with private key", registry: registryJSON(t, []entry{with(jwtClient, "jwks", privateJWKS)}, nil), problem: "jwks"},
 		{name: "private_key_jwt client with secret hash", registry: registryJSON(t, []entry{with(jwtClient, "client_secret_hash", testHash)}, nil), problem: "client_secret_hash"},
+		{name: "private_key_jwt key without alg", registry: withKey(&ecKey.PublicKey, "", "sig"), problem: "alg is required"},
+		{name: "private_key_jwt key for ES384", registry: withKey(&p384Key.PublicKey, "ES384", "sig"), problem: "alg \"ES384\""},
+		{name: "private_key_jwt key for none", registry: withKey(&ecKey.PublicKey, "none", "sig"), problem: "alg \"none\""},
+		{name: "private_key_jwt key for EdDSA", registry: withKey(edKey, "EdDSA", "sig"), problem: "alg \"EdDSA\""},
+		{name: "private_key_jwt key for encryption", registry: withKey(&ecKey.PublicKey, "ES256", "enc"), problem: "use \"enc\""},
+		{name: "private_key_jwt EC key for RS256", registry: withKey(&ecKey.PublicKey, "RS256", "sig"), problem: "RSA key"},
+		{name: "private_key_jwt P-384 key for ES256", registry: withKey(&p384Key.PublicKey, "ES256", "sig"), problem: "P-256 key"},
+		{name: "private_key_jwt 1024-bit RSA key", registry: withKey(&rsa1024Key.PublicKey, "PS256", "sig"), problem: "at least 2048 bits"},
 		{name: "public client with secret hash", registry: registryJSON(t, []entry{with(publicClient, "client_secret_hash", testHash)}, nil), problem: "client_secret_hash"},
 		{name: "public client with JWKS", registry: registryJSON(t, []entry{with(publicClient, "jwks", publicJWKS)}, nil), problem: "jwks"},
 		{name: "client without redirect URIs", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", nil)}, nil), problem: "redirect_uris"},

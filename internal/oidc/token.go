@@ -20,7 +20,7 @@ import (
 
 // tokenParams are the parameters of a token request that pulsar reads.
 // Every other parameter is ignored (RFC 6749 §3.2).
-var tokenParams = []string{"grant_type", "code", "redirect_uri", "client_id", "client_secret"}
+var tokenParams = []string{"grant_type", "code", "redirect_uri", "client_id", "client_secret", "client_assertion_type", "client_assertion"}
 
 // Error codes of a token error response (RFC 6749 §5.2).
 const (
@@ -50,7 +50,8 @@ type tokenError struct {
 
 // HandleToken serves the token endpoint, by POST (RFC 6749 §3.2). It
 // redeems an authorization code for an ID token and an access token, for
-// a Client that authenticates with client_secret_basic.
+// a Client that authenticates with client_secret_basic, client_secret_post
+// or private_key_jwt, whichever it registered.
 func (p *Provider) HandleToken() http.Handler {
 	return http.HandlerFunc(p.token)
 }
@@ -121,18 +122,58 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	return resp, nil
 }
 
-// authenticateClient authenticates the Client of a token request by HTTP
-// Basic authentication, with its client_id and secret each form-encoded
-// before they are joined (RFC 6749 §2.3.1). A Client registered for
-// another method fails, so that a weaker one cannot stand in for it.
+// authenticateClient authenticates the Client of a token request by the
+// one method the request uses: client_secret_basic, client_secret_post or
+// private_key_jwt. A Client registered for another method fails, so that a
+// weaker one cannot stand in for it.
 func (p *Provider) authenticateClient(r *http.Request, params url.Values) (*registry.Client, *tokenError) {
-	unauthorized := &tokenError{status: http.StatusUnauthorized, Code: errInvalidClient, Description: "Client authentication failed."}
-	user, pass, ok := r.BasicAuth()
+	// An Authorization header of any scheme is an attempt to authenticate
+	// by it, and an assertion parameter, even alone, one to authenticate by
+	// an assertion.
+	header := r.Header.Get("Authorization") != ""
+	post := params.Has("client_secret")
+	assertion := params.Has("client_assertion") || params.Has("client_assertion_type")
+	switch {
+	case assertion && (header || post):
+		// RFC 7521 §4.2.1.
+		return nil, unauthorized
+	case header && post:
+		// RFC 6749 §5.2.
+		return nil, badRequest(errInvalidRequest, "The client must authenticate by one method only.")
+	case header:
+		return p.authenticateBasic(r, params)
+	case post:
+		return p.authenticatePost(params)
+	case assertion:
+		return p.authenticateAssertion(r.Context(), params)
+	default:
+		return nil, unauthorized
+	}
+}
+
+// unauthorized is the answer to a token request whose Client fails to
+// authenticate (RFC 6749 §5.2).
+var unauthorized = &tokenError{status: http.StatusUnauthorized, Code: errInvalidClient, Description: "Client authentication failed."}
+
+// authenticatePost authenticates a Client registered for
+// client_secret_post by the client_id and client_secret in the request
+// body (RFC 6749 §2.3.1). The body is the only place parameters are read
+// from, so the two are never taken from the request URI.
+func (p *Provider) authenticatePost(params url.Values) (*registry.Client, *tokenError) {
+	client, ok := p.registry.AuthenticateClientSecret(registry.ClientSecretPost, params.Get("client_id"), params.Get("client_secret"))
 	if !ok {
 		return nil, unauthorized
 	}
-	if params.Has("client_secret") {
-		return nil, badRequest(errInvalidRequest, "The client must authenticate by one method only.")
+	return client, nil
+}
+
+// authenticateBasic authenticates a Client registered for
+// client_secret_basic by HTTP Basic authentication, with its client_id and
+// secret each form-encoded before they are joined (RFC 6749 §2.3.1).
+func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*registry.Client, *tokenError) {
+	user, pass, ok := r.BasicAuth()
+	if !ok {
+		return nil, unauthorized
 	}
 	id, errID := url.QueryUnescape(user)
 	secret, errSecret := url.QueryUnescape(pass)

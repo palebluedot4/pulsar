@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/palebluedot4/pulsar/internal/registry"
 )
 
 // Endpoint paths, relative to the issuer. Every endpoint URL pulsar
@@ -47,6 +49,16 @@ type metadata struct {
 	AuthorizationResponseISSParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
 }
 
+// assertionAlgorithmNames returns the names of the algorithms of
+// registry.AssertionAlgorithms.
+func assertionAlgorithmNames() []string {
+	var names []string
+	for _, alg := range registry.AssertionAlgorithms() {
+		names = append(names, string(alg))
+	}
+	return names
+}
+
 // DiscoveryPath returns the path at which the discovery document for issuer
 // is served: the issuer's path followed by /.well-known/openid-configuration
 // (Discovery §4).
@@ -76,10 +88,9 @@ func HandleDiscovery(issuer *Issuer) http.Handler {
 		SubjectTypesSupported:             []string{"public"},
 		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "private_key_jwt", "none"},
-		// An allow-list, as RFC 8725 §3.1 requires: no HMAC algorithms,
-		// because client_secret_jwt is not offered, and never none
-		// (Discovery §3).
-		TokenEndpointAuthSigningAlgValuesSupported: []string{"RS256", "PS256", "ES256"},
+		// The allow-list the token endpoint verifies client assertions
+		// against, and so never none (Discovery §3).
+		TokenEndpointAuthSigningAlgValuesSupported: assertionAlgorithmNames(),
 		CodeChallengeMethodsSupported:              []string{"S256"},
 		ClaimsSupported: []string{
 			// Claims of the ID Token (Core §2).

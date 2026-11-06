@@ -206,3 +206,30 @@ that pulsar, as an OP, must or should meet.
   uses it, the OP MUST return the request_not_supported error."
 - REQ-CORE-9 (§6.2): "Should an OP not support this parameter and an RP
   uses it, the OP MUST return the request_uri_not_supported error."
+
+## Client authentication (§9)
+
+pulsar offers `client_secret_basic`, `client_secret_post` and
+`private_key_jwt`; `client_secret_jwt` is not offered. The clauses below
+are those of `private_key_jwt`.
+
+- REQ-CORE-14 (§9, `iss` and `sub`): "This MUST contain the client_id of
+  the OAuth Client."
+- REQ-CORE-15 (§9, `aud`): "The Authorization Server MUST verify that it is
+  an intended audience for the token. The Audience SHOULD be the URL of
+  the Authorization Server's Token Endpoint."
+
+  pulsar accepts its token endpoint URL or its issuer (REQ-JWTAUTH-3).
+
+- REQ-CORE-16 (§9, `jti`): "These tokens MUST only be used once, unless
+  conditions for reuse were negotiated between the parties"
+
+  None are negotiated. A `jti` is kept per Client until its assertion's
+  `exp`, after which the assertion is refused for its `exp` alone.
+
+- REQ-CORE-17 (§9, `exp`): "Expiration time on or after which the JWT MUST
+  NOT be accepted for processing."
+- REQ-CORE-18 (§9): "The value of the [OAuth.Assertions]
+  client_assertion_type parameter MUST be
+  "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", per
+  [OAuth.JWT]."

@@ -30,3 +30,19 @@ VALUES (@jti, @code_hash, @expiry);
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
 WHERE expiry <= @now;
+
+-- name: InsertClientAssertion :execrows
+-- Records a client assertion's jti for its Client, and affects no row if
+-- an assertion of that Client with that jti has not yet expired. One whose
+-- row has expired but is not yet deleted is replaced. Under read
+-- committed, of two transactions recording one jti at once, the second
+-- waits for the first and then affects no row.
+INSERT INTO client_assertions (client_id, jti_hash, expiry)
+VALUES (@client_id, @jti_hash, @expiry)
+ON CONFLICT (client_id, jti_hash) DO UPDATE
+SET expiry = excluded.expiry
+WHERE client_assertions.expiry <= @now;
+
+-- name: DeleteExpiredClientAssertions :exec
+DELETE FROM client_assertions
+WHERE expiry <= @now;
