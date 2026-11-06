@@ -40,3 +40,11 @@ _Avoid_: session (unqualified), SSO session
 An End-User's recorded permission for one Client to receive a given set of
 scopes.
 _Avoid_: grant, approval, authorization
+
+## Tokens
+
+**Refresh Token Family**:
+The refresh tokens descended, each replacing the last, from one
+authorization of one Client by one End-User; it ends, or is revoked, as a
+whole.
+_Avoid_: grant, chain, lineage, token family (unqualified)
