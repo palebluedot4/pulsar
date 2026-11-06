@@ -19,10 +19,11 @@ with the access token in the `Authorization` header or the body; the
 UserInfo. A second redemption of a code revokes the access tokens issued
 from it, and `pulsar keys rotate` rotates the signing key. The OpenID
 conformance suite's Config OP and Basic OP plans run against it in CI;
-on 2026-11-06, at commit `2ae5d00`, they finished with no failures, as
+on 2026-11-06, at commit `8d6ab47`, they finished with no failures, as
 [Checking conformance](#checking-conformance) details. The next
-specification, not yet written, is the token lifecycle: refresh tokens,
-revocation and introspection.
+specification is refresh tokens, rotated on every use, with reuse revoking
+every token descended from the same authorization
+([#47](https://github.com/palebluedot4/pulsar/issues/47)).
 
 ## Running it
 
@@ -137,8 +138,8 @@ request.
 
 [conformance/README.md](conformance/README.md) describes the files it uses.
 
-On 2026-11-06, CI ran both plans against commit `2ae5d00`, of
-[#46](https://github.com/palebluedot4/pulsar/pull/46), with no failures.
+On 2026-11-06, CI ran both plans against commit `8d6ab47`, on `main`,
+with no failures.
 Of the Basic OP plan's 35 modules, 28 passed; one ended in a warning,
 since pulsar never returns `acr`; two were skipped, since pulsar issues no
 refresh tokens and supports no request objects; and four ended in
