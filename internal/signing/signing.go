@@ -152,6 +152,32 @@ func (s *KeySet) Active() (Key, error) {
 	return snap.active, nil
 }
 
+// SignJWT returns a JWT in the JWS Compact Serialization whose claims are
+// claims, encoded as JSON, signed with the active key. Its header names
+// the key's kid, and typ as its type.
+func (s *KeySet) SignJWT(typ string, claims any) (string, error) {
+	key, err := s.Active()
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return "", fmt.Errorf("signing: encode claims: %w", err)
+	}
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: algorithm, Key: jose.JSONWebKey{Key: key.Signer, KeyID: key.KID}},
+		(&jose.SignerOptions{}).WithType(jose.ContentType(typ)),
+	)
+	if err != nil {
+		return "", fmt.Errorf("signing: %w", err)
+	}
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		return "", fmt.Errorf("signing: sign: %w", err)
+	}
+	return jws.CompactSerialize()
+}
+
 // HandleJWKS serves the public halves of the keys as a JWK Set (RFC 7517
 // §5), each with its kid, use and alg. Before the key set is loaded it
 // answers 503, which no cache may keep.
