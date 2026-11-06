@@ -2,14 +2,14 @@ package oidc
 
 import (
 	"context"
-	"encoding/json/v2"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/palebluedot4/pulsar/internal/oidc/internal/queries"
@@ -34,6 +34,9 @@ type bearerError struct {
 // credentials by a scheme other than Bearer (RFC 6750 §3.1).
 var errNoToken = &bearerError{status: http.StatusUnauthorized}
 
+// errServer answers a request that fails for a reason of pulsar's own.
+var errServer = &bearerError{status: http.StatusInternalServerError}
+
 // errBadToken answers a request whose access token fails validation (RFC
 // 9068 §4, RFC 6750 §3.1).
 var errBadToken = &bearerError{status: http.StatusUnauthorized, code: errInvalidToken, desc: "The access token is invalid, expired or revoked."}
@@ -55,6 +58,13 @@ func (p *Provider) userInfo(w http.ResponseWriter, r *http.Request) {
 	h.Set("Pragma", "no-cache")
 
 	claims, bErr := p.userInfoClaims(w, r)
+	if bErr != nil && bErr.status == http.StatusInternalServerError {
+		// An HTTP error unrelated to RFC 6750 (OpenID Connect Core 1.0
+		// §5.3.3), so without a challenge: the credentials are not at
+		// fault.
+		w.WriteHeader(bErr.status)
+		return
+	}
 	if bErr != nil {
 		// RFC 6750 §3: every failure to authorize is answered with the
 		// Bearer challenge, with the error code, if any; the realm is the
@@ -84,9 +94,7 @@ func (p *Provider) userInfoClaims(w http.ResponseWriter, r *http.Request) (map[s
 		return nil, errBadToken
 	case err != nil:
 		p.logger.ErrorContext(ctx, "UserInfo endpoint", "error", err)
-		// An HTTP error unrelated to RFC 6750 (OpenID Connect Core 1.0
-		// §5.3.3), so without a challenge.
-		return nil, &bearerError{status: http.StatusInternalServerError}
+		return nil, errServer
 	}
 	// An End-User removed from the registry since the token was issued has
 	// no claims to return, and the token no End-User to stand for.
@@ -97,7 +105,7 @@ func (p *Provider) userInfoClaims(w http.ResponseWriter, r *http.Request) (map[s
 	all, err := endUserClaims(u)
 	if err != nil {
 		p.logger.ErrorContext(ctx, "UserInfo endpoint", "error", err)
-		return nil, &bearerError{status: http.StatusInternalServerError}
+		return nil, errServer
 	}
 	// sub always (§5.3.2), and the claims requested.
 	claims := map[string]any{"sub": u.Subject}
@@ -110,7 +118,8 @@ func (p *Provider) userInfoClaims(w http.ResponseWriter, r *http.Request) (map[s
 // access_token in a form-encoded body (§2.2). Credentials of another
 // scheme authenticate nothing here. A request that sends no token gets
 // errNoToken; one that sends more than one, by one method or two, or a
-// malformed one, gets invalid_request (§3.1).
+// malformed one, gets invalid_request (§3.1). A request with a token in
+// its header may have any body, even one that cannot be read as a form.
 func bearerToken(w http.ResponseWriter, r *http.Request) (string, *bearerError) {
 	var tokens []string
 	for _, v := range r.Header.Values("Authorization") {
@@ -123,9 +132,8 @@ func bearerToken(w http.ResponseWriter, r *http.Request) (string, *bearerError) 
 	if r.Method == http.MethodPost {
 		params, err := readParams(w, r)
 		switch {
-		case errors.Is(err, errNotForm):
-			// A body of another type carries no token (§2.2), and a
-			// request whose token is in its header may have any body.
+		case errors.Is(err, errNotForm), err != nil && len(tokens) > 0:
+			// A body of another type carries no token (§2.2).
 		case err != nil:
 			return "", &bearerError{status: http.StatusBadRequest, code: errInvalidRequest, desc: "The request body could not be read."}
 		default:
@@ -187,53 +195,37 @@ func (p *Provider) verifyAccessToken(ctx context.Context, token string) (verifie
 		return verifiedAccessToken{}, errTokenNotValid
 	}
 	var claims struct {
-		Issuer   string   `json:"iss"`
-		Audience audience `json:"aud"`
-		Expiry   int64    `json:"exp"`
-		Subject  string   `json:"sub"`
-		JTI      string   `json:"jti"`
-		Scope    string   `json:"scope"`
+		jwt.Claims
+		Scope string `json:"scope"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return verifiedAccessToken{}, errTokenNotValid
 	}
 	now := time.Now()
 	issuer := p.issuer.String()
-	if claims.Issuer != issuer || !slices.Contains(claims.Audience, issuer) ||
-		now.Unix() >= claims.Expiry || claims.Subject == "" || claims.JTI == "" {
+	switch {
+	case claims.Issuer != issuer || !claims.Audience.Contains(issuer):
+		return verifiedAccessToken{}, errTokenNotValid
+	// "The current time MUST be before" exp, so a token is refused from its
+	// exp on, and one without exp is refused; jwt.Claims.Validate would
+	// accept both.
+	case claims.Expiry == nil || !now.Before(claims.Expiry.Time()):
+		return verifiedAccessToken{}, errTokenNotValid
+	case claims.Subject == "" || claims.ID == "":
 		return verifiedAccessToken{}, errTokenNotValid
 	}
 	// TODO(#22): refuse a token that a second redemption of its code has
 	// revoked.
-	data, err := p.queries.FindAccessToken(ctx, queries.FindAccessTokenParams{Jti: claims.JTI, Now: now})
+	data, err := p.queries.FindAccessToken(ctx, queries.FindAccessTokenParams{Jti: claims.ID, Now: now})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return verifiedAccessToken{}, errTokenNotValid
 	}
 	if err != nil {
 		return verifiedAccessToken{}, err
 	}
-	requested, err := decodeClaimsRequest(data)
+	requested, err := decodeRequestedClaims(data)
 	if err != nil {
 		return verifiedAccessToken{}, err
 	}
-	return verifiedAccessToken{subject: claims.Subject, scope: claims.Scope, claims: requested.UserInfo}, nil
-}
-
-// audience is the aud claim of a JWT: one string, or an array of them
-// (RFC 7519 §4.1.3).
-type audience []string
-
-// UnmarshalJSON decodes either form.
-func (a *audience) UnmarshalJSON(data []byte) error {
-	var one string
-	if err := json.Unmarshal(data, &one); err == nil {
-		*a = audience{one}
-		return nil
-	}
-	var many []string
-	if err := json.Unmarshal(data, &many); err != nil {
-		return err
-	}
-	*a = many
-	return nil
+	return verifiedAccessToken{subject: claims.Subject, scope: claims.Scope, claims: requested}, nil
 }

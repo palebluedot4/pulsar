@@ -16,9 +16,9 @@
 ALTER TABLE authorization_codes
 ADD COLUMN claims jsonb NOT NULL DEFAULT '{}';
 
--- The claims the claims parameter requested from UserInfo, in the form
--- above with only its userinfo member: '{}' if none. The default stays for
--- the same reason.
+-- The claims the claims parameter requested from UserInfo, in the form of
+-- the userinfo member above: '{}' if none. The default stays for the same
+-- reason.
 ALTER TABLE access_tokens
 ADD COLUMN userinfo_claims jsonb NOT NULL DEFAULT '{}';
 

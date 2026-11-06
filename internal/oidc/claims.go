@@ -25,6 +25,16 @@ var scopeClaims = map[string][]string{
 	"phone":   {"phone_number", "phone_number_verified"},
 }
 
+// standardClaims returns the claims of scopeClaims, scope by scope in the
+// order of supportedScopes.
+func standardClaims() []string {
+	var names []string
+	for _, s := range supportedScopes {
+		names = append(names, scopeClaims[s.Value]...)
+	}
+	return names
+}
+
 // claimScope is the scope value that requests each claim of scopeClaims.
 var claimScope = func() map[string]string {
 	m := make(map[string]string)
@@ -81,6 +91,26 @@ func decodeClaimsRequest(data []byte) (claimsRequest, error) {
 
 // requestedClaims are individual claim requests (§5.5.1), by claim name.
 type requestedClaims map[string]claimRequest
+
+// encode returns rs as it is stored with an access token: a JSON object,
+// {} if rs is empty.
+func (rs requestedClaims) encode() ([]byte, error) {
+	data, err := json.Marshal(rs)
+	if err != nil {
+		return nil, fmt.Errorf("encode the claims requested: %w", err)
+	}
+	return data, nil
+}
+
+// decodeRequestedClaims returns the claim requests that data, as
+// requestedClaims.encode stored them, holds.
+func decodeRequestedClaims(data []byte) (requestedClaims, error) {
+	var rs requestedClaims
+	if err := json.Unmarshal(data, &rs); err != nil {
+		return nil, fmt.Errorf("decode the claims requested: %w", err)
+	}
+	return rs, nil
+}
 
 // claimRequest is an individual claim request: the values the claim may
 // be released with, by its value or values member, or nil for any.

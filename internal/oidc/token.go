@@ -286,7 +286,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		if claims, err = decodeClaimsRequest(row.Claims); err != nil {
 			return err
 		}
-		userInfoClaims, err := claimsRequest{UserInfo: claims.UserInfo}.encode()
+		userInfoClaims, err := claims.UserInfo.encode()
 		if err != nil {
 			return err
 		}
