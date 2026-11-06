@@ -1,16 +1,18 @@
 -- When each signing key starts signing (ADR 0003, #23). A key stored by
 -- `pulsar keys rotate` signs only after a delay, so that every replica and
--- every cached JWK Set has it first; the first key, and every key stored
--- before this migration, signs from when it was generated.
+-- every cached JWK Set has it first.
 --
--- When a key leaves the JWK Set is not stored: it follows from when the
--- next key starts signing (internal/signing), so pulsar still never
--- updates a row.
+-- NULL means the key signs from created_at: every key stored before this
+-- migration, and any that a replica of an earlier release stores while a
+-- rolling deploy runs, since such a replica does not know the column.
+-- The column is therefore nullable and has no default, and no row is
+-- updated.
+--
+-- When a key leaves the JWK Set is not stored either: it follows from when
+-- the next key starts signing (internal/signing).
 
 -- +goose Up
 ALTER TABLE signing_keys ADD COLUMN activates_at timestamptz;
-UPDATE signing_keys SET activates_at = created_at;
-ALTER TABLE signing_keys ALTER COLUMN activates_at SET NOT NULL;
 
 -- +goose Down
 ALTER TABLE signing_keys DROP COLUMN activates_at;

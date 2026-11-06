@@ -21,6 +21,9 @@
 // has it first. The key it replaces stays in the JWK Set until every
 // token it signed has expired. The command reads the same environment as
 // the server, and refuses a database pulsar has never started against.
+// Run it only once every replica runs a release that has it, since an
+// earlier release signs with a new key at once, and on a host whose clock
+// agrees with the replicas', since it dates the key by its own clock.
 //
 // Configuration is read from the environment:
 //

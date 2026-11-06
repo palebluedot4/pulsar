@@ -23,7 +23,7 @@ func (q *Queries) HasSigningKey(ctx context.Context) (bool, error) {
 
 const insertSigningKey = `-- name: InsertSigningKey :exec
 INSERT INTO signing_keys (kid, sealed_private_key, created_at, activates_at)
-VALUES ($1, $2, $3, $4)
+VALUES ($1, $2, $3, $4::timestamptz)
 `
 
 type InsertSigningKeyParams struct {
@@ -44,9 +44,12 @@ func (q *Queries) InsertSigningKey(ctx context.Context, arg InsertSigningKeyPara
 }
 
 const listSigningKeys = `-- name: ListSigningKeys :many
-SELECT kid, sealed_private_key, activates_at
+SELECT
+    kid,
+    sealed_private_key,
+    COALESCE(activates_at, created_at)::timestamptz AS activates_at
 FROM signing_keys
-ORDER BY activates_at, kid
+ORDER BY COALESCE(activates_at, created_at), kid
 `
 
 type ListSigningKeysRow struct {
@@ -56,7 +59,8 @@ type ListSigningKeysRow struct {
 }
 
 // In the order they start signing, so that the key signing now is the last
-// whose activates_at has passed.
+// whose activates_at has passed. A key without activates_at signs from
+// when it was generated (migration 00010).
 func (q *Queries) ListSigningKeys(ctx context.Context) ([]ListSigningKeysRow, error) {
 	rows, err := q.db.Query(ctx, listSigningKeys)
 	if err != nil {
