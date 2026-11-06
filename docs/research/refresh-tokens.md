@@ -4,7 +4,9 @@ Surveyed 2026-11-06 for #47, the refresh token specification. It covers two
 questions: what the conformance suite's `oidcc-refresh-token` module needs
 from pulsar to pass rather than skip, and how long other providers keep
 recognizing a reused authorization code once refresh tokens exist, and
-whether a replay with invalid parameters revokes anything.
+whether a replay with invalid parameters revokes anything. A third was added
+the same day, in review of #51: what other providers do with a refresh whose
+`scope` leaves out `openid`.
 
 The OpenID conformance suite was read at `release-v5.3.4`, with paths under
 `src/main/java/net/openid/conformance/`. Open-source providers were read from
@@ -72,6 +74,38 @@ The suite's `oidcc-codereuse-30seconds` replays a code with the same Client
 that is a WARNING (`openid/OIDCCAuthCodeReuseAfter30Seconds.java`). Nothing
 checks refresh tokens on code reuse, or a replay after the code's lifetime.
 
+## A refresh whose scope leaves out openid
+
+A Client may ask a refresh for a narrower scope (RFC 6749 §6), and so for
+one without `openid`, such as `email` from a grant of
+`openid email offline_access`. The specifications leave the answer open:
+
+- OpenID Connect Core §3.1.2.1, `scope`: "OpenID Connect requests MUST
+  contain the openid scope value. If the openid scope value is not present,
+  the behavior is entirely unspecified."
+- §12.2: the refresh response "is the Token Response of Section 3.1.3.3
+  (Successful Token Response) except that it might not contain an
+  id_token."
+- RFC 6749 §6: the new refresh token's scope "MUST be identical to that of
+  the refresh token included by the client in the request". OAuth 2.1
+  draft -17 §4.3.3 keeps this, except where the grant itself has been
+  reduced, as by the resource owner, not by a narrower `scope` in the
+  request.
+
+| Provider           | ID token on such a refresh                                         | New refresh token's scope | Access token at UserInfo                                   | Source                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------ | ------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spring AS          | Issued: it checks the authorization's scopes for `openid`.         | The original              | Refused with `insufficient_scope`                          | `OAuth2RefreshTokenAuthenticationProvider.java` (`authorizedScopes.contains(OidcScopes.OPENID)`), `OidcUserInfoAuthenticationProvider.java`                                                  |
+| node-oidc-provider | Not issued: it checks the scopes the request asked for.            | The original              | Refused: "access token missing openid scope"               | `lib/actions/grants/refresh_token.js`, `lib/helpers/grant_common.js` (`if (!scopes.has('openid')) return undefined`), `lib/actions/userinfo.js`                                              |
+| fosite and Hydra   | Issued: the request's `scope` is replaced by the original's.       | The original              | Accepted, since the access token keeps the original scope  | `handler/oauth2/flow_refresh.go`, `handler/openid/flow_refresh_token.go` (`GetGrantedScopes().Has("openid")`)                                                                                |
+| Keycloak           | Issued: it checks the original refresh token's scope for `openid`. | The original              | Accepted, since `openid` is added back to the access token | `protocol/oidc/refresh/AbstractRefreshTokenProvider.java` (`TokenUtil.isOIDCRequest(oldRefreshToken.getScope())`), `services/util/DefaultClientSessionContext.java`, `UserInfoEndpoint.java` |
+
+None of the four refuses such a request. Three of four issue the ID token
+from the original grant; node-oidc-provider alone issues it only when the
+request itself asks for `openid`. Keycloak's default client scopes may be
+added whatever the request says, which would make its narrowing remove
+only optional scopes (**UNVERIFIED**). The conformance suite's refreshes
+always include `openid`, so it checks neither behavior.
+
 ## What pulsar takes from this
 
 - Discovery lists `offline_access` and `refresh_token`. Each refresh returns
@@ -95,3 +129,9 @@ checks refresh tokens on code reuse, or a replay after the code's lifetime.
 - A replaced refresh token presented again revokes its family, with no grace
   period. The FAPI 2.0 test above expects the opposite, but pulsar does not
   implement FAPI 2.0.
+- A refresh whose `scope` leaves out `openid` still returns an ID token,
+  as Spring, fosite and Keycloak do, since the Refresh Token Family was
+  granted for an OpenID authentication. The access token is for the scope
+  the request asked for, and UserInfo accepts it, as fosite and Keycloak
+  do; whether UserInfo should refuse an access token without `openid`, as
+  Spring and node-oidc-provider do, is outside #51.
