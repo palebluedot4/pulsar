@@ -58,19 +58,20 @@ func (q *Queries) InsertAccessToken(ctx context.Context, arg InsertAccessTokenPa
 
 const insertAuthorizationCode = `-- name: InsertAuthorizationCode :exec
 
-INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, auth_time, expiry)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, auth_time, expiry)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type InsertAuthorizationCodeParams struct {
-	CodeHash    []byte
-	ClientID    string
-	RedirectUri string
-	Subject     string
-	Scopes      []string
-	Nonce       string
-	AuthTime    time.Time
-	Expiry      time.Time
+	CodeHash      []byte
+	ClientID      string
+	RedirectUri   string
+	Subject       string
+	Scopes        []string
+	Nonce         string
+	CodeChallenge string
+	AuthTime      time.Time
+	Expiry        time.Time
 }
 
 // Every time is pulsar's, passed in: no query reads the database's clock,
@@ -83,6 +84,7 @@ func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthori
 		arg.Subject,
 		arg.Scopes,
 		arg.Nonce,
+		arg.CodeChallenge,
 		arg.AuthTime,
 		arg.Expiry,
 	)
@@ -128,16 +130,18 @@ SET redeemed = true
 WHERE code_hash = $1
     AND client_id = $2
     AND redirect_uri = $3
-    AND expiry > $4
+    AND code_challenge = $4
+    AND expiry > $5
     AND NOT redeemed
 RETURNING subject, scopes, nonce, auth_time
 `
 
 type RedeemAuthorizationCodeParams struct {
-	CodeHash    []byte
-	ClientID    string
-	RedirectUri string
-	Now         time.Time
+	CodeHash      []byte
+	ClientID      string
+	RedirectUri   string
+	CodeChallenge string
+	Now           time.Time
 }
 
 type RedeemAuthorizationCodeRow struct {
@@ -148,14 +152,20 @@ type RedeemAuthorizationCodeRow struct {
 }
 
 // Marks the code redeemed and returns what it was issued for, if it was
-// issued to this Client for this redirect URI, has not expired and has not
-// been redeemed. Under read committed, of two transactions redeeming one
-// code, the second waits for the first and then finds it redeemed.
+// issued to this Client for this redirect URI with this code challenge,
+// has not expired and has not been redeemed. The code challenge is the one
+// the token request's code_verifier makes, or ” if it sent none, so that
+// a code issued with a challenge needs its verifier, and one issued
+// without needs none and refuses one. A request that matches no row
+// leaves the code as it was. Under read committed, of two transactions
+// redeeming one code, the second waits for the first and then finds it
+// redeemed.
 func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthorizationCodeParams) (RedeemAuthorizationCodeRow, error) {
 	row := q.db.QueryRow(ctx, redeemAuthorizationCode,
 		arg.CodeHash,
 		arg.ClientID,
 		arg.RedirectUri,
+		arg.CodeChallenge,
 		arg.Now,
 	)
 	var i RedeemAuthorizationCodeRow

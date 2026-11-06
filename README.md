@@ -8,7 +8,8 @@ page that starts a Login Session, a consent page that remembers the scopes
 an End-User allows each Client, and the authorization code flow, with
 `prompt` and `max_age`, to an ID token and access token for Clients that
 authenticate with `client_secret_basic`, `client_secret_post` or
-`private_key_jwt`. Public Clients with PKCE, and UserInfo, are next.
+`private_key_jwt`, and for public Clients, which must use PKCE with `S256`.
+UserInfo is next.
 
 ## Running it
 

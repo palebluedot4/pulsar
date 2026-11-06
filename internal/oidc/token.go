@@ -20,7 +20,7 @@ import (
 
 // tokenParams are the parameters of a token request that pulsar reads.
 // Every other parameter is ignored (RFC 6749 §3.2).
-var tokenParams = []string{"grant_type", "code", "redirect_uri", "client_id", "client_secret", "client_assertion_type", "client_assertion"}
+var tokenParams = []string{"grant_type", "code", "redirect_uri", "code_verifier", "client_id", "client_secret", "client_assertion_type", "client_assertion"}
 
 // Error codes of a token error response (RFC 6749 §5.2).
 const (
@@ -51,7 +51,9 @@ type tokenError struct {
 // HandleToken serves the token endpoint, by POST (RFC 6749 §3.2). It
 // redeems an authorization code for an ID token and an access token, for
 // a Client that authenticates with client_secret_basic, client_secret_post
-// or private_key_jwt, whichever it registered.
+// or private_key_jwt, whichever it registered, or for a public Client that
+// sends its client_id. A code issued with a PKCE code challenge is
+// redeemed only with its code_verifier (RFC 7636 §4.6).
 func (p *Provider) HandleToken() http.Handler {
 	return http.HandlerFunc(p.token)
 }
@@ -108,15 +110,26 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 		// so every token request must repeat it (RFC 6749 §4.1.3).
 		return nil, badRequest(errInvalidRequest, "The parameter redirect_uri is required.")
 	}
+	// The code challenge the verifier makes, which the code must have been
+	// issued with; without a verifier, the code must have been issued
+	// without one, so that a verifier cannot stand in for a challenge never
+	// sent (RFC 9700 §2.1.1).
+	var challenge string
+	if verifier := params.Get("code_verifier"); verifier != "" {
+		if !validVerifier(verifier) {
+			return nil, badRequest(errInvalidRequest, "The code_verifier must be 43 to 128 unreserved characters.")
+		}
+		challenge = codeChallenge(verifier)
+	}
 
 	client, tokErr := p.authenticateClient(r, params)
 	if tokErr != nil {
 		return nil, tokErr
 	}
-	resp, err := p.issueTokens(r.Context(), client, code, redirectURI)
+	resp, err := p.issueTokens(r.Context(), client, code, redirectURI, challenge)
 	switch {
 	case errors.Is(err, errCodeNotRedeemable):
-		return nil, badRequest(errInvalidGrant, "The code is invalid, expired, already used, or was issued to another client or redirect_uri.")
+		return nil, badRequest(errInvalidGrant, "The code is invalid, expired or already used, was issued to another client or redirect_uri, or does not match the code_verifier.")
 	case err != nil:
 		p.logger.ErrorContext(r.Context(), "token endpoint", "error", err)
 		return nil, &tokenError{status: http.StatusInternalServerError, Code: errServerError}
@@ -126,7 +139,8 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 
 // authenticateClient authenticates the Client of a token request by the
 // one method the request uses: client_secret_basic, client_secret_post or
-// private_key_jwt. A Client registered for another method fails, so that a
+// private_key_jwt; or, if it uses none, identifies a public Client by its
+// client_id. A Client registered for another method fails, so that a
 // weaker one cannot stand in for it.
 func (p *Provider) authenticateClient(r *http.Request, params url.Values) (*registry.Client, *tokenError) {
 	// An Authorization header of any scheme is an attempt to authenticate
@@ -149,8 +163,21 @@ func (p *Provider) authenticateClient(r *http.Request, params url.Values) (*regi
 	case usesAssertion:
 		return p.authenticateAssertion(r.Context(), params)
 	default:
+		return p.identifyPublic(params)
+	}
+}
+
+// identifyPublic identifies the public Client whose client_id is in the
+// request body: one that has no credentials, and sends its client_id
+// instead (RFC 6749 §3.2.1, §4.1.3). A Client registered for any other
+// method fails, since it must authenticate (RFC 6749 §3.2.1), as does a
+// request without client_id.
+func (p *Provider) identifyPublic(params url.Values) (*registry.Client, *tokenError) {
+	client, ok := p.registry.Client(params.Get("client_id"))
+	if !ok || !client.Public() {
 		return nil, unauthorized()
 	}
+	return client, nil
 }
 
 // unauthorized returns the answer to a token request whose Client fails
@@ -196,16 +223,20 @@ func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*regis
 
 // errCodeNotRedeemable is returned by issueTokens for a code that is
 // unknown, expired, already redeemed, or issued to another Client or
-// redirect URI.
+// redirect URI or with another code challenge.
 var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed")
 
 // issueTokens redeems code, for client and redirectURI, and returns the
-// tokens issued for it. The code is redeemed and the access token recorded
+// tokens issued for it. The code must have been issued with challenge, the
+// code challenge of the request's code_verifier, or "" if it sent none. A
+// code that cannot be redeemed is left as it was, so that a wrong
+// code_verifier does not use up the code of the Client that holds the
+// right one. The code is redeemed and the access token recorded
 // in one transaction, so that a code is redeemed at most once, and only
 // when its token is recorded. The tokens are signed after it commits, so
 // that the code's row is not locked meanwhile; signing fails only before
 // the signing keys are loaded, when the endpoint is not served.
-func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI string) (*tokenResponse, error) {
+func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI, challenge string) (*tokenResponse, error) {
 	now := time.Now()
 	exp := now.Add(tokenLifetime)
 	hash := hashCode(code)
@@ -218,10 +249,11 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		q := p.queries.WithTx(tx)
 		var err error
 		row, err = q.RedeemAuthorizationCode(ctx, queries.RedeemAuthorizationCodeParams{
-			CodeHash:    hash,
-			ClientID:    client.ID,
-			RedirectUri: redirectURI,
-			Now:         now,
+			CodeHash:      hash,
+			ClientID:      client.ID,
+			RedirectUri:   redirectURI,
+			CodeChallenge: challenge,
+			Now:           now,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			// TODO(#22): when the code was redeemed before, revoke the
