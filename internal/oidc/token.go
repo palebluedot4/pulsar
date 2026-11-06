@@ -288,8 +288,8 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			// progress, so the code's row is locked first: it is then
 			// read, and the tokens looked up, after any redemption in
 			// progress has recorded its own.
-			var issued queries.LockAuthorizationCodeRow
-			issued, err = q.LockAuthorizationCode(ctx, hash)
+			var stored queries.LockAuthorizationCodeRow
+			stored, err = q.LockAuthorizationCode(ctx, hash)
 			// A code no longer kept cannot show that the request's
 			// parameters are its own, and one never redeemed has issued
 			// no tokens: neither revokes anything, nor does a replay with
@@ -301,7 +301,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if err != nil {
 				return err
 			}
-			if !issued.Redeemed || issued.ClientID != client.ID || issued.RedirectUri != redirectURI || issued.CodeChallenge != challenge {
+			if !stored.Redeemed || stored.ClientID != client.ID || stored.RedirectUri != redirectURI || stored.CodeChallenge != challenge {
 				return nil
 			}
 			return q.DeleteAccessTokensOfCode(ctx, hash)

@@ -16,15 +16,6 @@ import (
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
-// verifierOf returns the code_verifier that c sends with a token request:
-// pkceVerifier if its authorization request sent a challenge, or "".
-func verifierOf(c pkceClient) string {
-	if c.challenge == "" {
-		return ""
-	}
-	return pkceVerifier
-}
-
 // REQ-OAUTH-29, REQ-OAUTH-19, REQ-AT-11: a second redemption of a code by
 // its own Client, with its redirect URI and, if it was issued with a code
 // challenge, the matching code_verifier, fails with invalid_grant, and
@@ -35,15 +26,16 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		wait   time.Duration // between the two redemptions
-		client pkceClient
+		name     string
+		wait     time.Duration // between the two redemptions
+		client   pkceClient
+		verifier string // the code_verifier of both redemptions, if any
 	}{
 		{name: "at once", client: rpNoPKCE},
 		{name: "30 seconds later", wait: 30 * time.Second, client: rpNoPKCE},
 		{name: "after the code expired", wait: 5 * time.Minute, client: rpNoPKCE},
-		{name: "with PKCE", client: rpPKCE},
-		{name: "by a public Client", client: publicPKCE},
+		{name: "with PKCE", client: rpPKCE, verifier: pkceVerifier},
+		{name: "by a public Client", client: publicPKCE, verifier: pkceVerifier},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,7 +43,7 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 			synctest.Test(t, func(t *testing.T) {
 				handler := newBubbleFlowHandler(t, databaseURL)
-				form := tt.client.form(tt.client.code(t, handler), verifierOf(tt.client))
+				form := tt.client.form(tt.client.code(t, handler), tt.verifier)
 				accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, form))
 				time.Sleep(tt.wait)
 				if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
@@ -84,6 +76,8 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 	tests := []struct {
 		name   string
 		client pkceClient // the Client the code is issued to, which redeems it first
+		// verifier is the code_verifier of the first redemption, if any.
+		verifier string
 		// The second redemption: the credentials it sends by HTTP Basic
 		// authentication, if any, and its form for the code.
 		basic      credentials
@@ -114,6 +108,7 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 		{
 			name:       "with a code_verifier that does not match",
 			client:     rpPKCE,
+			verifier:   pkceVerifier,
 			basic:      credentials{"rp", rpSecret},
 			form:       func(code string) url.Values { return rpPKCE.form(code, wrongVerifier) },
 			wantStatus: http.StatusBadRequest,
@@ -122,6 +117,7 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 		{
 			name:       "without the code_verifier",
 			client:     rpPKCE,
+			verifier:   pkceVerifier,
 			basic:      credentials{"rp", rpSecret},
 			form:       codeForm,
 			wantStatus: http.StatusBadRequest,
@@ -138,6 +134,7 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 		{
 			name:       "by a public Client with a code_verifier that does not match",
 			client:     publicPKCE,
+			verifier:   pkceVerifier,
 			form:       func(code string) url.Values { return publicPKCE.form(code, wrongVerifier) },
 			wantStatus: http.StatusBadRequest,
 			wantError:  "invalid_grant",
@@ -167,7 +164,7 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			c := tt.client.code(t, handler)
-			accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, tt.client.form(c, verifierOf(tt.client))))
+			accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, tt.client.form(c, tt.verifier)))
 
 			replay := tokenRequest(t, handler, tt.basic.id, tt.basic.secret, tt.form(c))
 			if got := tokenErrorCode(t, replay, tt.wantStatus); got != tt.wantError {
