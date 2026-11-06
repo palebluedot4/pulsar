@@ -88,9 +88,10 @@ func TestJWKS(t *testing.T) {
 	rec := getJWKS(t, load(t, pool))
 
 	wantHeader := map[string]string{
-		"Content-Type":                "application/json",
-		"Cache-Control":               "public, max-age=60",
-		"Access-Control-Allow-Origin": "*",
+		"Content-Type":  "application/json",
+		"Cache-Control": "public, max-age=60",
+		// Nothing in #13 asks for CORS on the JWK Set, so none is sent.
+		"Access-Control-Allow-Origin": "",
 	}
 	gotHeader := make(map[string]string, len(wantHeader))
 	for k := range wantHeader {
