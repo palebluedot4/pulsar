@@ -237,7 +237,9 @@ appropriate to enable JavaScript Clients and other Browser-Based Clients
 to access it." pulsar departs from this: no endpoint but discovery sends
 CORS headers, and a browser-based Client that cannot reach the token
 endpoint has no access token to send to UserInfo. CORS at UserInfo alone
-would serve no Client.
+would serve no Client. Other providers do answer cross-origin requests there
+([research](../research/userinfo-and-claims.md)); #41 decides whether
+pulsar should, at the token endpoint and UserInfo together.
 
 ## Claims (§5.4, §5.5)
 
@@ -295,7 +297,9 @@ would serve no Client.
   A claim requested individually is released only with the End-User's
   Consent to the scope that requests it (REQ-CORE-28). The consent page
   asks for that scope, and allowing it remembers it, so the page may ask
-  for more than the request releases, never less.
+  for more than the request releases, never less. node-oidc-provider keeps
+  Consent per claim instead; Keycloak releases such a claim without Consent
+  to its scope ([research](../research/userinfo-and-claims.md)).
 
 - REQ-CORE-48 (§3.1.2.2): "If the sub (subject) Claim is requested with a
   specific value for the ID Token, the Authorization Server MUST only send
