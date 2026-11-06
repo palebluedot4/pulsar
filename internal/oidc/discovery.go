@@ -54,6 +54,12 @@ func DiscoveryPath(issuer *Issuer) string {
 	return issuer.route(discoveryPath)
 }
 
+// JWKSPath returns the path at which the JWK Set for issuer is served: the
+// path of the jwks_uri that the discovery document publishes.
+func JWKSPath(issuer *Issuer) string {
+	return issuer.route(jwksPath)
+}
+
 // HandleDiscovery serves the discovery document for issuer. The document
 // never changes, so it is encoded once.
 func HandleDiscovery(issuer *Issuer) http.Handler {

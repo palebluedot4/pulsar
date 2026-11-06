@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -23,16 +24,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5"
 	"github.com/pressly/goose/v3/lock"
 
 	"github.com/palebluedot4/pulsar/internal/postgres"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
+	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 // loopbackIssuer is an issuer pulsar accepts without TLS, for tests about
 // something else.
 const loopbackIssuer = "http://127.0.0.1"
+
+// testSecret is a valid PULSAR_SECRET: "0123456789abcdef0123456789abcdef"
+// in base64. start supplies it when a test gives none.
+const testSecret = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" //nolint:gosec // G101: a test value, guarding nothing.
 
 func TestRun(t *testing.T) {
 	t.Parallel()
@@ -43,8 +50,9 @@ func TestRun(t *testing.T) {
 	})
 	addr := p.waitListening()
 	p.waitMigrated()
+	p.waitKeysLoaded()
 
-	for _, path := range []string{"/livez", "/readyz"} {
+	for _, path := range []string{"/livez", "/readyz", "/jwks"} {
 		if got := status(t, "http://"+addr+path); got != http.StatusOK {
 			t.Errorf("GET %s status = %d, want %d", path, got, http.StatusOK)
 		}
@@ -185,6 +193,7 @@ func TestRunRefusesInvalidConfig(t *testing.T) {
 			env := maps.Clone(tt.env)
 			env["PULSAR_ADDR"] = "127.0.0.1:0"
 			env["PULSAR_DATABASE_URL"] = databaseURL
+			env["PULSAR_SECRET"] = testSecret
 			getenv := func(key string) string { return env[key] }
 			err := run(ctx, nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tt.setting) {
@@ -245,6 +254,7 @@ func TestRunRefusesDatabaseURL(t *testing.T) {
 				"PULSAR_ADDR":         "127.0.0.1:0",
 				"PULSAR_ISSUER":       loopbackIssuer,
 				"PULSAR_DATABASE_URL": tt.databaseURL,
+				"PULSAR_SECRET":       testSecret,
 			}
 			getenv := func(key string) string { return env[key] }
 			err := run(t.Context(), nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
@@ -258,6 +268,227 @@ func TestRunRefusesDatabaseURL(t *testing.T) {
 				t.Errorf("run() = %q, want an error without the password", err)
 			}
 		})
+	}
+}
+
+// pulsar refuses to start unless PULSAR_SECRET is 32 bytes in standard,
+// padded base64, with an error that names the setting and never repeats
+// its value.
+func TestRunRefusesSecret(t *testing.T) {
+	t.Parallel()
+
+	// Each value contains this, so an error that echoes it is caught.
+	const marker = "hunter2"
+	tests := []struct {
+		name   string
+		secret string
+	}{
+		{name: "unset", secret: ""},
+		{name: "not base64", secret: marker + "!not base64!"},
+		{name: "31 bytes", secret: base64.StdEncoding.EncodeToString([]byte(marker + strings.Repeat("x", 31-len(marker))))},
+		{name: "33 bytes", secret: base64.StdEncoding.EncodeToString([]byte(marker + strings.Repeat("x", 33-len(marker))))},
+		{name: "32 bytes, unpadded", secret: base64.RawStdEncoding.EncodeToString([]byte(marker + strings.Repeat("x", 32-len(marker))))},
+		{name: "32 bytes, URL alphabet", secret: base64.URLEncoding.EncodeToString([]byte(marker + strings.Repeat("\xff", 32-len(marker))))},
+		{name: "32 bytes, surrounded by spaces", secret: " " + base64.StdEncoding.EncodeToString([]byte(marker+strings.Repeat("x", 32-len(marker)))) + " "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel() // As in TestRunRefusesInvalidConfig.
+			env := map[string]string{
+				"PULSAR_ADDR":         "127.0.0.1:0",
+				"PULSAR_ISSUER":       loopbackIssuer,
+				"PULSAR_DATABASE_URL": postgrestest.UnreachableURL(t),
+				"PULSAR_SECRET":       tt.secret,
+			}
+			getenv := func(key string) string { return env[key] }
+			err := run(ctx, nil, getenv, strings.NewReader(""), io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "PULSAR_SECRET") {
+				t.Fatalf("run() = %v, want an error naming PULSAR_SECRET", err)
+			}
+			if tt.secret != "" && strings.Contains(err.Error(), strings.TrimSpace(tt.secret)) {
+				t.Errorf("run() = %q, want an error without the secret", err)
+			}
+		})
+	}
+}
+
+// The first start generates a signing key and publishes it; a restart
+// publishes the same key rather than another.
+func TestRunReusesSigningKey(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": postgrestest.NewDatabase(t),
+	}
+	var published []jwkSet
+	for range 2 {
+		p := start(t, env)
+		addr := p.waitListening()
+		p.waitKeysLoaded()
+		published = append(published, fetchJWKS(t, "http://"+addr+"/jwks"))
+		if err := p.stop(); err != nil {
+			t.Fatalf("run() = %v, want nil", err)
+		}
+	}
+	if got := len(published[0].Keys); got != 1 {
+		t.Errorf("GET /jwks after the first start has %d keys, want 1", got)
+	}
+	if diff := cmp.Diff(published[0], published[1]); diff != "" {
+		t.Errorf("GET /jwks after a restart mismatch (-first +second):\n%s", diff)
+	}
+}
+
+// REQ-JWK-4: no stored value holds the private key in the clear, and the
+// key cannot be used without the secret it was stored under: a start with
+// another PULSAR_SECRET refuses to serve.
+//
+// A stored private key in PKCS #1 or PKCS #8 DER, raw or in PEM, contains
+// each prime factor of the modulus as 128 consecutive octets, so the test
+// looks for an octet string that divides the published modulus.
+func TestRunStoresPrivateKeyEncrypted(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.NewDatabase(t)
+	env := map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": databaseURL,
+	}
+	p := start(t, env)
+	addr := p.waitListening()
+	p.waitKeysLoaded()
+	published := fetchJWKS(t, "http://"+addr+"/jwks")
+	if err := p.stop(); err != nil {
+		t.Fatalf("run() = %v, want nil", err)
+	}
+	if len(published.Keys) != 1 {
+		t.Fatalf("GET /jwks has %d keys, want 1", len(published.Keys))
+	}
+	nBytes, err := base64.RawURLEncoding.DecodeString(published.Keys[0]["n"].(string))
+	if err != nil {
+		t.Fatalf("GET /jwks key n: %v", err)
+	}
+	n := new(big.Int).SetBytes(nBytes)
+
+	conn, err := pgx.Connect(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) }) // Closing after use; a failure loses nothing.
+	rows, err := conn.Query(t.Context(), "SELECT * FROM signing_keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := 0
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, v := range values {
+			var b []byte
+			switch v := v.(type) {
+			case []byte:
+				b = v
+			case string:
+				b = []byte(v)
+			default:
+				continue
+			}
+			candidates := [][]byte{b}
+			if block, _ := pem.Decode(b); block != nil {
+				candidates = append(candidates, block.Bytes)
+			}
+			for _, c := range candidates {
+				if holdsFactor(n, c, len(nBytes)/2) {
+					t.Errorf("signing_keys column %s holds a prime factor of the published modulus in the clear", rows.FieldDescriptions()[i].Name)
+				}
+			}
+			stored++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if stored == 0 {
+		t.Fatal("signing_keys holds no text or binary value, want the stored key")
+	}
+
+	env["PULSAR_SECRET"] = base64.StdEncoding.EncodeToString([]byte("another secret, of 32 bytes ...."))
+	p = start(t, env)
+	p.waitListening()
+	err = p.waitExit("signing keys loaded")
+	if err == nil || !strings.Contains(err.Error(), "PULSAR_SECRET") {
+		t.Errorf("run() with another PULSAR_SECRET = %v, want an error naming PULSAR_SECRET", err)
+	}
+}
+
+// holdsFactor reports whether some size consecutive octets of b, read as a
+// big-endian integer above 1, divide n.
+func holdsFactor(n *big.Int, b []byte, size int) bool {
+	var f, r big.Int
+	for i := 0; i+size <= len(b); i++ {
+		f.SetBytes(b[i : i+size])
+		if f.Cmp(big.NewInt(1)) > 0 && r.Mod(n, &f).Sign() == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Replicas starting together against a database with no signing key store
+// one between them, and both publish it.
+//
+// Both must have found no key before either stores one, or the test would
+// prove nothing; started together they rarely do, because goose's lock
+// makes one wait a second to migrate. So the test holds the lock under
+// which a key is stored, as a third replica storing one would, until both
+// wait for it. Like goose's, the lock's ID is part of the contract.
+func TestRunConcurrentStartsGenerateOneKey(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.NewDatabase(t)
+	conn, err := pgx.Connect(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) }) // Closing after use; a failure loses nothing.
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), "SELECT pg_advisory_xact_lock($1)", signing.GenerationLockID); err != nil {
+		t.Fatal(err)
+	}
+
+	env := map[string]string{
+		"PULSAR_ISSUER":       loopbackIssuer,
+		"PULSAR_DATABASE_URL": databaseURL,
+	}
+	replicas := []*pulsar{start(t, env), start(t, env)}
+	addrs := []string{replicas[0].waitListening(), replicas[1].waitListening()}
+	waitForLockWaiters(t, tx, 2)
+	if err := tx.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	var published []jwkSet
+	for i, p := range replicas {
+		p.waitKeysLoaded()
+		published = append(published, fetchJWKS(t, "http://"+addrs[i]+"/jwks"))
+	}
+	for _, p := range replicas {
+		if err := p.stop(); err != nil {
+			t.Errorf("run() = %v, want nil", err)
+		}
+	}
+	if got := len(published[0].Keys); got != 1 {
+		t.Errorf("GET /jwks from the first replica has %d keys, want 1", got)
+	}
+	if diff := cmp.Diff(published[0], published[1]); diff != "" {
+		t.Errorf("GET /jwks from two replicas started together mismatch (-first +second):\n%s", diff)
 	}
 }
 
@@ -335,8 +566,8 @@ func TestRunConcurrentStartsMigrateOnce(t *testing.T) {
 // resolved localhost after the bubble had started net's resolver.
 //
 // It serves meanwhile: /livez answers at once, so a liveness probe does not
-// kill a replica that is rightly waiting, and /readyz answers 503 until the
-// migrations are applied.
+// kill a replica that is rightly waiting, and /readyz and the JWK Set
+// answer 503 until the migrations are applied and the signing keys loaded.
 func TestRunWaitsForMigrationLock(t *testing.T) {
 	t.Parallel()
 
@@ -364,13 +595,18 @@ func TestRunWaitsForMigrationLock(t *testing.T) {
 	if got := status(t, "http://"+addr+"/readyz"); got != http.StatusServiceUnavailable {
 		t.Errorf("GET /readyz while waiting for the migration lock status = %d, want %d", got, http.StatusServiceUnavailable)
 	}
+	// No key can be loaded before the schema exists.
+	if got := status(t, "http://"+addr+"/jwks"); got != http.StatusServiceUnavailable {
+		t.Errorf("GET /jwks while waiting for the migration lock status = %d, want %d", got, http.StatusServiceUnavailable)
+	}
 
 	unlock()
 	if applied := p.waitMigrated(); applied == 0 {
 		t.Errorf("run() after the lock was released applied = %d migrations, want more than 0", applied)
 	}
+	p.waitKeysLoaded()
 	if got := status(t, "http://"+addr+"/readyz"); got != http.StatusOK {
-		t.Errorf("GET /readyz after migrating status = %d, want %d", got, http.StatusOK)
+		t.Errorf("GET /readyz after migrating and loading the signing keys status = %d, want %d", got, http.StatusOK)
 	}
 	if err := p.stop(); err != nil {
 		t.Errorf("run() = %v, want nil", err)
@@ -417,6 +653,29 @@ func holdMigrationLock(t *testing.T, databaseURL string) (unlock func()) {
 	}
 }
 
+// waitForLockWaiters waits, polling through tx, until n sessions in its
+// database wait for an advisory lock.
+func waitForLockWaiters(t *testing.T, tx pgx.Tx, n int) {
+	t.Helper()
+	deadline := time.Now().Add(logWait)
+	for {
+		var waiting int
+		err := tx.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks
+			WHERE locktype = 'advisory' AND NOT granted
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d sessions wait for an advisory lock after %v, want %d", waiting, logWait, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // pulsar is a running instance of run, observed as an operator would: through
 // its logs, its HTTP address and its exit error.
 type pulsar struct {
@@ -427,12 +686,15 @@ type pulsar struct {
 }
 
 // start runs pulsar on a free loopback port with env, and nothing else, as
-// its environment.
+// its environment; PULSAR_SECRET is testSecret unless env sets it.
 func start(t *testing.T, env map[string]string) *pulsar {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	env = maps.Clone(env)
 	env["PULSAR_ADDR"] = "127.0.0.1:0"
+	if _, ok := env["PULSAR_SECRET"]; !ok {
+		env["PULSAR_SECRET"] = testSecret
+	}
 	getenv := func(key string) string { return env[key] }
 	logs, stdout := io.Pipe()
 	p := &pulsar{t: t, cancel: cancel, done: make(chan error, 1), lines: make(chan []byte, 64)}
@@ -500,6 +762,38 @@ func (p *pulsar) waitMigrated() int {
 	return p.waitFor("migrated").Applied
 }
 
+// waitKeysLoaded waits until the instance reports its signing keys loaded,
+// after which it is ready.
+func (p *pulsar) waitKeysLoaded() {
+	p.t.Helper()
+	p.waitFor("signing keys loaded")
+}
+
+// waitExit waits for the instance to end on its own and returns run's
+// result. It fails the test if the instance logs forbidden first, or has
+// not ended within logWait.
+func (p *pulsar) waitExit(forbidden string) error {
+	p.t.Helper()
+	timeout := time.After(logWait)
+	for {
+		select {
+		case b, ok := <-p.lines:
+			if !ok {
+				return <-p.done
+			}
+			var line logLine
+			if err := json.Unmarshal(b, &line); err != nil {
+				p.t.Fatalf("log line %q is not JSON: %v", b, err)
+			}
+			if line.Msg == forbidden {
+				p.t.Fatalf("run() logged %q, want it to end with an error first", forbidden)
+			}
+		case <-timeout:
+			p.t.Fatalf("run() has not ended within %v", logWait)
+		}
+	}
+}
+
 // stop cancels the instance and returns run's result.
 func (p *pulsar) stop() error {
 	p.cancel()
@@ -554,6 +848,31 @@ func discoveredIssuer(t *testing.T, client *http.Client, url string) string {
 		t.Fatalf("GET %s: decode body: %v", url, err)
 	}
 	return doc.Issuer
+}
+
+// jwkSet is a JWK Set, with every member of each key kept, so that a
+// comparison sees any difference.
+type jwkSet struct {
+	Keys []map[string]any `json:"keys"`
+}
+
+// fetchJWKS fetches the JWK Set at url.
+func fetchJWKS(t *testing.T, url string) jwkSet {
+	t.Helper()
+	resp := get(t, http.DefaultClient, url)
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close body: %v", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want %d", url, resp.StatusCode, http.StatusOK)
+	}
+	var set jwkSet
+	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
+		t.Fatalf("GET %s: decode body: %v", url, err)
+	}
+	return set
 }
 
 // writeCertificate writes a self-signed certificate for 127.0.0.1, and its

@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/url"
 	"os"
 	"sync"
@@ -71,6 +72,47 @@ func Open(tb testing.TB, databaseURL string) *pgxpool.Pool {
 	}
 	tb.Cleanup(pool.Close)
 	return pool
+}
+
+// ResolveHost returns databaseURL with its host name replaced by the first
+// of its IP addresses that accepts a TCP connection on the URL's port.
+//
+// A pool for the result never calls net's resolver, so it can be opened
+// inside a testing/synctest bubble: the resolver keeps process-wide state
+// that, created inside a bubble, belongs to it, and a parallel test that
+// resolves a name afterwards crashes the test binary. Call ResolveHost
+// outside the bubble.
+func ResolveHost(tb testing.TB, databaseURL string) string {
+	tb.Helper()
+	u, err := url.Parse(databaseURL)
+	if err != nil {
+		tb.Fatalf("postgrestest: parse database URL: %v", err)
+	}
+	host, port := u.Hostname(), u.Port()
+	if port == "" {
+		port = "5432"
+	}
+	if net.ParseIP(host) != nil {
+		return databaseURL
+	}
+	ctx, cancel := context.WithTimeout(tb.Context(), setupTimeout)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		tb.Fatalf("postgrestest: resolve %s: %v", host, err)
+	}
+	var d net.Dialer
+	for _, addr := range addrs {
+		conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, port))
+		if err != nil {
+			continue
+		}
+		_ = conn.Close() // Only the dial mattered.
+		u.Host = net.JoinHostPort(addr, port)
+		return u.String()
+	}
+	tb.Fatalf("postgrestest: no address of %s accepts connections on port %s", host, port)
+	return ""
 }
 
 // UnreachableURL returns the URL of a PostgreSQL server that refuses

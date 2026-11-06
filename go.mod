@@ -3,6 +3,7 @@ module github.com/palebluedot4/pulsar
 go 1.27.3
 
 require (
+	github.com/go-jose/go-jose/v4 v4.1.8
 	github.com/google/go-cmp v0.7.0
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/pressly/goose/v3 v3.29.0

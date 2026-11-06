@@ -2,15 +2,20 @@
 //
 // It serves HTTP from the start, and meanwhile applies any pending database
 // migrations, holding a lock so that replicas starting together migrate
-// once; /readyz answers 503 until they are applied, and pulsar exits if
-// they fail. It serves until it receives an interrupt or SIGTERM, and then
-// shuts down gracefully.
+// once, and then loads its signing keys, generating the first if there is
+// none. /readyz and the JWK Set answer 503 until both are done, and pulsar
+// exits if either fails. It then reloads the signing keys once a minute,
+// and serves until it receives an interrupt or SIGTERM, when it shuts down
+// gracefully.
 //
 // Configuration is read from the environment:
 //
 //	PULSAR_ADDR		address to listen on (default ":8080")
 //	PULSAR_ISSUER		the Issuer Identifier, an https URL; http only on a loopback host (required)
 //	PULSAR_DATABASE_URL	PostgreSQL connection string (required)
+//	PULSAR_SECRET		32 random bytes in standard, padded base64, e.g. from `openssl rand -base64 32`,
+//				from which the key encrypting the stored signing keys is derived; every
+//				start against a database needs the same value (required)
 //	PULSAR_TLS_CERT		PEM certificate chain to serve TLS with (with PULSAR_TLS_KEY)
 //	PULSAR_TLS_KEY		PEM private key for PULSAR_TLS_CERT
 package main
@@ -34,6 +39,7 @@ import (
 	"github.com/palebluedot4/pulsar/internal/config"
 	"github.com/palebluedot4/pulsar/internal/postgres"
 	"github.com/palebluedot4/pulsar/internal/server"
+	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 // Server timeouts. Without them a slow or stalled client holds a connection,
@@ -94,6 +100,8 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 		return fmt.Errorf("open the database at PULSAR_DATABASE_URL: %w", err)
 	}
 
+	keys := signing.New(pool, cfg.Secret)
+
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr)
 	if err != nil {
@@ -102,10 +110,10 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	}
 	// pulsar serves before it migrates, which may wait minutes for another
 	// replica's lock: /livez answers meanwhile, and /readyz answers 503
-	// until migrated is closed.
-	migrated := make(chan struct{})
+	// until ready is closed, once the signing keys are loaded too.
+	ready := make(chan struct{})
 	srv := &http.Server{
-		Handler:           server.New(cfg.Issuer, pool, migrated),
+		Handler:           server.New(cfg.Issuer, pool, keys, ready),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
@@ -125,21 +133,25 @@ func run(ctx context.Context, _ []string, getenv func(string) string, _ io.Reade
 	}()
 	logger.InfoContext(ctx, "listening", "addr", ln.Addr().String(), "tls", tlsConfig != nil)
 
-	migrateCtx, cancelMigrate := context.WithCancel(ctx)
-	defer cancelMigrate()
-	migrateErr := make(chan error, 1)
+	// Migrate and load the signing keys, report the result on startErr,
+	// and then, if both succeeded, reload the keys until the run ends.
+	bgCtx, cancelBg := context.WithCancel(ctx)
+	defer cancelBg()
+	startErr := make(chan error, 1)
+	bgDone := make(chan struct{})
 	go func() {
-		applied, err := postgres.Migrate(migrateCtx, pool)
+		defer close(bgDone)
+		err := prepare(bgCtx, pool, keys, logger)
+		startErr <- err
 		if err == nil {
-			logger.InfoContext(ctx, "migrated", "applied", applied)
-			close(migrated)
+			close(ready)
+			keys.Run(bgCtx, logger)
 		}
-		migrateErr <- err
 	}()
 
-	// Serve until a signal, a failed migration or a failed server. A
-	// migration that fails because a signal canceled it is a graceful
-	// exit, as a signal while serving is.
+	// Serve until a signal, a failed start or a failed server. A start
+	// that fails because a signal canceled it is a graceful exit, as a
+	// signal while serving is.
 	var runErr error
 	serving := true
 wait:
@@ -149,25 +161,27 @@ wait:
 			serving = false
 			runErr = fmt.Errorf("serve: %w", err)
 			break wait
-		case err := <-migrateErr:
-			migrateErr = nil // Received; a nil channel is never ready again.
+		case err := <-startErr:
+			startErr = nil // Received; a nil channel is never ready again.
 			if err != nil && ctx.Err() == nil {
-				runErr = fmt.Errorf("migrate the database at PULSAR_DATABASE_URL: %w", err)
+				runErr = err
 				break wait
 			}
 		case <-ctx.Done():
 			break wait
 		}
 	}
-	cancelMigrate()
-	if migrateErr != nil {
-		// Wait until the migration has stopped and released its connection.
+	cancelBg()
+	if startErr != nil {
 		// The run is already ending for another reason; only a failure
 		// that is not the cancellation itself is worth reporting with it.
-		if err := <-migrateErr; err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-			runErr = errors.Join(runErr, fmt.Errorf("migrate the database at PULSAR_DATABASE_URL: %w", err))
+		if err := <-startErr; err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+			runErr = errors.Join(runErr, err)
 		}
 	}
+	// Wait until migrating, loading or reloading has stopped and released
+	// its connection.
+	<-bgDone
 
 	if serving {
 		logger.InfoContext(ctx, "shutting down")
@@ -185,4 +199,25 @@ wait:
 	}
 	pool.Close()
 	return runErr
+}
+
+// prepare migrates the database and then loads the signing keys,
+// generating the first one if there is none. A failure of either ends the
+// run, as a failed migration always has: a replica that cannot serve
+// tokens must not stay up looking healthy to its liveness probe.
+func prepare(ctx context.Context, pool *pgxpool.Pool, keys *signing.KeySet, logger *slog.Logger) error {
+	applied, err := postgres.Migrate(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("migrate the database at PULSAR_DATABASE_URL: %w", err)
+	}
+	logger.InfoContext(ctx, "migrated", "applied", applied)
+	if err := keys.Load(ctx); err != nil {
+		return fmt.Errorf("load the signing keys: %w", err)
+	}
+	active, err := keys.Active()
+	if err != nil {
+		return fmt.Errorf("load the signing keys: %w", err)
+	}
+	logger.InfoContext(ctx, "signing keys loaded", "kid", active.KID)
+	return nil
 }

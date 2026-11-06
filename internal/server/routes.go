@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/oidc"
+	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 // readyTimeout bounds the readiness check, so that a database that hangs
@@ -16,10 +17,11 @@ const readyTimeout = 2 * time.Second
 
 // addRoutes maps pulsar's entire HTTP surface. The protocol endpoints sit
 // under the issuer's path; the operational ones at the root.
-func addRoutes(mux *http.ServeMux, issuer *oidc.Issuer, pool *pgxpool.Pool, migrated <-chan struct{}) {
+func addRoutes(mux *http.ServeMux, issuer *oidc.Issuer, pool *pgxpool.Pool, keys *signing.KeySet, ready <-chan struct{}) {
 	mux.Handle("GET /livez", handleLive())
-	mux.Handle("GET /readyz", handleReady(pool, migrated))
+	mux.Handle("GET /readyz", handleReady(pool, ready))
 	mux.Handle("GET "+oidc.DiscoveryPath(issuer), oidc.HandleDiscovery(issuer))
+	mux.Handle("GET "+oidc.JWKSPath(issuer), keys.HandleJWKS())
 }
 
 // handleLive reports that the process is serving requests. It checks no
@@ -31,7 +33,7 @@ func handleLive() http.Handler {
 }
 
 // handleReady reports whether this replica can serve, so that a load
-// balancer sends traffic elsewhere when it cannot: 503 until migrated is
+// balancer sends traffic elsewhere when it cannot: 503 until ready is
 // closed; after that 200 when a ping through the pool succeeds within
 // readyTimeout, and 503 otherwise.
 //
@@ -39,10 +41,10 @@ func handleLive() http.Handler {
 // PostgreSQL did not answer or that every pooled connection stayed busy for
 // readyTimeout. Both are deliberate: a replica whose pool is saturated
 // cannot serve requests that need the database either.
-func handleReady(pool *pgxpool.Pool, migrated <-chan struct{}) http.Handler {
+func handleReady(pool *pgxpool.Pool, ready <-chan struct{}) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case <-migrated:
+		case <-ready:
 		default:
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
