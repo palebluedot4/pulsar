@@ -202,10 +202,11 @@ func TestRefreshToken(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-36, REQ-OAUTH-37, REQ-BCP-8, REQ-AT-4: a refresh without
-// scope is for the scope originally granted; one for a narrower scope
-// issues an access token for that scope alone, which UserInfo answers with
-// that scope's claims, and a refresh token for the scope originally
+// REQ-OAUTH-36, REQ-OAUTH-37, REQ-BCP-8, REQ-AT-4, REQ-CORE-43: a refresh
+// without scope is for the scope originally granted; one for a narrower
+// scope issues an access token for that scope alone, which UserInfo
+// answers with that scope's claims, and with those the claims parameter
+// requested from UserInfo, and a refresh token for the scope originally
 // granted, which the next refresh without scope shows.
 func TestRefreshTokenScope(t *testing.T) {
 	t.Parallel()
@@ -214,6 +215,7 @@ func TestRefreshTokenScope(t *testing.T) {
 	const granted = "openid email offline_access"
 	tests := []struct {
 		name         string
+		claims       string // the authorization request's claims parameter, if any
 		scope        string
 		wantScope    string
 		wantUserInfo map[string]any
@@ -222,11 +224,19 @@ func TestRefreshTokenScope(t *testing.T) {
 		{name: "the same, in another order", scope: "offline_access email openid", wantScope: "offline_access email openid", wantUserInfo: claimsOf(aliceEmail)},
 		{name: "narrower", scope: "openid", wantScope: "openid", wantUserInfo: claimsOf()},
 		{name: "narrower, with a value repeated", scope: "openid email email", wantScope: "openid email", wantUserInfo: claimsOf(aliceEmail)},
+		{
+			name: "narrower, with a claim requested from UserInfo", claims: `{"userinfo": {"phone_number": null}}`,
+			scope: "openid", wantScope: "openid", wantUserInfo: claimsOf(map[string]any{"phone_number": "+1 555 0100"}),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			first := rpNoPKCE.offlineTokens(t, handler, "", url.Values{"scope": {granted}})
+			set := url.Values{"scope": {granted}}
+			if tt.claims != "" {
+				set.Set("claims", tt.claims)
+			}
+			first := rpNoPKCE.offlineTokens(t, handler, "", set)
 			got := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, tt.scope))
 			if got.Scope != tt.wantScope {
 				t.Errorf("POST %s for scope %q: scope = %q, want %q", tokenPath, tt.scope, got.Scope, tt.wantScope)

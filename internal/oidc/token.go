@@ -43,8 +43,9 @@ type tokenResponse struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int64  `json:"expires_in"`
 	IDToken     string `json:"id_token"`
-	// Sent only for a code issued with offline access, from which a
-	// Refresh Token Family starts (RFC 6749 §1.5).
+	// Sent for a code issued with offline access, from which a Refresh
+	// Token Family starts (RFC 6749 §1.5), and for every refresh token of
+	// the family redeemed, replacing it.
 	RefreshToken string `json:"refresh_token,omitempty"`
 	// Always sent, since the scope granted may differ from the one
 	// requested, which RFC 6749 §5.1 then requires.
@@ -338,6 +339,10 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if !stored.Redeemed || stored.ClientID != client.ID || stored.RedirectUri != redirectURI || stored.CodeChallenge != challenge {
 				return nil
 			}
+			// TODO(#52): revoke the Refresh Token Family the code started
+			// too. Until then its refresh token stays redeemable, and an
+			// access token a concurrent refresh records may escape this
+			// deletion.
 			return q.DeleteAccessTokensOfCode(ctx, hash)
 		}
 		if err != nil {
@@ -384,6 +389,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	return p.signTokens(client, issuance{
 		subject:       row.Subject,
 		scopes:        row.Scopes,
+		expiry:        exp,
 		authTime:      row.AuthTime,
 		nonce:         row.Nonce,
 		idTokenClaims: claims.IDToken,
@@ -451,6 +457,7 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // signed after it commits, as issueTokens signs them.
 func (p *Provider) refresh(ctx context.Context, client *registry.Client, refreshToken string, scopes []string) (*tokenResponse, error) {
 	now := time.Now()
+	exp := now.Add(TokenLifetime)
 	jti := rand.Text()
 	var row queries.RedeemRefreshTokenRow
 	var claims claimsRequest
@@ -486,7 +493,7 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 			CodeHash:       row.CodeHash,
 			FamilyID:       pgtype.Int8{Int64: row.ID, Valid: true},
 			UserinfoClaims: userInfoClaims,
-			Expiry:         now.Add(TokenLifetime),
+			Expiry:         exp,
 		})
 	})
 	if err != nil {
@@ -498,6 +505,7 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 	return p.signTokens(client, issuance{
 		subject:       row.Subject,
 		scopes:        scopes,
+		expiry:        exp,
 		authTime:      row.AuthTime,
 		idTokenClaims: claims.IDToken,
 		jti:           jti,
@@ -549,7 +557,10 @@ func (p *Provider) deleteExpiredAccessTokens(ctx context.Context, now time.Time)
 type issuance struct {
 	subject string
 	// scopes are those of the access token.
-	scopes   []string
+	scopes []string
+	// expiry is when the access token and the ID token expire, as the
+	// access token is recorded.
+	expiry   time.Time
 	authTime time.Time
 	// nonce is the ID token's, or "" for none.
 	nonce string
@@ -563,10 +574,10 @@ type issuance struct {
 }
 
 // signTokens returns the token response for t, issued to client at now:
-// an access token and an ID token, each valid for TokenLifetime, and t's
+// an access token and an ID token, each expiring at t.expiry, and t's
 // refresh token, if any.
 func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time) (*tokenResponse, error) {
-	exp := now.Add(TokenLifetime)
+	exp := t.expiry
 	scope := strings.Join(t.scopes, " ")
 	accessToken, err := p.keys.SignJWT("at+jwt", accessTokenClaims{
 		Issuer:   p.issuer.String(),
@@ -614,7 +625,7 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 	return &tokenResponse{
 		AccessToken:  accessToken,
 		TokenType:    "Bearer",
-		ExpiresIn:    int64(TokenLifetime / time.Second),
+		ExpiresIn:    int64(exp.Sub(now) / time.Second),
 		IDToken:      idToken,
 		RefreshToken: t.refreshToken,
 		Scope:        scope,
