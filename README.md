@@ -21,17 +21,16 @@ End-User for offline access, and if they allow it, the token response
 carries a refresh token. The Client redeems it with the `refresh_token`
 grant, for a narrower scope if it asks, for a new access token, ID token
 and refresh token, for up to thirty days; each refresh token is redeemed
-once. A second
-redemption of a code that is otherwise valid, by its own Client, with its
-redirect URI, and with a matching `code_verifier` exactly when the code
-has a challenge, revokes the access tokens issued from it, and
-`pulsar keys rotate` rotates the signing key. The OpenID conformance
-suite's Config OP and Basic OP plans run against it in CI; on
-2026-11-06, at commit `8d6ab47`, they finished with no failures, as
-[Checking conformance](#checking-conformance) details. Next in the
-refresh token specification
-([#47](https://github.com/palebluedot4/pulsar/issues/47)): a replaced
-refresh token presented again revokes its whole Refresh Token Family.
+once. A second redemption of a code that is otherwise valid, by its own
+Client, with its redirect URI, and with a matching `code_verifier` exactly
+when the code has a challenge, revokes the access tokens issued from it,
+and `pulsar keys rotate` rotates the signing key. The OpenID conformance
+suite's Config OP and Basic OP plans run against it in CI; on 2026-11-06,
+at commit `8d6ab47`, they finished with no failures, as [Checking
+conformance](#checking-conformance) details. Next in the refresh token
+specification ([#47](https://github.com/palebluedot4/pulsar/issues/47)): a
+replaced refresh token presented again revokes its whole Refresh Token
+Family.
 
 ## Running it
 
@@ -144,11 +143,11 @@ refreshed ID token, and UserInfo with the new access token, and checks
 that another Client's refresh token is refused. It never presents a
 refresh token twice
 ([research](docs/research/refresh-tokens.md#the-suites-oidcc-refresh-token-module)),
-so only pulsar's own tests check that each is redeemed once. The suite's browser automation fills in the login and
-consent pages. The run exits non-zero on a failure, a warning or a skipped
-module that `conformance/` does not list with a reason, and leaves the
-results in `conformance/results/`. CI runs the same target on every pull
-request.
+so only pulsar's own tests check that each is redeemed once. The suite's
+browser automation fills in the login and consent pages. The run exits
+non-zero on a failure, a warning or a skipped module that `conformance/`
+does not list with a reason, and leaves the results in
+`conformance/results/`. CI runs the same target on every pull request.
 
 [conformance/README.md](conformance/README.md) describes the files it uses.
 
