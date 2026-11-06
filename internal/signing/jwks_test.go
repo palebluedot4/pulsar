@@ -78,9 +78,9 @@ func sortedKids(set jwkSet) []string {
 }
 
 // REQ-JWK-1, REQ-JWK-3, REQ-JWK-4, REQ-JWA-1, REQ-JWA-3, REQ-JWA-4,
-// REQ-JWA-5: the JWK Set holds the RSA public key, of 2048 bits, with
-// "kty", "n" and "e" in their minimal form, its "use", "alg" and a "kid"
-// that is its RFC 7638 thumbprint, and no private member.
+// REQ-JWA-5, REQ-DISC-18: the JWK Set holds the RSA public key, of 2048
+// bits, with "kty", "n" and "e" in their minimal form, its "use", "alg"
+// and a "kid" that is its RFC 7638 thumbprint, and no private member.
 func TestJWKS(t *testing.T) {
 	t.Parallel()
 

@@ -27,6 +27,8 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
   MAY contain port, path, and query parameter components."
 - REQ-DISC-5 (§3, `jwks_uri`): "REQUIRED. URL of the OP's JWK Set [JWK]
   document, which MUST use the https scheme."
+- REQ-DISC-18 (§3, `jwks_uri`): "The JWK Set MUST NOT contain private or
+  symmetric key values."
 - REQ-DISC-6 (§3, `scopes_supported`): "RECOMMENDED. JSON array containing
   a list of the OAuth 2.0 [RFC6749] scope values that this server
   supports. [...] Servers MAY choose not to advertise some supported scope
