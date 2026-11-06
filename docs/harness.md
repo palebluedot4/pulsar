@@ -192,6 +192,22 @@ Inside it, pnpm cannot switch to the version `package.json` pins (it fails to
 take a store lock), and the release binaries come from GitHub, which the
 sandbox does not reach. Agents only run tools already installed.
 
+## Incidents awaiting a trigger
+
+Failures that have happened once and have no control yet. A second
+occurrence of the same failure is the trigger for one (How controls are
+added, above).
+
+- 2026-11-06, #34: the forked reviewer of `/code-review` reported checking
+  two findings by running a small Go program. Afterward the repository's
+  `go.mod` held only `module t` and `go 1.27`, as `go mod init t` writes, so
+  the program was most likely run in the working tree. The main session
+  found it when the next test failed to build, and restored the file from
+  git; nothing had been committed. The sandbox allows writes anywhere in
+  the working tree, so nothing stopped it. A second occurrence calls for a
+  line in `AGENTS.md`, or for reviewers that cannot write to the working
+  tree.
+
 ## Removed
 
 None yet.
