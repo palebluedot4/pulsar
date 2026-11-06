@@ -45,6 +45,6 @@ _Avoid_: grant, approval, authorization
 
 **Refresh Token Family**:
 The refresh tokens descended, each replacing the last, from one
-authorization of one Client by one End-User; it ends, or is revoked, as a
+authorization code redeemed by one Client; it ends, or is revoked, as a
 whole.
 _Avoid_: grant, chain, lineage, token family (unqualified)
