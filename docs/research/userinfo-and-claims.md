@@ -77,8 +77,8 @@ observed (**UNVERIFIED**). This bears on #41's second and third questions.
 ## Revoking tokens when a code is redeemed twice
 
 RFC 6749 §4.1.2: the authorization server "SHOULD revoke (when possible) all
-tokens previously issued based on that authorization code". pulsar leaves
-this to #22.
+tokens previously issued based on that authorization code". pulsar does so
+since #22 (REQ-OAUTH-29).
 
 | Provider            | Behavior                                                                                                                                                                                                             | Source                                                                                                                                                                                                             |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
