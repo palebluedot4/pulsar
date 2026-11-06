@@ -1,6 +1,9 @@
 package server
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -32,21 +35,20 @@ func accessTokenOf(t *testing.T, resp response) string {
 // REQ-OAUTH-29, REQ-OAUTH-19, REQ-AT-11: a second redemption of a code
 // fails with invalid_grant, and UserInfo then refuses the access token
 // issued from the code with 401 and invalid_token: at once, 30 seconds
-// later, by another Client, and after the code has expired and its record
-// been deleted, while the token has not expired.
+// later, by another Client, and after the code has expired, while the
+// token has not.
 func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		wait     time.Duration // between the two redemptions
-		clientID string        // of the second redemption
-		secret   string
+		name string
+		wait time.Duration // between the two redemptions
+		// The Client of the second redemption, and its secret.
+		clientID, secret string
 	}{
 		{name: "at once", clientID: "rp", secret: rpSecret},
 		{name: "30 seconds later", wait: 30 * time.Second, clientID: "rp", secret: rpSecret},
 		{name: "by another Client", clientID: "other", secret: otherSecret},
-		// A code issued after the first has expired deletes its record.
 		{name: "after the code expired", wait: 5 * time.Minute, clientID: "rp", secret: rpSecret},
 	}
 	for _, tt := range tests {
@@ -58,7 +60,6 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 				form := codeForm(code(t, handler, withScope("openid")))
 				accessToken := accessTokenOf(t, tokenRequest(t, handler, "rp", rpSecret, form))
 				time.Sleep(tt.wait)
-				code(t, handler, withScope("openid"))
 				if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
 					t.Errorf("UserInfo before the second redemption claims mismatch (-want +got):\n%s", diff)
 				}
@@ -71,6 +72,66 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// REQ-OAUTH-29: a redemption that is refused by its Client, sent while
+// another redemption of the code is in progress, waits for that one to
+// commit and then revokes the access token it recorded. A refused Client
+// does not wait on the code's row as a second redemption by the right one
+// does, so this is what locking the row first gives. The redemption in
+// progress is the test's own transaction, which marks the code redeemed
+// and records a token as the token endpoint does, and commits once the
+// request waits on a lock.
+func TestTokenCodeReuseWaitsForRedemptionInProgress(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	issued, _ := issuedTokens(t, handler, withScope("openid"))
+	claims := verify(t, handler, issued).claims
+	jti := rand.Text()
+	claims["jti"] = jti
+	accessToken := forge(t, forger(t, pool), "at+jwt", claims)
+	c := code(t, handler, withScope("openid"))
+	hash := sha256.Sum256([]byte(c))
+
+	ctx := t.Context()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin() error = %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	if _, err := tx.Exec(ctx, "UPDATE authorization_codes SET redeemed = true WHERE code_hash = $1", hash[:]); err != nil {
+		t.Fatalf("marking the code redeemed: %v", err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO access_tokens (jti, code_hash, expiry) VALUES ($1, $2, $3)", jti, hash[:], time.Now().Add(10*time.Minute)); err != nil {
+		t.Fatalf("recording the access token: %v", err)
+	}
+
+	done := make(chan response, 1)
+	go func() { done <- tokenRequest(t, handler, "other", otherSecret, codeForm(c)) }()
+	for waiting := false; !waiting; {
+		select {
+		case resp := <-done:
+			t.Fatalf("POST %s finished while a redemption of its code was in progress, want it to wait; body %q", tokenPath, resp.body)
+		default:
+		}
+		err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock')").Scan(&waiting)
+		if err != nil {
+			t.Fatalf("looking for a backend waiting on a lock: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	if got := tokenErrorCode(t, <-done, http.StatusBadRequest); got != "invalid_grant" {
+		t.Errorf("POST %s by another Client error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+	if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
+		t.Errorf("UserInfo with the token of the redemption in progress error = %q, want %q", got, "invalid_token")
 	}
 }
 
