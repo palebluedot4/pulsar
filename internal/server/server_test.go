@@ -16,11 +16,11 @@ import (
 	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
-func mustParse(t *testing.T, raw string) *oidc.Issuer {
-	t.Helper()
+func mustParse(tb testing.TB, raw string) *oidc.Issuer {
+	tb.Helper()
 	issuer, err := oidc.ParseIssuer(raw)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return issuer
 }

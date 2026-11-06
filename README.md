@@ -3,8 +3,11 @@
 An OpenID Connect Provider in Go, built by AI agents under a harness that has
 to prove it helps. The provider is the artifact; the method is the subject.
 It is a reference implementation, not for production use. So far it serves
-liveness and readiness checks, its discovery document, its JWK Set, and a
-login page that starts a Login Session; the other OpenID endpoints are next.
+liveness and readiness checks, its discovery document, its JWK Set, a login
+page that starts a Login Session, and the authorization code flow to an ID
+token and access token for Clients that authenticate with
+`client_secret_basic`. Consent, the other client authentication methods,
+PKCE and UserInfo are next.
 
 ## Running it
 
@@ -47,8 +50,10 @@ curl -i localhost:8080/jwks
 curl -i localhost:8080/readyz
 ```
 
-The login page is at `/login` under the issuer. Its Login Session cookie is
-`Secure`, which browsers keep over plain http only on `localhost`.
+The login page is at `/login` under the issuer; an authorization request
+from an End-User without a Login Session is sent there and resumes after
+login. The Login Session cookie is `Secure`, which browsers keep over plain
+http only on `localhost`.
 
 As with libpq, anything `PULSAR_DATABASE_URL` leaves out is taken from the
 `PG*` environment variables (`PGHOST`, `PGPASSWORD` and the rest), a

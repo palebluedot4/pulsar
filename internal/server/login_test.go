@@ -46,8 +46,8 @@ const failedLogin = "The username or password is incorrect."
 
 // hashPassword returns an Argon2id PHC string for password, with
 // parameters far below any production setting so that tests run fast.
-func hashPassword(t *testing.T, password string) string {
-	t.Helper()
+func hashPassword(tb testing.TB, password string) string {
+	tb.Helper()
 	salt := make([]byte, 16)
 	_, _ = rand.Read(salt) // crypto/rand.Read never returns an error.
 	key := argon2.IDKey([]byte(password), salt, 1, 64, 1, 32)

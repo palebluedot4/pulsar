@@ -364,6 +364,28 @@ func isUUID(s string) bool {
 	return true
 }
 
+// Client returns the Client whose client_id is id.
+func (r *Registry) Client(id string) (*Client, bool) {
+	c, ok := r.clients[id]
+	return c, ok
+}
+
+// AuthenticateClientSecret returns the Client whose client_id and secret
+// these are, if it registered method, which must be client_secret_basic
+// or client_secret_post, so that a Client cannot authenticate by a method
+// other than its own. The secret is checked against its Argon2id hash in
+// constant time.
+func (r *Registry) AuthenticateClientSecret(method AuthMethod, id, secret string) (*Client, bool) {
+	c, ok := r.clients[id]
+	if !ok || c.AuthMethod != method || c.secretHash == nil {
+		return nil, false
+	}
+	if !c.secretHash.verify(secret) {
+		return nil, false
+	}
+	return c, true
+}
+
 // EndUser returns the End-User whose Subject is subject.
 func (r *Registry) EndUser(subject string) (*EndUser, bool) {
 	u, ok := r.endUsers[subject]

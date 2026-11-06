@@ -1,5 +1,5 @@
 // Package login serves the login page and keeps the Login Session that a
-// successful login starts.
+// successful login starts, for the authorization endpoint to read.
 //
 // A Login Session is kept by scs, server-side in PostgreSQL. Its cookie
 // has the __Host- prefix and is Secure and HttpOnly, and SameSite=Lax
@@ -15,6 +15,7 @@ package login
 
 import (
 	"bytes"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -100,42 +101,130 @@ var pageTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 </html>
 `))
 
-// baseSessions is the session manager every Handler's is copied from.
+// baseSessions is the session manager every Sessions' is copied from.
 // Only scs.New can make one, since it alone sets a manager's private
 // context key, and it also installs an in-memory store with a goroutine
 // that cleans it for the life of the process. Making the manager once,
 // when the package is initialized, keeps that to one idle goroutine per
 // process, outside any testing/synctest bubble, rather than one per
-// Handler. Handler replaces the store, so the in-memory one stays empty.
+// Sessions. NewSessions replaces the store, so the in-memory one stays
+// empty.
 var baseSessions = scs.New()
 
-// Handler serves the login page, by GET, and the login form's submission,
-// by POST, at path, for the End-Users of reg, keeping Login Sessions in
-// the database behind pool. It logs to logger any error that ends a
-// request.
-func Handler(path string, pool *pgxpool.Pool, reg *registry.Registry, logger *slog.Logger) http.Handler {
+// Sessions keeps the Login Sessions of the End-Users of a registry, in
+// PostgreSQL. It is safe for concurrent use.
+type Sessions struct {
+	manager  *scs.SessionManager
+	store    *store
+	registry *registry.Registry
+}
+
+// NewSessions returns the Login Sessions of the End-Users of reg, kept in
+// the database behind pool.
+func NewSessions(pool *pgxpool.Pool, reg *registry.Registry) *Sessions {
 	st := &store{queries: queries.New(pool)}
-	sessions := new(scs.SessionManager)
-	*sessions = *baseSessions
-	sessions.Store = st
-	sessions.IdleTimeout = idleTimeout
-	sessions.Lifetime = lifetime
-	sessions.HashTokenInStore = true
-	sessions.Cookie.Name = cookieName
-	sessions.Cookie.Path = "/"
-	sessions.Cookie.Secure = true
-	sessions.Cookie.HttpOnly = true
-	sessions.Cookie.SameSite = http.SameSiteLaxMode
-	h := &handler{path: path, sessions: sessions, store: st, registry: reg, logger: logger}
+	m := new(scs.SessionManager)
+	*m = *baseSessions
+	m.Store = st
+	m.IdleTimeout = idleTimeout
+	m.Lifetime = lifetime
+	m.HashTokenInStore = true
+	m.Cookie.Name = cookieName
+	m.Cookie.Path = "/"
+	m.Cookie.Secure = true
+	m.Cookie.HttpOnly = true
+	m.Cookie.SameSite = http.SameSiteLaxMode
+	return &Sessions{manager: m, store: st, registry: reg}
+}
+
+// Authentication is an End-User's authentication, as a Login Session
+// records it.
+type Authentication struct {
+	EndUser *registry.EndUser
+	Time    time.Time // when the End-User authenticated
+}
+
+// Authenticated returns the authentication that r's Login Session
+// records, if r has one. r counts as activity of the Login Session, which
+// moves its idle expiry, so Authenticated writes the Login Session's
+// cookie to w and must be called before anything of the response is
+// written. A Login Session for a Subject the registry no longer lists
+// records no authentication.
+func (s *Sessions) Authenticated(w http.ResponseWriter, r *http.Request) (Authentication, bool, error) {
+	r, err := s.load(r)
+	if err != nil {
+		return Authentication{}, false, err
+	}
+	if err := s.save(w, r); err != nil {
+		return Authentication{}, false, err
+	}
+	u, ok := s.endUser(r)
+	if !ok {
+		return Authentication{}, false, nil
+	}
+	authTime := s.manager.GetInt64(r.Context(), authTimeKey)
+	return Authentication{EndUser: u, Time: time.Unix(authTime, 0)}, true, nil
+}
+
+// load returns r with its Login Session, if it has one, or a new empty
+// one, in its context.
+func (s *Sessions) load(r *http.Request) (*http.Request, error) {
+	var token string
+	if c, err := r.Cookie(cookieName); err == nil {
+		token = c.Value
+	}
+	ctx, err := s.manager.Load(r.Context(), token)
+	if err != nil {
+		return nil, fmt.Errorf("load the Login Session: %w", err)
+	}
+	return r.WithContext(ctx), nil
+}
+
+// save stores the request's Login Session, if it has changed, and sets its
+// cookie. It must run before anything of the response is written.
+//
+// A Login Session changes at login, and on every request that loads one,
+// since each request moves its idle expiry.
+func (s *Sessions) save(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	if s.manager.Status(ctx) != scs.Modified {
+		return nil
+	}
+	token, expiry, err := s.manager.Commit(ctx)
+	if err != nil {
+		return fmt.Errorf("save the Login Session: %w", err)
+	}
+	s.manager.WriteSessionCookie(ctx, w, token, expiry)
+	return nil
+}
+
+// endUser returns the End-User signed in by the request's Login Session.
+// A Login Session for a Subject the registry no longer lists signs no one
+// in.
+func (s *Sessions) endUser(r *http.Request) (*registry.EndUser, bool) {
+	sub := s.manager.GetString(r.Context(), subjectKey)
+	if sub == "" {
+		return nil, false
+	}
+	return s.registry.EndUser(sub)
+}
+
+// Handler serves the login page, by GET, and the login form's submission,
+// by POST, at path. A login from a page whose URL has a query sends the
+// browser on to continuePath with the same query: that is how an
+// authorization request, sent to the login page with its parameters,
+// resumes after login. Any other login sends it back to the page. It logs
+// to logger any error that ends a request.
+func (s *Sessions) Handler(path, continuePath string, logger *slog.Logger) http.Handler {
+	h := &handler{path: path, continuePath: continuePath, sessions: s, logger: logger}
 	return http.NewCrossOriginProtection().Handler(h)
 }
 
 type handler struct {
-	path     string // the page's request path
-	sessions *scs.SessionManager
-	store    *store
-	registry *registry.Registry
-	logger   *slog.Logger
+	path         string // the page's request path
+	continuePath string // where a login from a page with a query goes on to
+	sessions     *Sessions
+	logger       *slog.Logger
 }
 
 // ServeHTTP loads the request's Login Session itself, rather than through
@@ -148,51 +237,27 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(k, v)
 	}
 	w.Header().Add("Vary", "Cookie")
-	var token string
-	if c, err := r.Cookie(cookieName); err == nil {
-		token = c.Value
-	}
-	ctx, err := h.sessions.Load(r.Context(), token)
+	loaded, err := h.sessions.load(r)
 	if err != nil {
-		h.fail(w, r, "load the Login Session", err)
+		h.fail(w, r, err)
 		return
 	}
-	r = r.WithContext(ctx)
+	r = loaded
 
 	if r.Method == http.MethodPost {
 		h.login(w, r)
 		return
 	}
 	var p page
-	if u, ok := h.endUser(r); ok {
+	if u, ok := h.sessions.endUser(r); ok {
 		p.SignedInAs = u.Username
 	}
 	h.render(w, r, p)
 }
 
-// save stores the request's Login Session, if it has changed, and sets its
-// cookie. It must run before anything of the response is written. If it
-// fails, it answers 500 and returns false.
-//
-// A Login Session changes at login, and on every request that loads one,
-// since each request moves its idle expiry.
-func (h *handler) save(w http.ResponseWriter, r *http.Request) bool {
-	ctx := r.Context()
-	if h.sessions.Status(ctx) != scs.Modified {
-		return true
-	}
-	token, expiry, err := h.sessions.Commit(ctx)
-	if err != nil {
-		h.fail(w, r, "save the Login Session", err)
-		return false
-	}
-	h.sessions.WriteSessionCookie(ctx, w, token, expiry)
-	return true
-}
-
 // login authenticates the End-User whose username and password the form
 // carries, from the request body only, and on success starts a Login
-// Session under a new token and sends the browser back to the page.
+// Session under a new token and sends the browser on.
 func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormSize)
 	if err := r.ParseForm(); err != nil {
@@ -200,59 +265,58 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := r.PostForm.Get("username")
-	u, ok := h.registry.AuthenticateEndUser(username, r.PostForm.Get("password"))
+	u, ok := h.sessions.registry.AuthenticateEndUser(username, r.PostForm.Get("password"))
 	if !ok {
 		h.render(w, r, page{Username: username, Error: failedLogin})
 		return
 	}
 
 	ctx := r.Context()
-	if err := h.sessions.RenewToken(ctx); err != nil {
-		h.fail(w, r, "renew the Login Session token", err)
+	m := h.sessions.manager
+	if err := m.RenewToken(ctx); err != nil {
+		h.fail(w, r, fmt.Errorf("renew the Login Session token: %w", err))
 		return
 	}
-	if err := h.sessions.Clear(ctx); err != nil {
-		h.fail(w, r, "clear the Login Session", err)
+	if err := m.Clear(ctx); err != nil {
+		h.fail(w, r, fmt.Errorf("clear the Login Session: %w", err))
 		return
 	}
-	h.sessions.Put(ctx, subjectKey, u.Subject)
-	h.sessions.Put(ctx, authTimeKey, time.Now().Unix())
+	m.Put(ctx, subjectKey, u.Subject)
+	m.Put(ctx, authTimeKey, time.Now().Unix())
 	// A login is rare next to the requests a Login Session serves, so it
 	// is when Login Sessions that have ended are deleted. A failure leaves
 	// them for the next login and does not fail this one.
-	if err := h.store.deleteEnded(ctx); err != nil {
+	if err := h.sessions.store.deleteEnded(ctx); err != nil {
 		h.logger.ErrorContext(ctx, "delete ended login sessions", "error", err)
 	}
-	if !h.save(w, r) {
+	if err := h.sessions.save(w, r); err != nil {
+		h.fail(w, r, err)
 		return
 	}
-	http.Redirect(w, r, h.path, http.StatusSeeOther)
-}
-
-// endUser returns the End-User signed in by the request's Login Session.
-// A Login Session for a Subject the registry no longer lists signs no one
-// in.
-func (h *handler) endUser(r *http.Request) (*registry.EndUser, bool) {
-	sub := h.sessions.GetString(r.Context(), subjectKey)
-	if sub == "" {
-		return nil, false
+	// The query goes on unchanged to a fixed path on this origin, so it
+	// cannot send the browser anywhere else. 303, not 307, so that the
+	// password in this request's body is not sent on (RFC 9700 §4.12).
+	next := h.path
+	if r.URL.RawQuery != "" {
+		next = h.continuePath + "?" + r.URL.RawQuery
 	}
-	return h.registry.EndUser(sub)
+	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next is a fixed path on this origin; the query cannot change it.
 }
 
 func (h *handler) render(w http.ResponseWriter, r *http.Request, p page) {
 	var buf bytes.Buffer
 	if err := pageTemplate.Execute(&buf, p); err != nil {
-		h.fail(w, r, "render login page", err)
+		h.fail(w, r, fmt.Errorf("render login page: %w", err))
 		return
 	}
-	if !h.save(w, r) {
+	if err := h.sessions.save(w, r); err != nil {
+		h.fail(w, r, err)
 		return
 	}
 	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.
 }
 
-func (h *handler) fail(w http.ResponseWriter, r *http.Request, msg string, err error) {
-	h.logger.ErrorContext(r.Context(), msg, "error", err)
+func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	h.logger.ErrorContext(r.Context(), "login page", "error", err)
 	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }

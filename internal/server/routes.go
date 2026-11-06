@@ -27,12 +27,23 @@ func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, poo
 	mux.Handle("GET "+oidc.DiscoveryPath(issuer), oidc.HandleDiscovery(issuer))
 	mux.Handle("GET "+oidc.JWKSPath(issuer), keys.HandleJWKS())
 
+	// The login page and the protocol endpoints below need the database's
+	// tables, and the token endpoint the signing keys, so they wait, as
+	// readiness does, until the schema is migrated and the keys loaded.
 	loginPath := issuer.Route(login.Path)
-	// The login page needs the Login Session table, so it waits, as
-	// readiness does, until the schema is migrated.
-	loginPage := whenReady(ready, login.Handler(loginPath, pool, reg, logger))
+	authorizationPath := oidc.AuthorizationPath(issuer)
+	sessions := login.NewSessions(pool, reg)
+	loginPage := whenReady(ready, sessions.Handler(loginPath, authorizationPath, logger))
 	mux.Handle("GET "+loginPath, loginPage)
 	mux.Handle("POST "+loginPath, loginPage)
+
+	// The protocol endpoints are not protected against cross-origin
+	// requests: a Client sends them from its own origin.
+	op := oidc.NewProvider(issuer, reg, sessions, keys, pool, logger)
+	authorization := whenReady(ready, op.HandleAuthorization(loginPath))
+	mux.Handle("GET "+authorizationPath, authorization)
+	mux.Handle("POST "+authorizationPath, authorization)
+	mux.Handle("POST "+oidc.TokenPath(issuer), whenReady(ready, op.HandleToken()))
 }
 
 // whenReady answers 503, which no cache may keep, until ready is closed,
