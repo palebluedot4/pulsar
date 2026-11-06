@@ -39,7 +39,7 @@ func startReplica(t *testing.T, databaseURL string) replica {
 	ctx, cancel := context.WithCancel(t.Context())
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("pgxpool.New() error = %v", err)
 	}
 	keys := load(t, pool)
 	reloading := make(chan struct{})
@@ -188,7 +188,7 @@ func TestRotatedOutKeyLeavesJWKSAfterItsTokensExpire(t *testing.T) {
 
 		sleepUntil(gone)
 		if time.Now().Before(lastExpiry) {
-			t.Errorf("the old key leaves the JWK Set at %v, before its last token expires at %v", time.Since(start), lastExpiry.Sub(start))
+			t.Errorf("GET /jwks %v after Rotate() has dropped the old key, want it kept until its last token expires, %v after Rotate()", time.Since(start), lastExpiry.Sub(start))
 		}
 		if diff := cmp.Diff([]string{rotated.KID}, sortedKids(decodeJWKS(t, getJWKS(t, a.KeySet)))); diff != "" {
 			t.Errorf("GET /jwks %v after Rotate() kids mismatch (-want +got):\n%s", gone.Sub(start), diff)
@@ -215,10 +215,11 @@ func sleepUntil(t time.Time) {
 	synctest.Wait()
 }
 
-// REQ-JWK-4: a rotation under a secret other than the one the keys are
-// stored under is refused, and stores nothing; otherwise it would store a
-// key that no replica can decrypt, and every replica would fail to load.
-// A rotation in a database with no key is refused too.
+// A rotation under a secret other than the one the keys are stored under
+// is refused, and stores nothing; otherwise it would store a key that no
+// replica can decrypt, and every replica would fail to load. A rotation
+// in a database with no key is refused too. It cites no requirement: no
+// clause in scope says how an OP stores its keys.
 func TestRotateRefuses(t *testing.T) {
 	t.Parallel()
 

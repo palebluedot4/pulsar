@@ -4,8 +4,8 @@
 -- before this migration, signs from when it was generated.
 --
 -- When a key leaves the JWK Set is not stored: it follows from when the
--- next key starts signing (internal/signing), so a row is still never
--- updated.
+-- next key starts signing (internal/signing), so pulsar still never
+-- updates a row.
 
 -- +goose Up
 ALTER TABLE signing_keys ADD COLUMN activates_at timestamptz;

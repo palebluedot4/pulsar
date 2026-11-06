@@ -91,11 +91,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var command string
-	if len(args) > 1 {
-		command = strings.Join(args[1:], " ")
-	}
-	if command != "" && command != "keys rotate" {
+	command := strings.Join(args[min(1, len(args)):], " ")
+	rotating := command == "keys rotate"
+	if command != "" && !rotating {
 		return fmt.Errorf("unknown command %q; %s", command, usage)
 	}
 
@@ -104,7 +102,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 		return fmt.Errorf("load config: %w", err)
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
-	if command == "keys rotate" {
+	if rotating {
 		return rotateKeys(ctx, cfg, logger)
 	}
 
