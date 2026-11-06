@@ -60,10 +60,11 @@ var jwksCacheControl = "public, max-age=" + strconv.Itoa(int(jwksCacheLifetime/t
 const ActivationDelay = ReloadInterval + jwksCacheLifetime
 
 // retention is how long a key stays published once the next key's time to
-// sign has come. A replica goes on signing with the old key until its
-// first reload after that, at most one reload interval later, and a token
-// it signs then is valid for at most the token lifetime; so by the end of
-// retention every token the old key signed has expired.
+// sign has come. A replica that has loaded the next key stops signing with
+// the old one at that time, by its own clock, and a token it signed is
+// valid for at most the token lifetime. The reload interval added is a
+// margin, as #23 asks: for a replica whose clock is up to that much
+// behind, or that loads the next key up to that much after its time.
 const retention = ReloadInterval + oidc.TokenLifetime
 
 // algorithm is the JWS algorithm every key signs with: RS256, which
@@ -93,8 +94,8 @@ const encryptionKeySize = 32
 // errNotLoaded is returned by [KeySet.Active] before the key set is loaded.
 var errNotLoaded = errors.New("signing: the key set is not loaded yet")
 
-// errNoKey is returned by [KeySet.Rotate] when there is no key to rotate.
-var errNoKey = errors.New("signing: the database holds no signing key to rotate; start pulsar against it first, which generates one")
+// errNoKey is returned when the database holds no key to load.
+var errNoKey = errors.New("signing: the database holds no signing key")
 
 // Key is a signing key: a [crypto.Signer] that signs with RS256, and the
 // kid that names its public half in the JWK Set.
@@ -112,11 +113,17 @@ type KeySet struct {
 	loaded  atomic.Pointer[snapshot]
 }
 
-// snapshot is the key set as it was last loaded.
+// snapshot is the key set as it was last loaded: the keys it publishes.
 type snapshot struct {
-	keys   map[string]*rsa.PrivateKey // by kid
-	active Key
-	jwks   []byte // the encoded JWK Set
+	keys    map[string]*rsa.PrivateKey // by kid
+	signers []signer                   // in the order they start signing
+	jwks    []byte                     // the encoded JWK Set
+}
+
+// signer is a published key and when it starts signing.
+type signer struct {
+	Key
+	from time.Time
 }
 
 // New returns an empty key set for the database behind db, whose private
@@ -186,14 +193,9 @@ type Rotated struct {
 // PULSAR_SECRET is then not the secret the keys were stored under, and no
 // replica could decrypt a key stored under it.
 func (s *KeySet) Rotate(ctx context.Context) (Rotated, error) {
-	has, err := s.queries.HasSigningKey(ctx)
-	if err != nil {
-		return Rotated{}, fmt.Errorf("look up signing keys: %w", err)
-	}
-	if !has {
-		return Rotated{}, errNoKey
-	}
-	if err := s.reload(ctx); err != nil {
+	if err := s.reload(ctx); errors.Is(err, errNoKey) {
+		return Rotated{}, fmt.Errorf("%w; start pulsar against it first, which generates one", err)
+	} else if err != nil {
 		return Rotated{}, err
 	}
 	key, err := s.generate(ActivationDelay)
@@ -206,15 +208,27 @@ func (s *KeySet) Rotate(ctx context.Context) (Rotated, error) {
 	return Rotated{KID: key.Kid, SignsFrom: key.ActivatesAt}, nil
 }
 
-// Active returns the key to sign with: of the keys whose time to sign had
-// come at the last reload, the last to start, ties broken by kid. It
-// returns an error before the key set is loaded.
+// Active returns the key to sign with: of the keys last loaded whose time
+// to sign has come, by this replica's clock, the last to start, ties
+// broken by kid. A replica therefore switches to a new key when its time
+// comes, whether or not a reload succeeds then. If no key's time has come,
+// as when the clock of the replica that generated the first key runs ahead
+// of this one's, it is the first to start. Active returns an error before
+// the key set is loaded.
 func (s *KeySet) Active() (Key, error) {
 	snap := s.loaded.Load()
 	if snap == nil {
 		return Key{}, errNotLoaded
 	}
-	return snap.active, nil
+	now := time.Now()
+	active := snap.signers[0]
+	for _, k := range snap.signers[1:] {
+		if k.from.After(now) {
+			break
+		}
+		active = k
+	}
+	return active.Key, nil
 }
 
 // SignJWT returns a JWT in the JWS Compact Serialization whose claims are
@@ -357,11 +371,8 @@ func (s *KeySet) generate(delay time.Duration) (queries.InsertSigningKeyParams, 
 // reload reads every stored key and replaces the snapshot. A key already
 // loaded is not decrypted again: a row is never updated.
 //
-// The active key is the last whose time to sign has come; if none's has,
-// as when the clock of the replica that generated the first key runs
-// ahead of this one's, it is the first to start. A key before the active
-// one is retired once [retention] has passed since the next key's time to
-// sign came: it is then neither decrypted, nor published, nor accepted.
+// A key is retired once [retention] has passed since the next key's time
+// to sign came: it is then neither decrypted, nor published, nor accepted.
 // Its row stays.
 func (s *KeySet) reload(ctx context.Context) error {
 	rows, err := s.queries.ListSigningKeys(ctx)
@@ -369,19 +380,13 @@ func (s *KeySet) reload(ctx context.Context) error {
 		return fmt.Errorf("read signing keys: %w", err)
 	}
 	if len(rows) == 0 {
-		return errors.New("read signing keys: the database holds none")
-	}
-	now := time.Now()
-	active := 0
-	for i, row := range rows {
-		if !row.ActivatesAt.After(now) {
-			active = i
-		}
+		return errNoKey
 	}
 	// Rows come in the order they start signing, so the retired keys come
-	// first.
+	// first, and the last key is never retired.
+	now := time.Now()
 	first := 0
-	for first < active && !now.Before(rows[first+1].ActivatesAt.Add(retention)) {
+	for first+1 < len(rows) && !now.Before(rows[first+1].ActivatesAt.Add(retention)) {
 		first++
 	}
 	var previous map[string]*rsa.PrivateKey
@@ -389,9 +394,11 @@ func (s *KeySet) reload(ctx context.Context) error {
 		previous = snap.keys
 	}
 
-	keys := make(map[string]*rsa.PrivateKey, len(rows)-first)
-	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(rows)-first)}
-	for _, row := range rows[first:] {
+	published := rows[first:]
+	keys := make(map[string]*rsa.PrivateKey, len(published))
+	signers := make([]signer, 0, len(published))
+	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(published))}
+	for _, row := range published {
 		key, ok := previous[row.Kid]
 		if !ok {
 			key, err = s.open(row.Kid, row.SealedPrivateKey)
@@ -400,6 +407,7 @@ func (s *KeySet) reload(ctx context.Context) error {
 			}
 		}
 		keys[row.Kid] = key
+		signers = append(signers, signer{KID: row.Kid, Signer: key, from: row.ActivatesAt})
 		set.Keys = append(set.Keys, jose.JSONWebKey{
 			Key:       &key.PublicKey,
 			KeyID:     row.Kid,
@@ -411,12 +419,7 @@ func (s *KeySet) reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("encode JWK Set: %w", err)
 	}
-	kid := rows[active].Kid
-	s.loaded.Store(&snapshot{
-		keys:   keys,
-		active: Key{KID: kid, Signer: keys[kid]},
-		jwks:   jwks,
-	})
+	s.loaded.Store(&snapshot{keys: keys, signers: signers, jwks: jwks})
 	return nil
 }
 

@@ -141,10 +141,11 @@ func TestRotateActivatesAfterDelay(t *testing.T) {
 // tokens verify, until every token it signed has expired; then it leaves
 // the JWK Set and its tokens no longer verify.
 //
-// The old key's last token comes from a second replica whose reload falls
-// 1ns before the new key's time to sign, so that it goes on signing with
-// the old key for one more reload interval: the latest any replica that
-// reloads on time can sign with it.
+// A second replica reloads 1ns before the new key's time to sign and next
+// a reload interval later. It signs the old key's last token 1ns before
+// that time, and switches to the new key when the time comes, not at its
+// next reload: a replica whose reload then fails or is slow does not go on
+// signing with a key the others are about to retire.
 func TestRotatedOutKeyLeavesJWKSAfterItsTokensExpire(t *testing.T) {
 	t.Parallel()
 
@@ -158,21 +159,21 @@ func TestRotatedOutKeyLeavesJWKSAfterItsTokensExpire(t *testing.T) {
 			t.Fatalf("Rotate() error = %v", err)
 		}
 
-		// b reloads every minute from 1ns before the first minute, so at
-		// 1ns before the new key's time to sign, two minutes in, and next
-		// at 1ns before three minutes.
+		// b reloads every minute from 1ns before the first minute: at 1ns
+		// before two minutes, the new key's time to sign, and next at 1ns
+		// before three.
 		time.Sleep(signing.ReloadInterval - time.Nanosecond)
 		b := startReplica(t, databaseURL)
 
-		sleepUntil(start.Add(3*time.Minute - 2*time.Nanosecond))
+		sleepUntil(start.Add(2*time.Minute - time.Nanosecond))
 		kid, last := signedBy(t, b.KeySet)
 		if kid != old {
-			t.Fatalf("SignJWT() on the late replica just before its reload signed with %q, want the old key %q", kid, old)
+			t.Fatalf("SignJWT() on the second replica 1ns before the new key's time signed with %q, want the old key %q", kid, old)
 		}
 		lastExpiry := time.Now().Add(oidc.TokenLifetime)
-		sleepUntil(start.Add(3*time.Minute - time.Nanosecond))
+		sleepUntil(start.Add(2 * time.Minute))
 		if kid, _ := signedBy(t, b.KeySet); kid != rotated.KID {
-			t.Fatalf("SignJWT() on the late replica after its reload signed with %q, want the rotated key %q", kid, rotated.KID)
+			t.Errorf("SignJWT() on the second replica at the new key's time, before its next reload, signed with %q, want the rotated key %q", kid, rotated.KID)
 		}
 
 		// Two minutes to the new key's time to sign, one reload interval,
@@ -200,10 +201,11 @@ func TestRotatedOutKeyLeavesJWKSAfterItsTokensExpire(t *testing.T) {
 			t.Errorf("SignJWT() %v after Rotate() signed with %q, want the rotated key %q", gone.Sub(start), kid, rotated.KID)
 		}
 
-		// b reloads one interval later than a, at 1ns before 14 minutes.
+		// b reloads 1ns before a, at 1ns before 13 minutes, so its first
+		// reload from 13 minutes is at 1ns before 14.
 		sleepUntil(start.Add(14*time.Minute - time.Nanosecond))
 		if diff := cmp.Diff([]string{rotated.KID}, sortedKids(decodeJWKS(t, getJWKS(t, b.KeySet)))); diff != "" {
-			t.Errorf("GET /jwks on the late replica at its first reload from %v after Rotate() kids mismatch (-want +got):\n%s", gone.Sub(start), diff)
+			t.Errorf("GET /jwks on the second replica at its first reload from %v after Rotate() kids mismatch (-want +got):\n%s", gone.Sub(start), diff)
 		}
 	})
 }
@@ -242,4 +244,24 @@ func TestRotateRefuses(t *testing.T) {
 			t.Fatal("Rotate() with no key stored error = nil, want an error")
 		}
 	})
+}
+
+// A key stored by a replica of a release before rotation, which knows no
+// activates_at, signs from when it was generated: such a replica may store
+// the first key while a rolling deploy runs. The test clears the column of
+// a stored key, as that replica's insert would leave it.
+func TestLoadKeyOfEarlierRelease(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	stored, err := load(t, pool).Active()
+	if err != nil {
+		t.Fatalf("Active() error = %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), "UPDATE signing_keys SET activates_at = NULL"); err != nil {
+		t.Fatalf("clear activates_at: %v", err)
+	}
+	if kid, _ := signedBy(t, load(t, pool)); kid != stored.KID {
+		t.Errorf("SignJWT() with a key of an earlier release signed with %q, want %q", kid, stored.KID)
+	}
 }
