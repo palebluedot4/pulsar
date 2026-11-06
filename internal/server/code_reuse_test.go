@@ -21,7 +21,8 @@ import (
 // challenge, the matching code_verifier, fails with invalid_grant, and
 // UserInfo then refuses the access token issued from the code with 401 and
 // invalid_token: at once, 30 seconds later, and after the code has
-// expired, while the token has not.
+// expired, while the token has not, even once another code has been
+// issued, which deletes expired codes.
 func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 	t.Parallel()
 
@@ -30,10 +31,14 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 		wait     time.Duration // between the two redemptions
 		client   pkceClient
 		verifier string // the code_verifier of both redemptions, if any
+		// issueAnother is whether another code is issued after the wait,
+		// which deletes the codes whose records are no longer kept.
+		issueAnother bool
 	}{
 		{name: "at once", client: rpNoPKCE},
 		{name: "30 seconds later", wait: 30 * time.Second, client: rpNoPKCE},
 		{name: "after the code expired", wait: 5 * time.Minute, client: rpNoPKCE},
+		{name: "after the code expired and another was issued", wait: 5 * time.Minute, client: rpNoPKCE, issueAnother: true},
 		{name: "with PKCE", client: rpPKCE, verifier: pkceVerifier},
 		{name: "by a public Client", client: publicPKCE, verifier: pkceVerifier},
 	}
@@ -46,6 +51,9 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 				form := tt.client.form(tt.client.code(t, handler), tt.verifier)
 				accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, form))
 				time.Sleep(tt.wait)
+				if tt.issueAnother {
+					tt.client.code(t, handler)
+				}
 				if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
 					t.Errorf("UserInfo before the second redemption claims mismatch (-want +got):\n%s", diff)
 				}
@@ -177,9 +185,11 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-29: a code whose record has been deleted, as an expired code's
-// is, revokes nothing when presented again: without the record, nothing
-// shows that the request's parameters are the code's.
+// REQ-OAUTH-29: a code whose record has been deleted revokes nothing when
+// presented again: without the record, nothing shows that the request's
+// parameters are the code's. pulsar deletes a redeemed code's record only
+// once the access tokens issued from it have expired; the test deletes it
+// sooner, so that the tokens are still there to be revoked.
 func TestTokenCodeReuseAfterRecordDeletedRevokesNothing(t *testing.T) {
 	t.Parallel()
 

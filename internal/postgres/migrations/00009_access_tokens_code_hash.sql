@@ -1,7 +1,7 @@
 -- The index by which a second redemption of an authorization code finds
 -- the access tokens issued from it, to revoke them (internal/oidc, RFC 6749
--- §4.1.2). Every token request whose code cannot be redeemed looks them up,
--- so without it each would scan the table.
+-- §4.1.2). Every valid second redemption of a code looks them up, so
+-- without it each would scan the table.
 --
 -- The index is built in the migration's transaction, not CONCURRENTLY,
 -- which blocks recording access tokens while it builds. The table holds
