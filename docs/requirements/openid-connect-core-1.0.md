@@ -175,7 +175,8 @@ that pulsar, as an OP, must or should meet.
   The decision is the End-User's, on the consent page, which names the
   Client by its `client_id` and lists the scopes it asks for. It is
   remembered as a Consent per End-User and Client, which a later request
-  for no other scopes reuses.
+  for no other scopes reuses. A Consent never includes `offline_access`
+  (REQ-CORE-53).
 
 ### Error codes (§3.1.2.6)
 
@@ -364,3 +365,41 @@ are those of `private_key_jwt`.
   pulsar reads "a reasonable period" as until every token the key signed
   has expired: one reload interval plus the token lifetime after the next
   key's time to sign (ADR 0003).
+
+## Offline access (§11)
+
+- REQ-CORE-52 (§11, `offline_access`): "This scope value requests that an
+  OAuth 2.0 Refresh Token be issued that can be used to obtain an Access
+  Token that grants access to the End-User's UserInfo Endpoint even when
+  the End-User is not present (not logged in)."
+
+  When the End-User allows it, the token response that redeems the code
+  carries a refresh token (REQ-OAUTH-30) and `offline_access` in its
+  `scope`. Public Clients receive one under the same rules as
+  confidential ones. No grant redeems it yet, and discovery does not list
+  `offline_access`; #51 adds both.
+
+- REQ-CORE-53 (§11): "The OP MUST always obtain consent to returning a
+  Refresh Token that enables offline access to the requested resources. A
+  previously saved user consent is not always sufficient to grant offline
+  access."
+
+  The consent page lists `offline_access`, with what it allows: that the
+  Client can keep acting for the End-User while they are away. A Consent
+  never includes it, so every request for it asks the End-User again;
+  denying it denies the request, with `access_denied`. pulsar so also
+  meets §11's "MUST explicitly receive or have consent for offline access
+  when the registered application_type is web" and its SHOULD for
+  `native`, for every Client.
+
+- REQ-CORE-54 (§11): "MUST ensure that the prompt parameter contains
+  consent unless other conditions for processing the request permitting
+  offline access to the requested resources are in place; unless one or
+  both of these conditions are fulfilled, then it MUST ignore the
+  offline_access request,"
+
+  pulsar has no such other conditions. Without `prompt=consent`,
+  `offline_access` is dropped from the request's scope, and the request
+  proceeds without it. §11 also has the OP ignore it "unless the Client is
+  using a response_type value that would result in an Authorization Code
+  being returned"; `code` is the only `response_type` pulsar accepts.

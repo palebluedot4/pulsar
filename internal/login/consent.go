@@ -49,9 +49,15 @@ func (c *Consents) Covers(ctx context.Context, subject, clientID string, scopes 
 	return true, nil
 }
 
-// Allow adds scopes to what the End-User whose Subject is subject has
-// allowed the Client clientID.
+// OfflineAccess is the scope value by which a Client asks for offline
+// access (OpenID Connect Core 1.0 §11). No Consent includes it, so that
+// every request for it asks the End-User.
+const OfflineAccess = "offline_access"
+
+// Allow adds scopes, except [OfflineAccess], to what the End-User whose
+// Subject is subject has allowed the Client clientID.
 func (c *Consents) Allow(ctx context.Context, subject, clientID string, scopes []string) error {
+	scopes = slices.DeleteFunc(slices.Clone(scopes), func(s string) bool { return s == OfflineAccess })
 	if err := c.queries.AddToConsent(ctx, queries.AddToConsentParams{Subject: subject, ClientID: clientID, Scopes: scopes}); err != nil {
 		return fmt.Errorf("add to the Consent: %w", err)
 	}

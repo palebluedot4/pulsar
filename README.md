@@ -16,12 +16,16 @@ reach it. UserInfo returns the End-User's `sub` and the claims of the
 `profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
 with the access token in the `Authorization` header or the body; the
 `claims` parameter requests individual claims in the ID token or from
-UserInfo. A second redemption of a code that is otherwise valid, by its
-own Client, with its redirect URI, and with a matching `code_verifier`
-exactly when the code has a challenge, revokes the access tokens issued
-from it, and `pulsar keys rotate` rotates the signing key. The OpenID
-conformance suite's Config OP and Basic OP plans run against it in CI;
-on 2026-11-06, at commit `8d6ab47`, they finished with no failures, as
+UserInfo. A request with `offline_access` and `prompt=consent` asks the
+End-User for offline access, and if they allow it, the token response
+carries a refresh token, which no grant redeems yet
+([#51](https://github.com/palebluedot4/pulsar/issues/51)). A second
+redemption of a code that is otherwise valid, by its own Client, with its
+redirect URI, and with a matching `code_verifier` exactly when the code
+has a challenge, revokes the access tokens issued from it, and
+`pulsar keys rotate` rotates the signing key. The OpenID conformance
+suite's Config OP and Basic OP plans run against it in CI; on
+2026-11-06, at commit `8d6ab47`, they finished with no failures, as
 [Checking conformance](#checking-conformance) details. The next
 specification is refresh tokens, each replaced on every use, a replaced one
 presented again revoking its whole Refresh Token Family
