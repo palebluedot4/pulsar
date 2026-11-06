@@ -9,9 +9,9 @@ VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_
 -- Marks the code redeemed and returns what it was issued for, if it was
 -- issued to this Client for this redirect URI with this code challenge,
 -- has not expired and has not been redeemed. The code challenge is the one
--- the token request's code_verifier makes, or '' if it sent none, so that
--- a code issued with a challenge needs its verifier, and one issued
--- without needs none and refuses one. A request that matches no row
+-- the token request's code_verifier makes, or the empty string if it sent
+-- none, so that a code issued with a challenge needs its verifier, and one
+-- issued without needs none and refuses one. A request that matches no row
 -- leaves the code as it was. Under read committed, of two transactions
 -- redeeming one code, the second waits for the first and then finds it
 -- redeemed.
