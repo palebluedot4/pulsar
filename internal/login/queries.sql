@@ -18,3 +18,16 @@ WHERE token = @token;
 -- name: DeleteEndedLoginSessions :exec
 DELETE FROM login_sessions
 WHERE expiry <= @now;
+
+-- name: FindConsent :one
+SELECT scopes
+FROM consents
+WHERE subject = @subject AND client_id = @client_id;
+
+-- name: GrantConsent :exec
+-- Adds scopes to the Consent of the End-User for the Client, creating it if
+-- there is none, in one statement, so that two grants at once both count.
+INSERT INTO consents (subject, client_id, scopes)
+VALUES (@subject, @client_id, @scopes::text[])
+ON CONFLICT (subject, client_id) DO UPDATE
+SET scopes = ARRAY(SELECT DISTINCT unnest(consents.scopes || excluded.scopes));

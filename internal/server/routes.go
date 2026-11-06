@@ -36,11 +36,13 @@ func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, poo
 	loginPage := whenReady(ready, sessions.Handler(loginPath, authorizationPath, logger))
 	mux.Handle("GET "+loginPath, loginPage)
 	mux.Handle("POST "+loginPath, loginPage)
+	consentPath := issuer.Route(login.ConsentPath)
+	mux.Handle("POST "+consentPath, whenReady(ready, sessions.ConsentHandler(authorizationPath, logger)))
 
 	// The protocol endpoints are not protected against cross-origin
 	// requests: a Client sends them from its own origin.
-	op := oidc.NewProvider(issuer, reg, sessions, keys, pool, logger)
-	authorization := whenReady(ready, op.HandleAuthorization(loginPath))
+	op := oidc.NewProvider(issuer, reg, sessions, login.NewConsents(pool), keys, pool, logger)
+	authorization := whenReady(ready, op.HandleAuthorization(loginPath, consentPath))
 	mux.Handle("GET "+authorizationPath, authorization)
 	mux.Handle("POST "+authorizationPath, authorization)
 	mux.Handle("POST "+oidc.TokenPath(issuer), whenReady(ready, op.HandleToken()))
