@@ -130,42 +130,37 @@ SET redeemed = true
 WHERE code_hash = $1
     AND client_id = $2
     AND redirect_uri = $3
-    AND code_challenge = $4
-    AND expiry > $5
+    AND expiry > $4
     AND NOT redeemed
-RETURNING subject, scopes, nonce, auth_time
+RETURNING subject, scopes, nonce, code_challenge, auth_time
 `
 
 type RedeemAuthorizationCodeParams struct {
-	CodeHash      []byte
-	ClientID      string
-	RedirectUri   string
-	CodeChallenge string
-	Now           time.Time
+	CodeHash    []byte
+	ClientID    string
+	RedirectUri string
+	Now         time.Time
 }
 
 type RedeemAuthorizationCodeRow struct {
-	Subject  string
-	Scopes   []string
-	Nonce    string
-	AuthTime time.Time
+	Subject       string
+	Scopes        []string
+	Nonce         string
+	CodeChallenge string
+	AuthTime      time.Time
 }
 
 // Marks the code redeemed and returns what it was issued for, if it was
-// issued to this Client for this redirect URI with this code challenge,
-// has not expired and has not been redeemed. The code challenge is the one
-// the token request's code_verifier makes, or the empty string if it sent
-// none, so that a code issued with a challenge needs its verifier, and one
-// issued without needs none and refuses one. A request that matches no row
-// leaves the code as it was. Under read committed, of two transactions
-// redeeming one code, the second waits for the first and then finds it
-// redeemed.
+// issued to this Client for this redirect URI, has not expired and has not
+// been redeemed. The caller checks the code challenge it returns, and
+// issues no token if the token request's code_verifier does not match it.
+// Under read committed, of two transactions redeeming one code, the second
+// waits for the first and then finds it redeemed.
 func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthorizationCodeParams) (RedeemAuthorizationCodeRow, error) {
 	row := q.db.QueryRow(ctx, redeemAuthorizationCode,
 		arg.CodeHash,
 		arg.ClientID,
 		arg.RedirectUri,
-		arg.CodeChallenge,
 		arg.Now,
 	)
 	var i RedeemAuthorizationCodeRow
@@ -173,6 +168,7 @@ func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthori
 		&i.Subject,
 		&i.Scopes,
 		&i.Nonce,
+		&i.CodeChallenge,
 		&i.AuthTime,
 	)
 	return i, err
