@@ -8,8 +8,10 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -27,6 +29,10 @@ type Config struct {
 	// DatabaseURL is the PostgreSQL connection string, as a URL or in
 	// keyword/value form, with any pgxpool settings.
 	DatabaseURL string
+
+	// Secret is the key from which pulsar derives the key that encrypts
+	// its signing keys at rest.
+	Secret Secret
 
 	// TLSCertFile and TLSKeyFile name a PEM certificate chain and its
 	// private key. Both are set, and pulsar serves TLS itself, or neither.
@@ -78,5 +84,50 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("PULSAR_DATABASE_URL is not a valid PostgreSQL connection string, " +
 			"or a PG* environment variable or service file that pgx reads with it is invalid")
 	}
+
+	secret, err := parseSecret(getenv("PULSAR_SECRET"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Secret = secret
 	return cfg, nil
+}
+
+// SecretSize is the size of PULSAR_SECRET, in bytes, once decoded.
+const SecretSize = 32
+
+// Secret is the decoded PULSAR_SECRET. It prints, and encodes as JSON or
+// text, as a placeholder, so that a Config printed or logged by mistake
+// does not disclose it.
+type Secret [SecretSize]byte
+
+// redacted is what a Secret prints and encodes as.
+const redacted = "[redacted]"
+
+// Format writes the placeholder, whatever the verb.
+func (Secret) Format(f fmt.State, _ rune) {
+	_, _ = io.WriteString(f, redacted) // fmt reports no write error to its caller.
+}
+
+// MarshalText returns the placeholder, so that encoding/json and log/slog
+// print it in place of the bytes.
+func (Secret) MarshalText() ([]byte, error) {
+	return []byte(redacted), nil
+}
+
+// parseSecret decodes PULSAR_SECRET: SecretSize bytes in the standard,
+// padded base64 alphabet of RFC 4648 §4, as `openssl rand -base64 32`
+// prints them. Its errors never include the value, nor where in it
+// decoding failed.
+func parseSecret(raw string) (Secret, error) {
+	if raw == "" {
+		return Secret{}, errors.New("PULSAR_SECRET is required: 32 random bytes in standard, padded base64, " +
+			"such as `openssl rand -base64 32` prints")
+	}
+	b, err := base64.StdEncoding.Strict().DecodeString(raw)
+	if err != nil || len(b) != SecretSize {
+		return Secret{}, errors.New("PULSAR_SECRET must be 32 random bytes in standard, padded base64, " +
+			"such as `openssl rand -base64 32` prints")
+	}
+	return Secret(b), nil
 }

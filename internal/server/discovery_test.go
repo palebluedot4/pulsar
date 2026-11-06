@@ -90,8 +90,9 @@ func TestDiscovery(t *testing.T) {
 	}
 }
 
-// REQ-DISC-12: the document is served under the issuer's path only, and
-// the endpoints it names that later tickets implement answer 404 until then.
+// REQ-DISC-12: the document and the JWK Set are served under the issuer's
+// path only, and the endpoints the document names that later tickets
+// implement answer 404 until then.
 func TestNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -100,7 +101,7 @@ func TestNotFound(t *testing.T) {
 		"/tenant/authorize",
 		"/tenant/token",
 		"/tenant/userinfo",
-		"/tenant/jwks",
+		"/jwks",
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {

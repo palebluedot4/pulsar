@@ -3,24 +3,32 @@
 An OpenID Connect Provider in Go, built by AI agents under a harness that has
 to prove it helps. The provider is the artifact; the method is the subject.
 It is a reference implementation, not for production use. So far it serves
-liveness and readiness checks and its discovery document; the other OpenID
-endpoints are next.
+liveness and readiness checks, its discovery document and its JWK Set; the
+other OpenID endpoints are next.
 
 ## Running it
 
 pulsar keeps its state in PostgreSQL, in a database that must exist. It
-serves at once and applies its migrations meanwhile: `/readyz` answers 503
-until they are applied, and pulsar exits if they fail. After that `/readyz`
-answers 200 while a ping through its connection pool succeeds, and 503 when
-one fails.
+serves at once and meanwhile applies its migrations and loads its signing
+keys, generating the first one if the database holds none: `/readyz` and the
+JWK Set answer 503 until both are done, and pulsar exits if either fails.
+After that `/readyz` answers 200 while a ping through its connection pool
+succeeds, and 503 when one fails.
+
+The private keys are stored encrypted under a key derived from
+`PULSAR_SECRET`, 32 random bytes in base64. Keep it: with another secret,
+pulsar cannot decrypt its keys and refuses to start.
 
 ```sh
+# Once per database; every later start needs the same value.
+export PULSAR_SECRET="$(openssl rand -base64 32)"
 # Listens on :8080; PULSAR_ADDR overrides. The issuer must be https, except
 # on a loopback host.
 PULSAR_ISSUER=http://localhost:8080 \
   PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
   go run ./cmd/pulsar
 curl -i localhost:8080/.well-known/openid-configuration
+curl -i localhost:8080/jwks
 curl -i localhost:8080/readyz
 ```
 

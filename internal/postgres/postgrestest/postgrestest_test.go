@@ -55,6 +55,33 @@ func TestNewDatabaseGivesEachTestItsOwn(t *testing.T) {
 	}
 }
 
+// ResolveHost names the same database by an IP address, so that pgx, given
+// it inside a testing/synctest bubble, never calls net's resolver.
+func TestResolveHost(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.NewDatabase(t)
+	resolved := postgrestest.ResolveHost(t, databaseURL)
+	u, err := url.Parse(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if net.ParseIP(u.Hostname()) == nil {
+		t.Errorf("ResolveHost(%q) host = %q, want an IP address", databaseURL, u.Hostname())
+	}
+	var got string
+	if err := postgrestest.Open(t, resolved).QueryRow(t.Context(), "SELECT current_database()").Scan(&got); err != nil {
+		t.Fatalf("connect to ResolveHost(%q): %v", databaseURL, err)
+	}
+	original, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.TrimPrefix(original.Path, "/"); got != want {
+		t.Errorf("ResolveHost(%q) connects to database %q, want %q", databaseURL, got, want)
+	}
+}
+
 // The unreachable server refuses connections, and its port stays reserved
 // for the whole test, so a server a parallel test starts cannot take it.
 func TestUnreachableURL(t *testing.T) {

@@ -6,8 +6,11 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
+	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 func mustParse(t *testing.T, raw string) *oidc.Issuer {
@@ -19,19 +22,26 @@ func mustParse(t *testing.T, raw string) *oidc.Issuer {
 	return issuer
 }
 
-// migrated returns a channel that is already closed: the schema is
-// migrated.
-func migrated() <-chan struct{} {
+// ready returns a channel that is already closed: the schema is migrated
+// and the signing keys are loaded.
+func ready() <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
+}
+
+// newHandler returns the handler for the OP at issuer, backed by pool, with
+// a key set that is never loaded.
+func newHandler(t *testing.T, issuer *oidc.Issuer, pool *pgxpool.Pool, ready <-chan struct{}) http.Handler {
+	t.Helper()
+	return New(issuer, pool, signing.New(pool, [32]byte{}), ready)
 }
 
 // newHandlerWithoutDatabase returns the handler for the OP at issuer, with
 // PostgreSQL unreachable, for endpoints that must not depend on it.
 func newHandlerWithoutDatabase(t *testing.T, issuer string) http.Handler {
 	t.Helper()
-	return New(mustParse(t, issuer), postgrestest.Open(t, postgrestest.UnreachableURL(t)), migrated())
+	return newHandler(t, mustParse(t, issuer), postgrestest.Open(t, postgrestest.UnreachableURL(t)), ready())
 }
 
 func TestLive(t *testing.T) {
@@ -65,9 +75,9 @@ func TestReady(t *testing.T) {
 
 	issuer := mustParse(t, "https://op.example")
 	reachablePool := postgrestest.Open(t, postgrestest.NewDatabase(t))
-	reachable := New(issuer, reachablePool, migrated())
-	migrating := New(issuer, reachablePool, make(chan struct{}))
-	unreachable := New(issuer, postgrestest.Open(t, postgrestest.UnreachableURL(t)), migrated())
+	reachable := newHandler(t, issuer, reachablePool, ready())
+	starting := newHandler(t, issuer, reachablePool, make(chan struct{}))
+	unreachable := newHandler(t, issuer, postgrestest.Open(t, postgrestest.UnreachableURL(t)), ready())
 
 	// A pool of one connection, held by the test: PostgreSQL answers, but
 	// the replica could not serve a request that needs it.
@@ -84,7 +94,7 @@ func TestReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(held.Release)
-	saturated := New(issuer, saturatedPool, migrated())
+	saturated := newHandler(t, issuer, saturatedPool, ready())
 
 	tests := []struct {
 		name    string
@@ -98,7 +108,7 @@ func TestReady(t *testing.T) {
 		{name: "unreachable", handler: unreachable, method: http.MethodGet, want: http.StatusServiceUnavailable},
 		{name: "unreachable", handler: unreachable, method: http.MethodHead, want: http.StatusServiceUnavailable},
 		{name: "saturated", handler: saturated, method: http.MethodGet, want: http.StatusServiceUnavailable},
-		{name: "reachable, not yet migrated", handler: migrating, method: http.MethodGet, want: http.StatusServiceUnavailable},
+		{name: "reachable, not yet migrated or without keys", handler: starting, method: http.MethodGet, want: http.StatusServiceUnavailable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+tt.method, func(t *testing.T) {
