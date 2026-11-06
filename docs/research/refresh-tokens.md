@@ -3,8 +3,8 @@
 Surveyed 2026-11-06 for #47, the refresh token specification. It covers two
 questions: what the conformance suite's `oidcc-refresh-token` module needs
 from pulsar to pass rather than skip, and how long other providers keep
-recognizing a reused authorization code once refresh tokens exist, and what
-they revoke when they do.
+recognizing a reused authorization code once refresh tokens exist, and
+whether a replay with invalid parameters revokes anything.
 
 The OpenID conformance suite was read at `release-v5.3.4`, with paths under
 `src/main/java/net/openid/conformance/`. Open-source providers were read from
@@ -16,8 +16,9 @@ their source at these tags:
 - node-oidc-provider v9.13.3
 - Keycloak 26.8.2
 
-Paths are relative to each repository at its tag. OAuth 2.1 was read as draft-ietf-oauth-v2-1-17 (October 2026),
-which is still a draft. Anything not confirmed is marked **UNVERIFIED**.
+Paths are relative to each repository at its tag. OAuth 2.1 was read as
+draft-ietf-oauth-v2-1-17 (October 2026), which is still a draft. Anything not
+confirmed is marked **UNVERIFIED**.
 
 ## The suite's oidcc-refresh-token module
 
@@ -76,14 +77,18 @@ checks refresh tokens on code reuse, or a replay after the code's lifetime.
 - Discovery lists `offline_access` and `refresh_token`. Each refresh returns
   a new refresh token and ID token, so that the suite checks both.
 - A used code is kept, linked to the Refresh Token Family it started, until
-  the family ends and the code itself has expired, as Spring and fosite keep
-  theirs. So a reuse is recognized
-  for as long as there is a family to revoke, and no longer.
-- pulsar revokes only on a replay that would otherwise be valid: the same
-  Client, the same redirect URI and a matching `code_verifier`. This follows
-  OAuth 2.1 §7.5.3, as Spring and node-oidc-provider do. The keeping of the
-  used code is what makes this possible, since checking a replay needs the
-  code's Client, redirect URI and challenge. It changes what #22 decided,
+  the family ends and the code itself has expired. So a reuse is recognized
+  for as long as there is a family to revoke, and no longer. Spring and
+  fosite keep theirs at least as long; neither deletes a used code by
+  itself.
+- pulsar revokes only on a replay whose parameters are valid, as OAuth 2.1
+  §7.5.3 asks and Spring and node-oidc-provider do: the request
+  authenticates as the code's Client, by that Client's registered method,
+  and carries the code's redirect URI and a `code_verifier` that matches its
+  challenge. The code's own expiry is not one of these parameters: a valid
+  replay after the code has expired still revokes, as long as the family
+  lives. The keeping of the used code is what makes this possible, since
+  checking a replay needs the code's Client, redirect URI and challenge. It changes what #22 decided,
   which revoked whichever Client presented the code. The change matters now
   that a family lasts thirty days: anyone who has seen a code could otherwise
   end an End-User's offline access with any Client.
