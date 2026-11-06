@@ -18,8 +18,8 @@ with the access token in the `Authorization` header or the body; the
 `claims` parameter requests individual claims in the ID token or from
 UserInfo. A second redemption of a code revokes the access tokens issued
 from it, and `pulsar keys rotate` rotates the signing key. The OpenID
-conformance suite's Config OP and Basic OP plans run against it in CI, and
-passed on 2026-11-06 at commit `bd97ab0`, as
+conformance suite's Config OP and Basic OP plans run against it in CI;
+on 2026-11-06, at commit `bd97ab0`, they finished with no failures, as
 [Checking conformance](#checking-conformance) details. The next
 specification, not yet written, is the token lifecycle: refresh tokens,
 revocation and introspection.
@@ -135,15 +135,16 @@ module that `conformance/` does not list with a reason, and leaves the
 results in `conformance/results/`. CI runs the same target on every pull
 request.
 
+[conformance/README.md](conformance/README.md) describes the files it uses.
+
 On 2026-11-06, CI ran both plans against commit `bd97ab0`, of
 [#46](https://github.com/palebluedot4/pulsar/pull/46), with no failures.
 Of the Basic OP plan's 35 modules, 28 passed; one ended in a warning,
 since pulsar never returns `acr`; two were skipped, since pulsar issues no
 refresh tokens and supports no request objects; and four ended in
-`REVIEW`, a page left for a person to look at, as
-[conformance/README.md](conformance/README.md) describes. That is a result
-of the suite's checks, not an OpenID certification.
-[conformance/README.md](conformance/README.md) describes the files it uses.
+`REVIEW`, which the suite leaves for a person to judge from the page it
+records, and which no person has yet reviewed. That is a result of the
+suite's checks, not an OpenID certification.
 
 ## How it is built
 

@@ -175,7 +175,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 	// and then, if both succeeded, reload the keys until the run ends.
 	// The keys are logged as loaded only once the replica is ready, so
 	// that whoever reads the log line, a test included, finds /readyz
-	// answering 200.
+	// past its start-up 503, answering as a ping of the database does.
 	keysCtx, stopKeys := context.WithCancel(ctx)
 	defer stopKeys()
 	startErr := make(chan error, 1)
