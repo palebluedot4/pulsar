@@ -151,13 +151,14 @@ CONFORMANCE_COMPOSE := docker compose --file conformance/compose.yaml
 # and what jq requires of every entry: each field the suite's runner reads
 # (it fails with a KeyError, after running the whole plan, on one that is
 # missing), the file's own result, and a reason. A skip entry names a
-# module, not a condition, so it has no result of its own, and must not
-# carry one that would make it look like a failure or warning.
+# module, not a condition: the runner reads only the module's fields in
+# it, so it may carry nothing else but its reason, lest a condition there
+# make it look narrower than it is.
 CONFORMANCE_EXPECTED := failure:conformance/expected-failures.json warning:conformance/expected-warnings.json skip:conformance/expected-skips.json
 CONFORMANCE_ENTRY := type == "array" and all(.[]; \
 	(["test-name", "variant", "configuration-filename"] - keys) == [] \
 	and (.comment | type) == "string" and .comment != "" \
-	and if $$result == "skip" then has("expected-result") | not \
+	and if $$result == "skip" then (keys - ["test-name", "variant", "configuration-filename", "comment"]) == [] \
 	else (["current-block", "condition"] - keys) == [] and .["expected-result"] == $$result end)
 
 conformance: ## Run the OpenID conformance suite's Config OP and Basic OP plans against pulsar; needs Docker

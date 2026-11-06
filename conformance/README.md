@@ -36,8 +36,10 @@ matches nothing, so no file can go stale. Each entry is an object in the
 suite's own format, with a `comment` giving its reason. `make conformance`
 refuses an entry without one, a failure or warning entry whose
 `expected-result` is not the one its file is named for, and a skip entry
-with an `expected-result`; a skip entry names only the module, by
-`test-name`, `variant` and `configuration-filename`:
+with any field but `test-name`, `variant`, `configuration-filename` and
+`comment`, since it names a whole module. The runner also counts a listed
+module that ends `FAILED` as the skip expected, though any condition that
+failed in it is still reported unless listed. An entry looks like this:
 
 ```json
 {
@@ -63,8 +65,10 @@ the login page shown again for `prompt=login` and for `max_age=1`;
 `oidcc-ensure-request-object-with-redirect-uri` review the error page
 pulsar shows for a redirect URI the Client did not register. Such a module
 ends in `REVIEW`, which the runner accepts.
-`config-basic.json` overrides the browser automation for these modules
-so that, on reaching that page, it hands the page to the suite, which
-records it in the module's log. The suite records the page's HTML, not a
+The browser automation in `config-basic.json` hands that page to the
+suite, which records it in the module's log: any login page does so for a
+module waiting for one, and an override does so for each of the two
+modules that expect the error page. A module whose page never comes never
+finishes, and the run fails. The suite records the page's HTML, not a
 screenshot: its browser automation cannot take one. The exported results in
 `results/` keep that HTML in each module's JSON log.

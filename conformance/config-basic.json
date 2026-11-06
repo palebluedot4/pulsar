@@ -18,7 +18,7 @@
   },
   "browser": [
     {
-      "comment": "Every authorization that succeeds: the login page and the consent page when pulsar shows them, then the suite's callback page.",
+      "comment": "Every authorization that succeeds: the login page and the consent page when pulsar shows them, then the suite's callback page. A login page fills the module's placeholder if it has one: only oidcc-prompt-login and oidcc-max-age-1 do, for their second login, and they never finish until it is filled.",
       "match": "https://pulsar:9443/authorize*",
       "tasks": [
         {
@@ -26,6 +26,14 @@
           "optional": true,
           "match": "https://pulsar:9443/login*",
           "commands": [
+            [
+              "wait",
+              "xpath",
+              "//*",
+              10,
+              "Sign in",
+              "update-image-placeholder-optional"
+            ],
             ["text", "name", "username", "conformance"],
             ["text", "name", "password", "conformance-password"],
             ["click", "xpath", "//button[@type='submit']"]
@@ -48,88 +56,6 @@
     }
   ],
   "override": {
-    "oidcc-prompt-login": {
-      "browser": [
-        {
-          "comment": "As the default, but the login page of the second authorization, which prompt=login asks for, fills the module's placeholder; the first authorization has none to fill.",
-          "match": "https://pulsar:9443/authorize*",
-          "tasks": [
-            {
-              "task": "Login",
-              "optional": true,
-              "match": "https://pulsar:9443/login*",
-              "commands": [
-                [
-                  "wait",
-                  "xpath",
-                  "//*",
-                  10,
-                  "Sign in",
-                  "update-image-placeholder-optional"
-                ],
-                ["text", "name", "username", "conformance"],
-                ["text", "name", "password", "conformance-password"],
-                ["click", "xpath", "//button[@type='submit']"]
-              ]
-            },
-            {
-              "task": "Consent",
-              "optional": true,
-              "match": "https://pulsar:9443/authorize*",
-              "commands": [
-                ["click", "xpath", "//button[normalize-space()='Allow']"]
-              ]
-            },
-            {
-              "task": "Verify Complete",
-              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
-              "commands": [["wait", "id", "submission_complete", 10]]
-            }
-          ]
-        }
-      ]
-    },
-    "oidcc-max-age-1": {
-      "browser": [
-        {
-          "comment": "As oidcc-prompt-login: max_age=1 asks for the second login.",
-          "match": "https://pulsar:9443/authorize*",
-          "tasks": [
-            {
-              "task": "Login",
-              "optional": true,
-              "match": "https://pulsar:9443/login*",
-              "commands": [
-                [
-                  "wait",
-                  "xpath",
-                  "//*",
-                  10,
-                  "Sign in",
-                  "update-image-placeholder-optional"
-                ],
-                ["text", "name", "username", "conformance"],
-                ["text", "name", "password", "conformance-password"],
-                ["click", "xpath", "//button[@type='submit']"]
-              ]
-            },
-            {
-              "task": "Consent",
-              "optional": true,
-              "match": "https://pulsar:9443/authorize*",
-              "commands": [
-                ["click", "xpath", "//button[normalize-space()='Allow']"]
-              ]
-            },
-            {
-              "task": "Verify Complete",
-              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
-              "commands": [["wait", "id", "submission_complete", 10]]
-            }
-          ]
-        }
-      ]
-    },
     "oidcc-ensure-registered-redirect-uri": {
       "browser": [
         {

@@ -62,6 +62,9 @@ services:
   server:
     image: registry.gitlab.com/openid/conformance-suite:release-v5.3.4@sha256:dcc4bd1fb7e9c00f048a67373fe2bec5ecf9feb45a6b5d55e237e5c30e5312c6
     environment:
+      # With config-basic.json's alias, this makes the redirect URI the
+      # Clients in registry.json register, and the callback URL
+      # config-basic.json's browser automation matches; change them together.
       BASE_URL: https://localhost.emobix.co.uk:8443
       BASE_MTLS_URL: https://localhost.emobix.co.uk:8444
       MONGODB_HOST: mongodb
