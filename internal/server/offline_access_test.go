@@ -24,21 +24,21 @@ func offlineAccessParams() url.Values {
 	return requestWith(url.Values{"scope": {"openid offline_access"}, "prompt": {"consent"}})
 }
 
-// grant is what a successful token response grants: its scope, and its
-// refresh token, if any.
-type grant struct {
+// tokenResult is what a successful token response says of offline
+// access: its scope, and its refresh token, if any.
+type tokenResult struct {
 	Scope        string `json:"scope"`
 	RefreshToken string `json:"refresh_token"`
 }
 
-// grantOf returns the grant of a successful token response, failing the
-// test for any other.
-func grantOf(t *testing.T, resp response) grant {
+// tokenResultOf returns the tokenResult of a successful token response,
+// failing the test for any other.
+func tokenResultOf(t *testing.T, resp response) tokenResult {
 	t.Helper()
 	if resp.status != http.StatusOK {
 		t.Fatalf("POST %s status = %d, want %d; body %q", tokenPath, resp.status, http.StatusOK, resp.body)
 	}
-	var g grant
+	var g tokenResult
 	if err := json.Unmarshal([]byte(resp.body), &g); err != nil {
 		t.Fatalf("POST %s body %q is not a token response: %v", tokenPath, resp.body, err)
 	}
@@ -86,9 +86,12 @@ func TestOfflineAccess(t *testing.T) {
 
 			callback := location(t, b.decide(resp, "allow"))
 			form := tt.client.form(callback.Query().Get("code"), tt.verifier)
-			g := grantOf(t, tt.client.redeem(t, handler, form))
-			if g.Scope != "openid offline_access" || g.RefreshToken == "" {
-				t.Errorf("POST %s scope, refresh_token = %q, %q, want %q and a refresh token", tokenPath, g.Scope, g.RefreshToken, "openid offline_access")
+			g := tokenResultOf(t, tt.client.redeem(t, handler, form))
+			if diff := cmp.Diff("openid offline_access", g.Scope); diff != "" {
+				t.Errorf("POST %s scope mismatch (-want +got):\n%s", tokenPath, diff)
+			}
+			if g.RefreshToken == "" {
+				t.Errorf("POST %s refresh_token = %q, want a refresh token", tokenPath, g.RefreshToken)
 			}
 		})
 	}
@@ -102,8 +105,11 @@ func TestOfflineAccess(t *testing.T) {
 // days after the code is redeemed; the access token issued from the code
 // is the family's.
 //
-// Until the refresh_token grant (#51) redeems it, nothing a Client can send
+// Until the refresh_token grant redeems it, nothing a Client can send
 // shows what the family holds, so its record is read.
+//
+// TODO(#51): check the family through the refresh_token grant, and keep
+// reading the database only for the hash-only storage of REQ-OAUTH-31.
 func TestRefreshTokenFamilyStarted(t *testing.T) {
 	t.Parallel()
 
@@ -124,7 +130,7 @@ func TestRefreshTokenFamilyStarted(t *testing.T) {
 		redeemed := time.Now()
 		resp := tokenRequest(t, handler, "rp", rpSecret, codeForm(c))
 		accessToken, _ := tokensOf(t, resp)
-		refreshToken := grantOf(t, resp).RefreshToken
+		refreshToken := tokenResultOf(t, resp).RefreshToken
 		if raw, err := base64.RawURLEncoding.DecodeString(refreshToken); err != nil || len(raw) < 20 {
 			t.Errorf("POST %s refresh_token = %q, want at least 160 bits in base64url", tokenPath, refreshToken)
 		}
@@ -228,7 +234,8 @@ func TestOfflineAccessNotRemembered(t *testing.T) {
 // request signs the End-User in, the consent page does not list offline
 // access, and the token response carries no refresh token and no
 // offline_access in its scope; so does the next request, which the Consent
-// answers without the page.
+// answers without the page, and one with prompt=none, which cannot be
+// combined with prompt=consent and so never grants offline access.
 func TestOfflineAccessWithoutPromptConsent(t *testing.T) {
 	t.Parallel()
 
@@ -239,16 +246,25 @@ func TestOfflineAccessWithoutPromptConsent(t *testing.T) {
 	if diff := cmp.Diff([]string{"openid"}, parseConsentPage(t, resp).scopes); diff != "" {
 		t.Errorf("consent page scopes mismatch (-want +got):\n%s", diff)
 	}
-	want := grant{Scope: "openid"}
+	want := tokenResult{Scope: "openid"}
 	c := location(t, b.decide(resp, "allow")).Query().Get("code")
-	if diff := cmp.Diff(want, grantOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c)))); diff != "" {
-		t.Errorf("POST %s grant mismatch (-want +got):\n%s", tokenPath, diff)
+	if diff := cmp.Diff(want, tokenResultOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c)))); diff != "" {
+		t.Errorf("POST %s scope and refresh_token mismatch (-want +got):\n%s", tokenPath, diff)
 	}
 
 	resp = b.authorize(http.MethodGet, params)
 	wantCode(t, resp, "request with offline_access, answered from the Consent")
 	c = location(t, resp).Query().Get("code")
-	if diff := cmp.Diff(want, grantOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c)))); diff != "" {
-		t.Errorf("POST %s for the request answered from the Consent grant mismatch (-want +got):\n%s", tokenPath, diff)
+	if diff := cmp.Diff(want, tokenResultOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c)))); diff != "" {
+		t.Errorf("POST %s for the request answered from the Consent: scope and refresh_token mismatch (-want +got):\n%s", tokenPath, diff)
+	}
+
+	silent := withScope("openid offline_access")
+	silent.Set("prompt", "none")
+	resp = b.authorize(http.MethodGet, silent)
+	wantCode(t, resp, "request with offline_access and prompt=none")
+	c = location(t, resp).Query().Get("code")
+	if diff := cmp.Diff(want, tokenResultOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c)))); diff != "" {
+		t.Errorf("POST %s for the request with prompt=none: scope and refresh_token mismatch (-want +got):\n%s", tokenPath, diff)
 	}
 }

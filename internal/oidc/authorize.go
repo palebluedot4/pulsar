@@ -54,7 +54,7 @@ func scopeValues(scopes []login.Scope) []string {
 // supportedScope returns the scope whose value is value, if pulsar
 // supports it.
 func supportedScope(value string) (login.Scope, bool) {
-	if value == offlineAccessScope.Value {
+	if value == login.OfflineAccess {
 		return offlineAccessScope, true
 	}
 	i := slices.IndexFunc(supportedScopes, func(s login.Scope) bool { return s.Value == value })
@@ -415,7 +415,7 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	// prompt=consent always shows. Without it, offline_access is ignored
 	// (OpenID Connect Core 1.0 §11).
 	if !slices.Contains(prompt, "consent") {
-		scopes = slices.DeleteFunc(scopes, func(s string) bool { return s == offlineAccessScope.Value })
+		scopes = slices.DeleteFunc(scopes, func(s string) bool { return s == login.OfflineAccess })
 	}
 
 	maxAge := int64(-1)
