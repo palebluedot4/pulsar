@@ -98,7 +98,9 @@ func TestLoad(t *testing.T) {
 	}
 }
 
-// A Config printed or logged by mistake does not disclose the secret.
+// REQ-JWK-4: a Config printed or logged by mistake does not disclose the
+// secret, a symmetric key with which anyone who reads the database has the
+// private signing keys.
 func TestSecretDoesNotFormat(t *testing.T) {
 	t.Parallel()
 

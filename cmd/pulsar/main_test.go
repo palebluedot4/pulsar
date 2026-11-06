@@ -273,7 +273,8 @@ func TestRunRefusesDatabaseURL(t *testing.T) {
 
 // pulsar refuses to start unless PULSAR_SECRET is 32 bytes in standard,
 // padded base64, with an error that names the setting and never repeats
-// its value.
+// its value. REQ-JWK-4: the secret is a symmetric key, and with it anyone
+// who reads the database has the private keys.
 func TestRunRefusesSecret(t *testing.T) {
 	t.Parallel()
 
