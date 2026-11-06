@@ -184,7 +184,12 @@ func (s *KeySet) ensureKey(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+	// Read committed whatever the database's default, so that the recheck
+	// sees a key committed while this transaction waited for the lock.
+	// Under repeatable read the snapshot is taken by the statement that
+	// waits, so the recheck would miss it; under serializable one replica's
+	// insert would fail.
+	err = pgx.BeginTxFunc(ctx, s.db, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
 		if err := q.LockSigningKeyGeneration(ctx, GenerationLockID); err != nil {
 			return fmt.Errorf("lock: %w", err)
