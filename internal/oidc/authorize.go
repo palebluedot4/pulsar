@@ -248,14 +248,23 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		respond(func() { resp.redirectError(w, r, errAccessDenied, "The End-User denied the request.") })
 		return
 	case login.Allowed:
-		if err := p.consents.Allow(ctx, subject, req.client.ID, req.scopes); err != nil {
-			fail(err)
-			return
+		// A public Client's Consent is never consulted (see below), so it
+		// is not kept.
+		if !req.client.Public() {
+			if err := p.consents.Allow(ctx, subject, req.client.ID, req.scopes); err != nil {
+				fail(err)
+				return
+			}
 		}
 	case login.Undecided:
-		// prompt=consent asks again, whatever the Consent covers.
+		// prompt=consent asks again, whatever the Consent covers. So does
+		// every request from a public Client, which cannot authenticate:
+		// another app could send its client_id, so a request is not
+		// answered without the End-User's interaction (RFC 6749 §10.2), and
+		// is processed as if no request had been approved before (RFC 8252
+		// §8.6).
 		covered := false
-		if !req.prompts("consent") {
+		if !req.prompts("consent") && !req.client.Public() {
 			covered, err = p.consents.Covers(ctx, subject, req.client.ID, req.scopes)
 			if err != nil {
 				fail(err)

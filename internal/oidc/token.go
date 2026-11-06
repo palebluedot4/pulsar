@@ -110,6 +110,13 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 		// so every token request must repeat it (RFC 6749 §4.1.3).
 		return nil, badRequest(errInvalidRequest, "The parameter redirect_uri is required.")
 	}
+	// A verifier of another form than RFC 7636 §4.1 gives is refused even
+	// if its challenge matches, as Keycloak refuses it. It gets
+	// invalid_grant, as a verifier that does not match does (§4.6).
+	verifier := params.Get("code_verifier")
+	if verifier != "" && !validPKCEValue(verifier) {
+		return nil, badRequest(errInvalidGrant, "The code_verifier must be 43 to 128 unreserved characters.")
+	}
 
 	client, tokErr := p.authenticateClient(r, params)
 	if tokErr != nil {
@@ -120,13 +127,7 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	// without one, so that a verifier cannot stand in for a challenge never
 	// sent (RFC 9700 §2.1.1).
 	var challenge string
-	if verifier := params.Get("code_verifier"); verifier != "" {
-		// A verifier of another form than RFC 7636 §4.1 gives is refused
-		// even if its challenge matches, as Keycloak refuses it. It gets
-		// invalid_grant, as a verifier that does not match does (§4.6).
-		if !validPKCEValue(verifier) {
-			return nil, badRequest(errInvalidGrant, "The code_verifier must be 43 to 128 unreserved characters.")
-		}
+	if verifier != "" {
 		challenge = codeChallenge(verifier)
 	} else if client.Public() {
 		// A public Client always uses PKCE (ADR 0002), even for a code
@@ -239,9 +240,11 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // code challenge of the request's code_verifier, or "" if it sent none. A
 // code_verifier that does not match uses up the code, so that only one
 // verifier of the form RFC 7636 §4.1 allows can be tried against a code,
-// and a weak one cannot be guessed in the code's lifetime. The code is redeemed and the access token recorded
-// in one transaction, so that a code is redeemed at most once, and only
-// when its token is recorded. The tokens are signed after it commits, so
+// and a weak one cannot be guessed in the code's lifetime.
+//
+// The code is redeemed and the access token recorded in one transaction,
+// so that a code is redeemed at most once, and only when its token is
+// recorded. The tokens are signed after it commits, so
 // that the code's row is not locked meanwhile; signing fails only before
 // the signing keys are loaded, when the endpoint is not served.
 func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI, challenge string) (*tokenResponse, error) {
