@@ -202,12 +202,14 @@ func TestRefreshToken(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-36, REQ-OAUTH-37, REQ-BCP-8, REQ-AT-4, REQ-CORE-43: a refresh
-// without scope is for the scope originally granted; one for a narrower
-// scope issues an access token for that scope alone, which UserInfo
-// answers with that scope's claims, and with those the claims parameter
-// requested from UserInfo, and a refresh token for the scope originally
-// granted, which the next refresh without scope shows.
+// REQ-OAUTH-36, REQ-OAUTH-37, REQ-BCP-8, REQ-AT-4, REQ-CORE-43,
+// REQ-CORE-63: a refresh without scope is for the scope originally
+// granted; one for a narrower scope issues an access token for that scope
+// alone, which UserInfo answers with that scope's claims, and with those
+// the claims parameter requested from UserInfo, an ID token even for a
+// scope without openid, as for the original grant, and a refresh token for
+// the scope originally granted, which the next refresh without scope
+// shows.
 func TestRefreshTokenScope(t *testing.T) {
 	t.Parallel()
 
@@ -224,6 +226,7 @@ func TestRefreshTokenScope(t *testing.T) {
 		{name: "the same, in another order", scope: "offline_access email openid", wantScope: "offline_access email openid", wantUserInfo: claimsOf(aliceEmail)},
 		{name: "narrower", scope: "openid", wantScope: "openid", wantUserInfo: claimsOf()},
 		{name: "narrower, with a value repeated", scope: "openid email email", wantScope: "openid email", wantUserInfo: claimsOf(aliceEmail)},
+		{name: "narrower, without openid", scope: "email offline_access", wantScope: "email offline_access", wantUserInfo: claimsOf(aliceEmail)},
 		{
 			name: "narrower, with a claim requested from UserInfo", claims: `{"userinfo": {"phone_number": null}}`,
 			scope: "openid", wantScope: "openid", wantUserInfo: claimsOf(map[string]any{"phone_number": "+1 555 0100"}),
@@ -246,6 +249,10 @@ func TestRefreshTokenScope(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.wantUserInfo, userInfoClaims(t, userInfo(t, handler, getHeader, got.AccessToken))); diff != "" {
 				t.Errorf("UserInfo for scope %q: claims mismatch (-want +got):\n%s", tt.scope, diff)
+			}
+			// An ID token, for the original grant, whatever the scope.
+			if sub := verify(t, handler, got.IDToken).claims["sub"]; sub != aliceSubject {
+				t.Errorf("POST %s for scope %q: ID token sub = %v, want %q", tokenPath, tt.scope, sub, aliceSubject)
 			}
 
 			next := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, got.RefreshToken, ""))

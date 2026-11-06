@@ -453,7 +453,12 @@ are those of `private_key_jwt`.
 
   It carries the claims the authorization request's `claims` parameter
   asked for in the ID token (REQ-CORE-44), read from the registry when it
-  is issued, so with their values at that time.
+  is issued, so with their values at that time. A refresh for a scope
+  without `openid` still returns one, since the family was granted for an
+  OpenID authentication: §12.2 lets the response omit it, and §3.1.2.1
+  leaves a request without `openid` unspecified. Three of the four
+  open-source providers surveyed issue it so; node-oidc-provider omits it
+  ([research](../research/refresh-tokens.md#a-refresh-whose-scope-leaves-out-openid)).
 
 - REQ-CORE-64 (§12.3): "If the Refresh Request is invalid or unauthorized,
   the Authorization Server returns the Token Error Response as defined in
