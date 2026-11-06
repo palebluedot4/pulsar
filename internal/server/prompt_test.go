@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -87,7 +88,12 @@ func TestPromptNone(t *testing.T) {
 // idToken redeems the code that resp carries and returns the ID token.
 func idToken(t *testing.T, handler http.Handler, resp response) string {
 	t.Helper()
-	code := location(t, resp).Query().Get("code")
+	return redeem(t, handler, location(t, resp).Query().Get("code"))
+}
+
+// redeem redeems code, issued to rp, and returns the ID token.
+func redeem(t *testing.T, handler http.Handler, code string) string {
+	t.Helper()
 	tokens := tokenRequest(t, handler, "rp", rpSecret, codeForm(code))
 	if tokens.status != http.StatusOK {
 		t.Fatalf("POST %s status = %d, want %d; body %q", tokenPath, tokens.status, http.StatusOK, tokens.body)
@@ -139,18 +145,19 @@ func TestForcedLogin(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		params    []string      // name and value pairs added to the request
-		wait      time.Duration // between the first login and the request
-		wantLogin bool
+		name        string
+		set         url.Values    // parameters set on the request
+		wait        time.Duration // between the first login and the request
+		wantLogin   bool
+		wantConsent bool // whether the consent page follows the login
 	}{
-		{name: "prompt=login", params: []string{"prompt", "login"}, wait: time.Second, wantLogin: true},
-		{name: "prompt=select_account", params: []string{"prompt", "select_account"}, wait: time.Second, wantLogin: true},
-		{name: "prompt=login consent", params: []string{"prompt", "login consent"}, wait: time.Second, wantLogin: true},
-		{name: "max_age=0", params: []string{"max_age", "0"}, wantLogin: true},
-		{name: "max_age exceeded", params: []string{"max_age", "60"}, wait: 61 * time.Second, wantLogin: true},
-		{name: "max_age not exceeded", params: []string{"max_age", "60"}, wait: 60 * time.Second},
-		{name: "max_age beyond int64", params: []string{"max_age", "99999999999999999999"}, wait: 20 * time.Minute},
+		{name: "prompt=login", set: url.Values{"prompt": {"login"}}, wait: time.Second, wantLogin: true},
+		{name: "prompt=select_account", set: url.Values{"prompt": {"select_account"}}, wait: time.Second, wantLogin: true},
+		{name: "prompt=login consent", set: url.Values{"prompt": {"login consent"}}, wait: time.Second, wantLogin: true, wantConsent: true},
+		{name: "max_age=0", set: url.Values{"max_age": {"0"}}, wantLogin: true},
+		{name: "max_age exceeded", set: url.Values{"max_age": {"60"}}, wait: 61 * time.Second, wantLogin: true},
+		{name: "max_age not exceeded", set: url.Values{"max_age": {"60"}}, wait: 60 * time.Second},
+		{name: "max_age beyond int64", set: url.Values{"max_age": {"99999999999999999999"}}, wait: 20 * time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -163,12 +170,11 @@ func TestForcedLogin(t *testing.T) {
 				wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
 				time.Sleep(tt.wait)
 
-				params := withScope("openid profile", tt.params...)
-				resp := b.authorize(http.MethodGet, params)
+				resp := b.authorize(http.MethodGet, requestWith(tt.set))
 				want := start
 				if tt.wantLogin {
 					resp = b.reauthenticate(resp)
-					if params.Get("prompt") == "login consent" {
+					if tt.wantConsent {
 						resp = b.decide(resp, "allow")
 					}
 					want = start + int64(tt.wait/time.Second)
@@ -212,7 +218,7 @@ func TestForcedLoginCannotBeForged(t *testing.T) {
 		{
 			name: "login for another request",
 			forge: func(b *browser, _ url.Values) {
-				other := withScope("openid profile", "prompt", "login", "state", "other")
+				other := requestWith(url.Values{"prompt": {"login"}, "state": {"other"}})
 				b.reauthenticate(b.authorize(http.MethodGet, other))
 			},
 		},
@@ -229,12 +235,72 @@ func TestForcedLoginCannotBeForged(t *testing.T) {
 			t.Parallel()
 			b := &browser{t: t, handler: newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))}
 			wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
-			params := withScope("openid profile", "prompt", "login")
+			params := requestWith(url.Values{"prompt": {"login"}})
 			tt.forge(b, params)
 			if u := location(t, b.authorize(http.MethodGet, params)); u.Path != loginPath {
 				t.Errorf("prompt=login request redirected to %q, want the login page %q", u, loginPath)
 			}
 		})
+	}
+}
+
+// REQ-CORE-15, REQ-CORE-20: a login made for a request whose consent page
+// the End-User then left does not satisfy the same request sent again
+// later, even once a Consent given meanwhile covers it: the request asks
+// for a login again rather than issuing a code with the old auth_time. A
+// max_age is measured from that login like any other; prompt=login and
+// max_age=0 accept it for no longer than an interaction may take, 10
+// minutes.
+func TestForcedLoginRecordExpires(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		set  url.Values    // parameters set on the request
+		wait time.Duration // between the login for the request and its second sending
+	}{
+		{name: "max_age=60", set: url.Values{"max_age": {"60"}}, wait: 61 * time.Second},
+		{name: "prompt=login", set: url.Values{"prompt": {"login"}}, wait: 10 * time.Minute},
+		{name: "max_age=0", set: url.Values{"max_age": {"0"}}, wait: 10 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+			synctest.Test(t, func(t *testing.T) {
+				b := &browser{t: t, handler: newBubbleFlowHandler(t, databaseURL)}
+				wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
+				time.Sleep(61 * time.Second)
+
+				// A login for the request, whose consent page, for the scope
+				// email not yet allowed, is left unanswered.
+				set := url.Values{"scope": {"openid profile email"}}
+				maps.Copy(set, tt.set)
+				left := requestWith(set)
+				parseConsentPage(t, b.reauthenticate(b.authorize(http.MethodGet, left)))
+
+				// Another request is allowed email.
+				wantCode(t, b.decide(b.authorize(http.MethodGet, withScope("openid email")), "allow"), "request for email")
+
+				time.Sleep(tt.wait)
+				if u := location(t, b.authorize(http.MethodGet, left)); u.Path != loginPath {
+					t.Errorf("%s: request sent again %v after its login redirected to %q, want the login page %q", tt.name, tt.wait, u, loginPath)
+				}
+			})
+		})
+	}
+}
+
+// REQ-CORE-19: a signed-in End-User with a Consent who sends a request
+// with a prompt value pulsar does not know gets a code, as without it.
+func TestPromptUnknownValueSignedIn(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	b := &browser{t: t, handler: handler}
+	wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
+	for _, prompt := range []string{"x-unknown", "create"} {
+		wantCode(t, b.authorize(http.MethodGet, requestWith(url.Values{"prompt": {prompt}})), "prompt="+prompt)
 	}
 }
 
@@ -249,7 +315,7 @@ func TestPromptNoneMaxAge(t *testing.T) {
 		b := &browser{t: t, handler: newBubbleFlowHandler(t, databaseURL)}
 		wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
 		time.Sleep(11 * time.Second)
-		resp := b.authorize(http.MethodGet, withScope("openid profile", "prompt", "none", "max_age", "10"))
+		resp := b.authorize(http.MethodGet, requestWith(url.Values{"prompt": {"none"}, "max_age": {"10"}}))
 		want := url.Values{"error": {"login_required"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
 		if diff := cmp.Diff(want, errorResponse(t, resp)); diff != "" {
 			t.Errorf("prompt=none with max_age exceeded error response mismatch (-want +got):\n%s", diff)
@@ -274,7 +340,7 @@ func TestLoginHint(t *testing.T) {
 		t.Run(tt.hint, func(t *testing.T) {
 			t.Parallel()
 			b := &browser{t: t, handler: handler}
-			loginURL := location(t, b.authorize(http.MethodGet, withScope("openid", "login_hint", tt.hint)))
+			loginURL := location(t, b.authorize(http.MethodGet, requestWith(url.Values{"login_hint": {tt.hint}})))
 			resp := b.send(http.MethodGet, loginURL.RequestURI(), nil)
 			if resp.status != http.StatusOK || !strings.Contains(resp.body, `name="username"`) {
 				t.Fatalf("GET %s status = %d, want %d and the login form", loginURL.RequestURI(), resp.status, http.StatusOK)
@@ -294,24 +360,20 @@ func TestAcceptedParameters(t *testing.T) {
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 	tests := []struct {
-		name   string
-		params []string
+		name string
+		set  url.Values // parameters set on the request
 	}{
-		{name: "display=popup", params: []string{"display", "popup"}},
-		{name: "display unknown", params: []string{"display", "x-unknown"}},
-		{name: "ui_locales", params: []string{"ui_locales", "fr-CA fr en"}},
-		{name: "claims_locales", params: []string{"claims_locales", "ja-Kana-JP de"}},
-		{name: "acr_values", params: []string{"acr_values", "urn:mace:incommon:iap:silver 1"}},
+		{name: "display=popup", set: url.Values{"display": {"popup"}}},
+		{name: "display unknown", set: url.Values{"display": {"x-unknown"}}},
+		{name: "ui_locales", set: url.Values{"ui_locales": {"fr-CA fr en"}}},
+		{name: "claims_locales", set: url.Values{"claims_locales": {"ja-Kana-JP de"}}},
+		{name: "acr_values", set: url.Values{"acr_values": {"urn:mace:incommon:iap:silver 1"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			b := &browser{t: t, handler: handler}
-			resp := b.signIn(b.authorize(http.MethodGet, withScope("openid profile", tt.params...)))
-			if resp.status == http.StatusOK {
-				resp = b.decide(resp, "allow")
-			}
-			if acr, ok := verify(t, handler, idToken(t, handler, resp)).claims["acr"]; ok {
+			c := code(t, handler, requestWith(tt.set))
+			if acr, ok := verify(t, handler, redeem(t, handler, c)).claims["acr"]; ok {
 				t.Errorf("ID token acr = %v, want none", acr)
 			}
 		})
@@ -364,7 +426,7 @@ func TestIDTokenHint(t *testing.T) {
 			t.Parallel()
 			b := &browser{t: t, handler: handler}
 			wantCode(t, b.signIn(b.authorize(http.MethodGet, authorizationParams())), "alice's request")
-			resp := tt.respond(b, b.authorize(http.MethodGet, withScope("openid profile", "id_token_hint", hints[tt.hint], "prompt", tt.prompt)))
+			resp := tt.respond(b, b.authorize(http.MethodGet, requestWith(url.Values{"id_token_hint": {hints[tt.hint]}, "prompt": {tt.prompt}})))
 			if tt.want == nil {
 				wantCode(t, resp, tt.name)
 				return
@@ -397,7 +459,7 @@ func TestIDTokenHintInvalid(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			b := &browser{t: t, handler: handler}
-			resp := b.authorize(http.MethodGet, withScope("openid", "id_token_hint", tt.hint))
+			resp := b.authorize(http.MethodGet, requestWith(url.Values{"id_token_hint": {tt.hint}}))
 			want := url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
 			if diff := cmp.Diff(want, errorResponse(t, resp)); diff != "" {
 				t.Errorf("id_token_hint %s: error response mismatch (-want +got):\n%s", tt.name, diff)

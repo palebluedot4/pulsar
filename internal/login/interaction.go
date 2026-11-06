@@ -8,17 +8,25 @@ import (
 )
 
 // Keys of the values a Login Session holds about the authorization request
-// the End-User is going through. Each holds the request's key, from
-// requestKey.
+// the End-User is going through. Each but decisionKey holds the request's
+// key, from requestKey.
 const (
-	loginAskedKey = "login_asked" // the request the authorization endpoint asked a new login for
-	loginForKey   = "login_for"   // the request the End-User signed in on the login page for
-	allowedKey    = "allowed"     // the request the End-User allowed on the consent page
-	deniedKey     = "denied"      // the request the End-User denied on the consent page
+	loginAskedKey  = "login_asked"  // the request the authorization endpoint asked a new login for
+	loginForKey    = "login_for"    // the request the End-User signed in on the login page for
+	decisionForKey = "decision_for" // the request the End-User decided on the consent page
+	decisionKey    = "decision"     // what they decided, a Decision
 )
 
-// interactionKeys are the keys of every value an Interaction records.
-var interactionKeys = []string{loginAskedKey, loginForKey, allowedKey, deniedKey}
+// interactionKeys are the keys of the values an Interaction records that
+// hold a request's key.
+var interactionKeys = []string{loginAskedKey, loginForKey, decisionForKey}
+
+// interactionLifetime is how long a login made on the login page for a
+// request counts as made for it: time enough to read the consent page that
+// may follow. Past it, a request that asks for a login whatever the time,
+// as prompt=login and max_age=0 do, asks again, so that a page left open
+// cannot later stand in for a new login.
+const interactionLifetime = 10 * time.Minute
 
 // requestKey returns the key under which a Login Session records what the
 // End-User did for the authorization request whose parameters, encoded as
@@ -40,6 +48,20 @@ const (
 	Denied
 )
 
+// decisionValues are the values the consent form submits for the
+// decisions an End-User can make there.
+var decisionValues = map[Decision]string{Allowed: "allow", Denied: "deny"}
+
+// parseDecision returns the decision whose form value is v.
+func parseDecision(v string) (Decision, bool) {
+	for d, value := range decisionValues {
+		if v == value {
+			return d, true
+		}
+	}
+	return Undecided, false
+}
+
 // Interaction is what a browser's Login Session records about one
 // authorization request: who is signed in, and what the End-User did on
 // the login and consent pages for that request.
@@ -47,15 +69,17 @@ const (
 // The login and consent pages resume an authorization request by sending
 // the browser back to the authorization endpoint with the request's own
 // parameters. A request whose parameters ask for a page, as prompt=login,
-// max_age and prompt=consent do, would send the browser around in a circle
-// if the endpoint could not tell that the page had just been answered for
-// it: seconds, max_age's unit, are too coarse to tell a login just made
-// from one made a moment before the request. So each page, when the
-// End-User submits it, records in the Login Session the key of the request
-// it was shown for, a hash of the request's parameters; the authorization
-// endpoint counts a login or a decision only under the key of the request
-// it is serving, and removes it, with [Interaction.Finish], when it
-// answers the Client.
+// max_age=0 and prompt=consent do, would send the browser around in a
+// circle if the endpoint could not tell that the page had just been
+// answered for it: seconds, the unit of auth_time and max_age, are too
+// coarse to tell a login just made from one made a moment before the
+// request. So each page, when the End-User submits it, records in the
+// Login Session the key of the request it was shown for, a hash of the
+// request's parameters; the authorization endpoint counts a login or a
+// decision only under the key of the request it is serving, and removes
+// it, with [Interaction.Finish], when it answers the Client. A login so
+// recorded counts for interactionLifetime at most, and a decision only for
+// the End-User the consent page was shown for.
 //
 // The record is server-side, in a Login Session that only a login in this
 // browser starts, and only forms that refuse cross-origin submissions
@@ -91,16 +115,16 @@ func (s *Sessions) Interaction(r *http.Request, query string) (*Interaction, err
 	ctx, m := r.Context(), s.manager
 	// A Login Session for a Subject the registry no longer lists records
 	// no authentication.
-	if u, ok := s.endUser(r); ok {
-		i.auth = Authentication{EndUser: u, Time: time.Unix(m.GetInt64(ctx, authTimeKey), 0)}
-		i.signedIn = true
+	u, ok := s.endUser(r)
+	if !ok {
+		return i, nil
 	}
-	i.signedInForRequest = m.GetString(ctx, loginForKey) == i.key
-	switch i.key {
-	case m.GetString(ctx, allowedKey):
-		i.decision = Allowed
-	case m.GetString(ctx, deniedKey):
-		i.decision = Denied
+	i.auth = Authentication{EndUser: u, Time: time.Unix(m.GetInt64(ctx, authTimeKey), 0)}
+	i.signedIn = true
+	// The login time is auth_time, recorded with the login.
+	i.signedInForRequest = m.GetString(ctx, loginForKey) == i.key && time.Since(i.auth.Time) < interactionLifetime
+	if m.GetString(ctx, decisionForKey) == i.key {
+		i.decision = Decision(m.GetInt(ctx, decisionKey))
 	}
 	return i, nil
 }
@@ -112,7 +136,8 @@ func (i *Interaction) Authentication() (Authentication, bool) {
 }
 
 // SignedInForRequest reports whether the End-User signed in on the login
-// page for the request, as opposed to before it.
+// page for the request, as opposed to before it, within the last
+// interactionLifetime.
 func (i *Interaction) SignedInForRequest() bool {
 	return i.signedInForRequest
 }
@@ -142,13 +167,7 @@ func (i *Interaction) Finish() {
 // since each moves its idle expiry. Save must be called before anything
 // of the response is written.
 func (i *Interaction) Save(w http.ResponseWriter) error {
-	return i.sessions.saveInteraction(w, i.r, i)
-}
-
-// saveInteraction applies to r's Login Session what i changes, and saves
-// it.
-func (s *Sessions) saveInteraction(w http.ResponseWriter, r *http.Request, i *Interaction) error {
-	ctx, m := r.Context(), s.manager
+	ctx, m := i.r.Context(), i.sessions.manager
 	if i.askLogin {
 		m.Put(ctx, loginAskedKey, i.key)
 	}
@@ -158,8 +177,11 @@ func (s *Sessions) saveInteraction(w http.ResponseWriter, r *http.Request, i *In
 				m.Remove(ctx, k)
 			}
 		}
+		if m.GetString(ctx, decisionForKey) == "" {
+			m.Remove(ctx, decisionKey)
+		}
 	}
-	return s.save(w, r)
+	return i.sessions.save(w, i.r)
 }
 
 // loginAsked reports whether the authorization endpoint asked a new login
@@ -168,15 +190,10 @@ func (s *Sessions) loginAsked(r *http.Request, query string) bool {
 	return s.manager.GetString(r.Context(), loginAskedKey) == requestKey(query)
 }
 
-// decide records decision, allow or deny, for the request whose
-// parameters are query, in r's Login Session.
-func (s *Sessions) decide(r *http.Request, query, decision string) {
+// decide records decision for the request whose parameters are query, in
+// r's Login Session.
+func (s *Sessions) decide(r *http.Request, query string, decision Decision) {
 	ctx, m := r.Context(), s.manager
-	m.Remove(ctx, allowedKey)
-	m.Remove(ctx, deniedKey)
-	if decision == allow {
-		m.Put(ctx, allowedKey, requestKey(query))
-	} else {
-		m.Put(ctx, deniedKey, requestKey(query))
-	}
+	m.Put(ctx, decisionForKey, requestKey(query))
+	m.Put(ctx, decisionKey, int(decision))
 }

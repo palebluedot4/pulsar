@@ -10,6 +10,26 @@ import (
 	"time"
 )
 
+const addToConsent = `-- name: AddToConsent :exec
+INSERT INTO consents (subject, client_id, scopes)
+VALUES ($1, $2, $3)
+ON CONFLICT (subject, client_id) DO UPDATE
+SET scopes = ARRAY(SELECT DISTINCT unnest(consents.scopes || excluded.scopes))
+`
+
+type AddToConsentParams struct {
+	Subject  string
+	ClientID string
+	Scopes   []string
+}
+
+// Adds scopes to the Consent of the End-User for the Client, creating it if
+// there is none, in one statement, so that two additions at once both count.
+func (q *Queries) AddToConsent(ctx context.Context, arg AddToConsentParams) error {
+	_, err := q.db.Exec(ctx, addToConsent, arg.Subject, arg.ClientID, arg.Scopes)
+	return err
+}
+
 const commitLoginSession = `-- name: CommitLoginSession :exec
 INSERT INTO login_sessions (token, data, expiry)
 VALUES ($1, $2, $3)
@@ -84,24 +104,4 @@ func (q *Queries) FindLoginSession(ctx context.Context, arg FindLoginSessionPara
 	var data []byte
 	err := row.Scan(&data)
 	return data, err
-}
-
-const grantConsent = `-- name: GrantConsent :exec
-INSERT INTO consents (subject, client_id, scopes)
-VALUES ($1, $2, $3::text[])
-ON CONFLICT (subject, client_id) DO UPDATE
-SET scopes = ARRAY(SELECT DISTINCT unnest(consents.scopes || excluded.scopes))
-`
-
-type GrantConsentParams struct {
-	Subject  string
-	ClientID string
-	Scopes   []string
-}
-
-// Adds scopes to the Consent of the End-User for the Client, creating it if
-// there is none, in one statement, so that two grants at once both count.
-func (q *Queries) GrantConsent(ctx context.Context, arg GrantConsentParams) error {
-	_, err := q.db.Exec(ctx, grantConsent, arg.Subject, arg.ClientID, arg.Scopes)
-	return err
 }

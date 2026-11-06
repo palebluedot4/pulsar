@@ -60,8 +60,8 @@ that pulsar, as an OP, must or should meet.
   MUST reauthenticate the End-User even if the End-User is already
   authenticated."
 
-  Only a login on the login page for that request counts; one made before
-  it, or for another request, does not.
+  Only a login on the login page for that request, in the last 10 minutes,
+  counts; one made before it, or for another request, does not.
 
 - REQ-CORE-16 (§3.1.2.1, `prompt=consent`): "The Authorization Server
   SHOULD prompt the End-User for consent before returning information to
@@ -69,9 +69,10 @@ that pulsar, as an OP, must or should meet.
 - REQ-CORE-17 (§3.1.2.1, `prompt=select_account`): "The Authorization
   Server SHOULD prompt the End-User to select a user account."
 
-  A Login Session holds one End-User, so pulsar has no list of accounts to
-  choose from; the login page is where an End-User chooses one, by signing
-  in as it. `select_account` sends the End-User there, as `login` does.
+  A Login Session holds one End-User, so pulsar has no other End-Users of a
+  browser to offer; the login page is where a person chooses which End-User
+  to be, by signing in. `select_account` sends the End-User there, as
+  `login` does.
 
 - REQ-CORE-18 (§3.1.2.1, `prompt`): "If this parameter contains none with
   any other value, an error is returned."
@@ -91,9 +92,11 @@ that pulsar, as an OP, must or should meet.
   this value, the OP MUST attempt to actively re-authenticate the End-User.
   ... Note that max_age=0 is equivalent to prompt=login."
 
-  The elapsed time is counted in whole seconds, as `auth_time` is. A value
-  that is not a non-negative integer is `invalid_request`; one too large
-  for 64 bits sets no limit.
+  The elapsed time is counted in whole seconds, as `auth_time` is, and from
+  any login, including one made for the same request. `max_age=0`, like
+  `prompt=login`, is satisfied by a login on the login page for that
+  request, made in the last 10 minutes. A value that is not a non-negative
+  integer is `invalid_request`; one too large for 64 bits sets no limit.
 
 - REQ-CORE-21 (§3.1.2.1, `display`): "If an OP receives a display value
   outside the set defined above that it does not understand, it MAY return
@@ -120,10 +123,18 @@ that pulsar, as an OP, must or should meet.
 
   An End-User other than the one the hint names is sent to the login page
   once, unless `prompt=none`; if the login there is not the named
-  End-User's either, the error is `login_required`. A hint that is not a
-  JWT naming pulsar as its issuer and a subject is `invalid_request`. Its
-  signature is not verified: whatever a hint names, a positive response is
-  about the End-User signed in.
+  End-User's either, the error is `login_required`. Its signature is not
+  verified: whatever a hint names, a positive response is about the
+  End-User signed in.
+
+  A hint that is not a JWT naming pulsar as its issuer and an End-User as
+  its subject identifies no End-User, and is answered with
+  `invalid_request`, which RFC 6749 §4.1.2.1 defines for a request that
+  "includes an invalid parameter value". This departs deliberately from
+  #18, which asks that `id_token_hint` be accepted without error: a hint
+  pulsar cannot read cannot be checked as this clause requires, and
+  ignoring it would answer positively for an End-User the Client may not
+  have meant.
 
 - REQ-CORE-25 (§3.1.2.1, `login_hint`): "Hint to the Authorization Server
   about the login identifier the End-User might use to log in (if

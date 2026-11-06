@@ -128,28 +128,37 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	// and as the Login Session keys what the End-User did for them.
 	query := params.Encode()
 	ctx := r.Context()
-	inter, err := p.sessions.Interaction(r, query) //nolint:contextcheck // r carries the request's context, which Interaction uses.
-	if err != nil {
+	// fail logs err, a failure of pulsar's own, and tells the Client.
+	fail := func(err error) {
 		p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
 		resp.redirectError(w, r, errServerError, "")
+	}
+	inter, err := p.sessions.Interaction(r, query) //nolint:contextcheck // r carries the request's context, which Interaction uses.
+	if err != nil {
+		fail(err)
 		return
 	}
 	// respond saves the Login Session, which must precede any part of the
 	// response, and then answers with answer.
-	respond := func(answer func()) {
+	respond := func(answer func()) { //nolint:contextcheck // Save uses the context of r, which Interaction keeps.
 		if err := inter.Save(w); err != nil {
-			p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
-			resp.redirectError(w, r, errServerError, "")
+			fail(err)
 			return
 		}
 		answer()
 	}
-
-	// With prompt=none, no page is shown: what one would ask for is
-	// answered with an error instead (OpenID Connect Core 1.0 §3.1.2.1,
+	// ask shows the End-User a page, with show; but with prompt=none, no
+	// page is shown, and what the page would ask for is answered with the
+	// error code errCode instead (OpenID Connect Core 1.0 §3.1.2.1,
 	// §3.1.2.6). pulsar asks for nothing but a login and a Consent, so it
 	// never needs interaction_required.
-	silent := req.prompts("none")
+	ask := func(errCode, desc string, show func()) {
+		if req.prompts("none") {
+			respond(func() { resp.redirectError(w, r, errCode, desc) })
+			return
+		}
+		respond(show)
+	}
 	toLogin := func() {
 		// 303, so that a request sent by POST is retrieved by GET; the
 		// parameters go in the query, to a fixed path on this origin.
@@ -159,27 +168,20 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 
 	auth, ok := inter.Authentication()
 	if !ok {
-		if silent {
-			respond(func() { resp.redirectError(w, r, errLoginRequired, "The End-User is not signed in.") })
-			return
-		}
-		respond(toLogin)
+		ask(errLoginRequired, "The End-User is not signed in.", toLogin)
 		return
 	}
-	// A login the request asks for is one made on the login page for this
-	// request (see login.Interaction), whatever the time. An End-User
+	// A login the request asks for whatever the time is one made on the
+	// login page for this request (see login.Interaction). An End-User
 	// other than the one id_token_hint names is sent to log in once; if
 	// that login is not the named End-User's either, the request fails
 	// (OpenID Connect Core 1.0 §3.1.2.1).
 	subject := auth.EndUser.Subject
 	otherEndUser := req.hintSubject != "" && req.hintSubject != subject
-	if !inter.SignedInForRequest() && (otherEndUser || req.needsLogin(auth.Time, time.Now())) {
-		if silent {
-			respond(func() { resp.redirectError(w, r, errLoginRequired, "The request requires a new login.") })
-			return
-		}
+	fresh := inter.SignedInForRequest()
+	if (otherEndUser && !fresh) || req.needsLogin(auth.Time, time.Now(), fresh) {
 		inter.AskLogin()
-		respond(toLogin)
+		ask(errLoginRequired, "The request requires a new login.", toLogin)
 		return
 	}
 	if otherEndUser {
@@ -199,9 +201,8 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		respond(func() { resp.redirectError(w, r, errAccessDenied, "The End-User denied the request.") })
 		return
 	case login.Allowed:
-		if err := p.consents.Grant(ctx, subject, req.client.ID, req.scopes); err != nil {
-			p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
-			resp.redirectError(w, r, errServerError, "")
+		if err := p.consents.Allow(ctx, subject, req.client.ID, req.scopes); err != nil {
+			fail(err)
 			return
 		}
 	case login.Undecided:
@@ -210,21 +211,15 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		if !req.prompts("consent") {
 			covered, err = p.consents.Covers(ctx, subject, req.client.ID, req.scopes)
 			if err != nil {
-				p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
-				resp.redirectError(w, r, errServerError, "")
+				fail(err)
 				return
 			}
 		}
-		if !covered && silent {
-			respond(func() {
-				resp.redirectError(w, r, errConsentRequired, "The End-User has not consented to this request.")
-			})
-			return
-		}
 		if !covered {
-			respond(func() {
+			ask(errConsentRequired, "The End-User has not consented to this request.", func() {
 				page := login.ConsentPage{
 					ClientID: req.client.ID,
+					Subject:  subject,
 					Username: auth.EndUser.Username,
 					Scopes:   req.scopes,
 					Action:   paths.consent + "?" + query,
@@ -240,8 +235,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 
 	code, err := p.issueCode(ctx, req, auth)
 	if err != nil {
-		p.logger.ErrorContext(ctx, "issue authorization code", "error", err)
-		resp.redirectError(w, r, errServerError, "")
+		fail(err)
 		return
 	}
 	inter.Finish()
@@ -320,7 +314,7 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	if v := params.Get("id_token_hint"); v != "" {
 		var ok bool
 		if hintSubject, ok = idTokenSubject(v, issuer); !ok {
-			return req, errInvalidRequest, "The id_token_hint is not an ID token this OP issued."
+			return req, errInvalidRequest, "The id_token_hint is not a JWT that names this OP as its issuer and an End-User as its subject."
 		}
 	}
 
@@ -362,20 +356,19 @@ func idTokenSubject(idToken, issuer string) (string, bool) {
 }
 
 // needsLogin reports whether the request asks the End-User, who
-// authenticated at authTime, to authenticate again now: with prompt=login,
-// with prompt=select_account, since a Login Session holds one End-User
-// and the login page is where they choose another, or with a max_age that
-// the time since authTime exceeds (OpenID Connect Core 1.0 §3.1.2.1).
-// max_age=0 is prompt=login, as §3.1.2.1 says, even within the second of
-// the login it would otherwise accept.
-func (req authorizationRequest) needsLogin(authTime, now time.Time) bool {
-	switch {
-	case req.prompts("login"), req.prompts("select_account"), req.maxAge == 0:
+// authenticated at authTime, to authenticate again now (OpenID Connect
+// Core 1.0 §3.1.2.1). A max_age the time since authTime exceeds always
+// does. prompt=login, prompt=select_account (a Login Session holds one
+// End-User, and the login page is where they choose another) and
+// max_age=0, which §3.1.2.1 equates with prompt=login, ask whatever the
+// time, unless fresh: the End-User signed in on the login page for this
+// request, which seconds are too coarse to tell from a login just before
+// it.
+func (req authorizationRequest) needsLogin(authTime, now time.Time, fresh bool) bool {
+	if req.maxAge > 0 && now.Unix()-authTime.Unix() > req.maxAge {
 		return true
-	case req.maxAge > 0:
-		return now.Unix()-authTime.Unix() > req.maxAge
 	}
-	return false
+	return !fresh && (req.prompts("login") || req.prompts("select_account") || req.maxAge == 0)
 }
 
 // prompts reports whether the request's prompt parameter holds value.
