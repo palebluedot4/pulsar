@@ -25,16 +25,24 @@ jobs:
           persist-credentials: false
 
       # Untrusted text reaches the script through the environment, never by
-      # expression interpolation into the shell.
+      # expression interpolation into the shell. A pull request that
+      # dependabot[bot] opened is checked with --dependabot, which allows its
+      # case and length; the opener's login is GitHub's to set, not the
+      # pull request's.
       - name: Check the pull request title and every commit
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           TITLE: ${{ github.event.pull_request.title }}
+          OPENER: ${{ github.event.pull_request.user.login }}
         run: |
+          mode=()
+          if [ "$OPENER" = "dependabot[bot]" ]; then
+            mode=(--dependabot)
+          fi
           msg=$(mktemp)
           printf '%s\n' "$TITLE" > "$msg"
-          scripts/check-commit-msg.sh "$msg"
+          scripts/check-commit-msg.sh "${mode[@]}" "$msg"
           for sha in $(git rev-list --no-merges "$BASE_SHA..HEAD"); do
             git log -1 --format=%B "$sha" > "$msg"
-            scripts/check-commit-msg.sh "$msg"
+            scripts/check-commit-msg.sh "${mode[@]}" "$msg"
           done
