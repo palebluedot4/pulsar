@@ -259,7 +259,11 @@ func TestConsentPageDescribesEveryScope(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp.body), &discovery); err != nil {
 		t.Fatalf("discovery document %q is not JSON: %v", resp.body, err)
 	}
-	resp = b.signIn(b.authorize(http.MethodGet, withScope(strings.Join(discovery.ScopesSupported, " "))))
+	// offline_access is listed on the page only with prompt=consent
+	// (REQ-CORE-54).
+	params := withScope(strings.Join(discovery.ScopesSupported, " "))
+	params.Set("prompt", "consent")
+	resp = b.signIn(b.authorize(http.MethodGet, params))
 	described := map[string]string{}
 	for _, m := range consentScopeDescription.FindAllStringSubmatch(resp.body, -1) {
 		described[html.UnescapeString(m[1])] = html.UnescapeString(m[2])

@@ -8,11 +8,8 @@ import (
 	"net/url"
 	"slices"
 	"testing"
-	"testing/synctest"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
@@ -97,93 +94,53 @@ func TestOfflineAccess(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-21, REQ-OAUTH-31, REQ-OAUTH-32: the refresh token from a code
-// issued with offline access is at least 160 bits, and is stored only as
-// its hash, in the Refresh Token Family that the code's redemption starts.
-// The family records the Client, the Subject, the scopes, the claims
-// request and auth_time of the authorization, and the code, and ends 30
-// days after the code is redeemed; the access token issued from the code
-// is the family's.
+// REQ-OAUTH-21, REQ-OAUTH-31, REQ-OAUTH-41: the refresh token from a code
+// issued with offline access, and the one that replaces it, are each at
+// least 160 bits, and are stored only as their hashes. The access tokens
+// issued from the code and from the refresh are recorded as the family's,
+// with the code that started it.
 //
-// Until the refresh_token grant redeems it, nothing a Client can send
-// shows what the family holds, so its record is read.
-//
-// TODO(#51): check the family through the refresh_token grant, and keep
-// reading the database only for the hash-only storage of REQ-OAUTH-31.
-func TestRefreshTokenFamilyStarted(t *testing.T) {
+// TODO(#52): check that the access tokens are the family's by revoking
+// the family, and keep reading the database only for the hash-only
+// storage of REQ-OAUTH-31.
+func TestRefreshTokenStoredAsHash(t *testing.T) {
 	t.Parallel()
 
-	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
-	synctest.Test(t, func(t *testing.T) {
-		pool, err := pgxpool.New(t.Context(), databaseURL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(pool.Close)
-		handler := newFlowHandler(t, pool)
-		signedIn := time.Now()
-		params := offlineAccessParams()
-		params.Set("scope", "openid email offline_access")
-		params.Set("claims", `{"id_token": {"email": null}}`)
-		c := code(t, handler, params)
-		time.Sleep(30 * time.Second)
-		redeemed := time.Now()
-		resp := tokenRequest(t, handler, "rp", rpSecret, codeForm(c))
-		accessToken, _ := tokensOf(t, resp)
-		refreshToken := tokenResultOf(t, resp).RefreshToken
-		if raw, err := base64.RawURLEncoding.DecodeString(refreshToken); err != nil || len(raw) < 20 {
-			t.Errorf("POST %s refresh_token = %q, want at least 160 bits in base64url", tokenPath, refreshToken)
-		}
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	c := code(t, handler, offlineAccessParams())
+	first := refreshResponseOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c)))
+	refreshed := refreshResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
 
-		type family struct {
-			ClientID, Subject string
-			Scopes            []string
-			// Whether the family holds the code's claims request, which is
-			// not empty, and the code's hash.
-			CodeClaims, CodeHash bool
-			AuthTime, Expiry     time.Time
-			Revoked              bool
-			// Whether the access token issued from the code is the family's.
-			HasAccessToken bool
+	for _, issued := range []refreshResponse{first, refreshed} {
+		if raw, err := base64.RawURLEncoding.DecodeString(issued.RefreshToken); err != nil || len(raw) < 20 {
+			t.Errorf("refresh_token = %q, want at least 160 bits in base64url", issued.RefreshToken)
 		}
-		tokenHash := sha256.Sum256([]byte(refreshToken))
-		codeHash := sha256.Sum256([]byte(c))
-		var got family
-		err = pool.QueryRow(t.Context(), `
-			SELECT f.client_id, f.subject, f.scopes,
-				f.claims = c.claims AND c.claims <> '{}', f.code_hash = $2,
-				f.auth_time, f.expiry, f.revoked,
-				EXISTS (SELECT FROM access_tokens a WHERE a.jti = $3 AND a.family_id = f.id)
-			FROM refresh_tokens r
-			JOIN refresh_token_families f ON f.id = r.family_id
-			JOIN authorization_codes c ON c.code_hash = f.code_hash
-			WHERE r.token_hash = $1`,
-			tokenHash[:], codeHash[:], verify(t, handler, accessToken).claims["jti"],
-		).Scan(&got.ClientID, &got.Subject, &got.Scopes, &got.CodeClaims, &got.CodeHash,
-			&got.AuthTime, &got.Expiry, &got.Revoked, &got.HasAccessToken)
-		if err != nil {
-			t.Fatalf("reading the family of the refresh token's hash: %v", err)
-		}
-		want := family{
-			ClientID: "rp", Subject: aliceSubject, Scopes: []string{"openid", "email", "offline_access"},
-			CodeClaims: true, CodeHash: true,
-			AuthTime: signedIn, Expiry: redeemed.Add(30 * 24 * time.Hour),
-			HasAccessToken: true,
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("Refresh Token Family mismatch (-want +got):\n%s", diff)
-		}
-
 		var holding int
-		err = pool.QueryRow(t.Context(), `
+		err := pool.QueryRow(t.Context(), `
 			SELECT (SELECT count(*) FROM refresh_tokens r WHERE strpos(r::text, $1) > 0)
 				+ (SELECT count(*) FROM refresh_token_families f WHERE strpos(f::text, $1) > 0)`,
-			refreshToken,
+			issued.RefreshToken,
 		).Scan(&holding)
 		if err != nil || holding != 0 {
 			t.Errorf("rows holding the refresh token itself = %d, error %v; want 0", holding, err)
 		}
-	})
+		tokenHash := sha256.Sum256([]byte(issued.RefreshToken))
+		codeHash := sha256.Sum256([]byte(c))
+		var recorded bool
+		err = pool.QueryRow(t.Context(), `
+			SELECT EXISTS (
+				SELECT FROM refresh_tokens r
+				JOIN refresh_token_families f ON f.id = r.family_id
+				JOIN access_tokens a ON a.family_id = f.id
+				WHERE r.token_hash = $1 AND f.code_hash = $2 AND a.code_hash = $2 AND a.jti = $3
+			)`,
+			tokenHash[:], codeHash[:], verify(t, handler, issued.AccessToken).claims["jti"],
+		).Scan(&recorded)
+		if err != nil || !recorded {
+			t.Errorf("access token recorded with the family of its refresh token and the family's code = %t, error %v; want true", recorded, err)
+		}
+	}
 }
 
 // REQ-CORE-53, REQ-OAUTH-22: denying a request for offline access sends

@@ -68,6 +68,23 @@ RETURNING id;
 INSERT INTO refresh_tokens (token_hash, family_id)
 VALUES (@token_hash, @family_id);
 
+-- name: RedeemRefreshToken :one
+-- Marks the refresh token used and returns its family and what the family
+-- was granted, if the token has not been used and its family belongs to
+-- this Client, has not ended and has not been revoked. Under read
+-- committed, of two transactions redeeming one refresh token, the second
+-- waits for the first and then finds it used.
+UPDATE refresh_tokens r
+SET used = true
+FROM refresh_token_families f
+WHERE r.token_hash = @token_hash
+    AND f.id = r.family_id
+    AND f.client_id = @client_id
+    AND f.expiry > @now
+    AND NOT f.revoked
+    AND NOT r.used
+RETURNING f.id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time;
+
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
 WHERE expiry <= @now;

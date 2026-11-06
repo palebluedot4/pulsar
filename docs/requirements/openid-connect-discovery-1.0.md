@@ -34,6 +34,18 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
   supports. [...] Servers MAY choose not to advertise some supported scope
   values even when this parameter is used, although those defined in
   [OpenID.Core] SHOULD be listed, if supported."
+
+  pulsar lists `openid`, the four scopes that request claims, and
+  `offline_access`.
+
+- REQ-DISC-19 (§3, `grant_types_supported`): "OPTIONAL. JSON array
+  containing a list of the OAuth 2.0 Grant Type values that this OP
+  supports."
+
+  pulsar lists `authorization_code` and `refresh_token`. It is not a
+  Dynamic OpenID Provider, so the requirement of that clause to support
+  `implicit` does not apply.
+
 - REQ-DISC-7 (§3, `response_types_supported`): "REQUIRED. JSON array
   containing a list of the OAuth 2.0 response_type values that this OP
   supports."

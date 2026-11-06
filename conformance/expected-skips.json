@@ -1,11 +1,5 @@
 [
   {
-    "test-name": "oidcc-refresh-token",
-    "variant": "*",
-    "configuration-filename": "*config-basic.json",
-    "comment": "Discovery does not yet list offline_access or the refresh_token grant (#51), so the module asks for openid alone and pulsar issues no refresh token for it. The module skips when the token response has none."
-  },
-  {
     "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
     "variant": "*",
     "configuration-filename": "*config-basic.json",

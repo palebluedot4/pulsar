@@ -376,8 +376,10 @@ are those of `private_key_jwt`.
   When the End-User allows it, the token response that redeems the code
   carries a refresh token (REQ-OAUTH-30) and `offline_access` in its
   `scope`. Public Clients receive one under the same rules as
-  confidential ones. No grant redeems it yet, and discovery does not list
-  `offline_access`; #51 adds both.
+  confidential ones. The refresh token is redeemed with the
+  `refresh_token` grant (§12), for an access token that UserInfo accepts
+  whether or not the End-User has a Login Session. Discovery lists
+  `offline_access` in `scopes_supported` (REQ-DISC-6).
 
 - REQ-CORE-53 (§11): "The OP MUST always obtain consent to returning a
   Refresh Token that enables offline access to the requested resources. A
@@ -403,3 +405,58 @@ are those of `private_key_jwt`.
   proceeds without it. §11 also has the OP ignore it "unless the Client is
   using a response_type value that would result in an Authorization Code
   being returned"; `code` is the only `response_type` pulsar accepts.
+
+## Using refresh tokens (§12)
+
+- REQ-CORE-55 (§12.1): "To refresh an Access Token, the Client MUST
+  authenticate to the Token Endpoint using the authentication method
+  registered for its client_id, as documented in Section 9 (Client
+  Authentication)."
+
+  A Client that authenticates by another method, or not at all, gets
+  `invalid_client`, as it does when redeeming a code (REQ-OAUTH-26).
+
+- REQ-CORE-56 (§12.1): "The Authorization Server MUST validate the Refresh
+  Token, MUST verify that it was issued to the Client, and must verify that
+  the Client successfully authenticated it has a Client Authentication
+  method."
+
+  As RFC 6749 §6 requires (REQ-OAUTH-33 to REQ-OAUTH-35).
+
+- REQ-CORE-57 (§12.2): "its iss Claim Value MUST be the same as in the ID
+  Token issued when the original authentication occurred,"
+- REQ-CORE-58 (§12.2): "its sub Claim Value MUST be the same as in the ID
+  Token issued when the original authentication occurred,"
+- REQ-CORE-59 (§12.2): "its iat Claim MUST represent the time that the new
+  ID Token is issued,"
+- REQ-CORE-60 (§12.2): "its aud Claim Value MUST be the same as in the ID
+  Token issued when the original authentication occurred,"
+- REQ-CORE-61 (§12.2): "if the ID Token contains an auth_time Claim, its
+  value MUST represent the time of the original authentication - not the
+  time that the new ID token is issued,"
+
+  Every refresh returns an ID token, which §12.2 makes optional, so that
+  the conformance suite checks these. The Refresh Token Family records the
+  Subject, the Client and `auth_time` of the authorization its code was
+  issued for. pulsar uses no extension that adds `azp`, which §12.2 leaves
+  to such extensions, so neither ID token has one.
+
+- REQ-CORE-62 (§12.2): "it SHOULD NOT have a nonce Claim, even when the ID
+  Token issued at the time of the original authentication contained
+  nonce; however, if it is present, its value MUST be the same as in the
+  ID Token issued at the time of the original authentication, and"
+
+  A refreshed ID token has no `nonce`.
+
+- REQ-CORE-63 (§12.2): "otherwise, the same rules apply as apply when
+  issuing an ID Token at the time of the original authentication."
+
+  It carries the claims the authorization request's `claims` parameter
+  asked for in the ID token (REQ-CORE-44), read from the registry when it
+  is issued, so with their values at that time.
+
+- REQ-CORE-64 (§12.3): "If the Refresh Request is invalid or unauthorized,
+  the Authorization Server returns the Token Error Response as defined in
+  Section 5.2 of OAuth 2.0 [RFC6749]."
+
+  In the JSON form of RFC 6749 §5.2 (REQ-OAUTH-15).
