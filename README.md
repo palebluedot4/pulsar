@@ -16,7 +16,9 @@ reach it. UserInfo returns the End-User's `sub` and the claims of the
 `profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
 with the access token in the `Authorization` header or the body; the
 `claims` parameter requests individual claims in the ID token or from
-UserInfo. Revoking the tokens of a code redeemed twice is next.
+UserInfo. A second redemption of a code revokes the access tokens issued
+from it, and `pulsar keys rotate` rotates the signing key. Running the
+conformance suite's Basic OP plan in CI is next.
 
 ## Running it
 
@@ -31,6 +33,30 @@ The private keys are stored encrypted under a key derived from
 `PULSAR_SECRET`, 32 random bytes in base64. Keep it: with another secret,
 pulsar cannot decrypt its keys, so it never becomes ready; it answers
 `/livez` until it has tried, and then exits with an error.
+
+`pulsar keys rotate` stores a new signing key and exits; it reads the same
+environment as the server. Every replica publishes the key in its JWK Set at
+its next reload, within a minute, and signs with it two minutes after it is
+stored: one reload interval plus the JWK Set's one-minute cache lifetime, so
+that every replica, and every JWK Set a Client has cached, has the key
+first. The key it replaces stays in the JWK Set for eleven minutes more,
+the ten-minute token lifetime plus a reload interval, by when every token it
+signed has expired.
+
+Run it only once every replica runs a release that has it, since an earlier
+release signs with a new key at once, and on a host whose clock agrees with
+the replicas'. It refuses a database pulsar has never started against, and
+a `PULSAR_SECRET` other than the one the keys are stored under. It does not
+revoke a key: a leaked key stays in the JWK Set, so Clients accept tokens
+signed with it, for at least thirteen minutes.
+
+```sh
+# The same environment as the server's.
+PULSAR_ISSUER=http://localhost:8080 \
+  PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
+  PULSAR_REGISTRY=conformance/registry.json \
+  go run ./cmd/pulsar keys rotate
+```
 
 Clients and End-Users are listed in a registry file, a JSON document
 named by `PULSAR_REGISTRY` and read at startup; pulsar refuses to start if
