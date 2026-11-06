@@ -59,7 +59,13 @@ func claimsOf(sets ...map[string]any) map[string]any {
 // the ID token.
 func issuedTokens(t *testing.T, handler http.Handler, params url.Values) (accessToken, idToken string) {
 	t.Helper()
-	resp := tokenRequest(t, handler, "rp", rpSecret, codeForm(code(t, handler, params)))
+	return tokensOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(code(t, handler, params))))
+}
+
+// tokensOf returns the access token and the ID token of a successful token
+// response, failing the test for any other.
+func tokensOf(t *testing.T, resp response) (accessToken, idToken string) {
+	t.Helper()
 	if resp.status != http.StatusOK {
 		t.Fatalf("POST %s status = %d, want %d; body %q", tokenPath, resp.status, http.StatusOK, resp.body)
 	}
