@@ -112,7 +112,7 @@ result and human review time.
 | Implicit and hybrid flows, front-channel logout, session management         | Never; discouraged by RFC 9700 or fragile in current browsers.                                   |
 | Dynamic Client Registration                                                 | MCP deprecated it for Client ID Metadata Documents.                                              |
 | FAPI 2.0: PAR, DPoP, mTLS                                                   | Never; it needs PAR and sender-constrained tokens, a large addition beyond the Basic OP profile. |
-| Token revocation (RFC 7009), introspection (RFC 7662), `client_credentials` | A consumer in `examples/` or MCP authorization support needs one (#47).                          |
+| Token revocation (RFC 7009), introspection (RFC 7662), `client_credentials` | A consumer in `examples/` or MCP authorization support needs one; #47 defers them.               |
 | Custom skills, subagents or hooks beyond `docs/harness.md`                  | A recorded failure calls for one, and an eval can measure it.                                    |
 | obra/superpowers                                                            | Its always-on prompt conflicts with lean context; see `docs/research/ai-development.md`.         |
 | A second vendor's model for review                                          | Calibration shows a systematic blind spot.                                                       |

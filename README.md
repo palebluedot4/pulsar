@@ -21,8 +21,8 @@ from it, and `pulsar keys rotate` rotates the signing key. The OpenID
 conformance suite's Config OP and Basic OP plans run against it in CI;
 on 2026-11-06, at commit `8d6ab47`, they finished with no failures, as
 [Checking conformance](#checking-conformance) details. The next
-specification is refresh tokens, rotated on every use, with reuse revoking
-every token descended from the same authorization
+specification is refresh tokens, each replaced on every use, a replaced one
+presented again revoking its whole Refresh Token Family
 ([#47](https://github.com/palebluedot4/pulsar/issues/47)).
 
 ## Running it
