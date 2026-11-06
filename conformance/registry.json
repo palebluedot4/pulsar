@@ -1,1 +1,63 @@
-{ "clients": [], "end_users": [] }
+{
+  "clients": [
+    {
+      "client_id": "conformance-client",
+      "token_endpoint_auth_method": "client_secret_basic",
+      "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$6mzY2fcYZmzXpr3dmRsHyg$gOGm8XfXn05Vt/A2L+36loNfauTdB/8SFv751tuTfVg",
+      "redirect_uris": [
+        "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback"
+      ]
+    },
+    {
+      "client_id": "conformance-client2",
+      "token_endpoint_auth_method": "client_secret_basic",
+      "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$btFZhRfENG+VJQ2lnYba5Q$Bz91sxUqsjDD5ol/e8zD9nFYH1q37oV9VB6sLaRPcpA",
+      "redirect_uris": [
+        "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback"
+      ]
+    },
+    {
+      "client_id": "conformance-client-secret-post",
+      "token_endpoint_auth_method": "client_secret_post",
+      "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$C9+Vn6HhhuQxX1VPKrUsig$fMadRwlApduzm6nw7Kv/KPsUwmBCEKnffXmg0prxiBM",
+      "redirect_uris": [
+        "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback"
+      ]
+    }
+  ],
+  "end_users": [
+    {
+      "sub": "0cb30ec8-8f58-41e9-94b0-f23014402e2c",
+      "username": "conformance",
+      "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$iMRb13A1wfjHHwZcmmqMYw$6JAUXsj7M9CSkuDF9KbabkAAlanEdPEb3lKxNw70/PA",
+      "claims": {
+        "name": "Ada Conformance",
+        "given_name": "Ada",
+        "family_name": "Conformance",
+        "middle_name": "Test",
+        "nickname": "ada",
+        "preferred_username": "conformance",
+        "profile": "https://pulsar.example/conformance",
+        "picture": "https://pulsar.example/conformance.png",
+        "website": "https://pulsar.example",
+        "email": "conformance@pulsar.example",
+        "email_verified": true,
+        "gender": "female",
+        "birthdate": "1815-12-10",
+        "zoneinfo": "Europe/London",
+        "locale": "en-GB",
+        "phone_number": "+44 20 7946 0000",
+        "phone_number_verified": true,
+        "address": {
+          "formatted": "1 Test Street\nLondon SW1A 1AA\nUnited Kingdom",
+          "street_address": "1 Test Street",
+          "locality": "London",
+          "region": "London",
+          "postal_code": "SW1A 1AA",
+          "country": "United Kingdom"
+        },
+        "updated_at": 1793750400
+      }
+    }
+  ]
+}

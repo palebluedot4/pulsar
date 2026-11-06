@@ -1,0 +1,182 @@
+{
+  "alias": "pulsar",
+  "description": "pulsar, run by make conformance. Test credentials only, published deliberately; see SECURITY.md.",
+  "server": {
+    "discoveryUrl": "https://pulsar:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "conformance-client",
+    "client_secret": "conformance-client-secret"
+  },
+  "client2": {
+    "client_id": "conformance-client2",
+    "client_secret": "conformance-client2-secret"
+  },
+  "client_secret_post": {
+    "client_id": "conformance-client-secret-post",
+    "client_secret": "conformance-client-secret-post-secret"
+  },
+  "browser": [
+    {
+      "comment": "Every authorization that succeeds: the login page and the consent page when pulsar shows them, then the suite's callback page.",
+      "match": "https://pulsar:9443/authorize*",
+      "tasks": [
+        {
+          "task": "Login",
+          "optional": true,
+          "match": "https://pulsar:9443/login*",
+          "commands": [
+            ["text", "name", "username", "conformance"],
+            ["text", "name", "password", "conformance-password"],
+            ["click", "xpath", "//button[@type='submit']"]
+          ]
+        },
+        {
+          "task": "Consent",
+          "optional": true,
+          "match": "https://pulsar:9443/authorize*",
+          "commands": [
+            ["click", "xpath", "//button[normalize-space()='Allow']"]
+          ]
+        },
+        {
+          "task": "Verify Complete",
+          "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+          "commands": [["wait", "id", "submission_complete", 10]]
+        }
+      ]
+    }
+  ],
+  "override": {
+    "oidcc-prompt-login": {
+      "browser": [
+        {
+          "comment": "As the default, but the login page of the second authorization, which prompt=login asks for, fills the module's placeholder; the first authorization has none to fill.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in",
+                  "update-image-placeholder-optional"
+                ],
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-max-age-1": {
+      "browser": [
+        {
+          "comment": "As oidcc-prompt-login: max_age=1 asks for the second login.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in",
+                  "update-image-placeholder-optional"
+                ],
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-ensure-registered-redirect-uri": {
+      "browser": [
+        {
+          "comment": "pulsar answers a redirect_uri the Client did not register with an error page, never a redirect (RFC 6749 §4.1.2.1); the page fills the module's placeholder.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Expect the redirect_uri error page",
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "redirect_uri is not one the client registered",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-ensure-request-object-with-redirect-uri": {
+      "browser": [
+        {
+          "comment": "pulsar does not read request objects, so it checks the redirect_uri in the query, which the module makes invalid, and answers with the error page.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Expect the redirect_uri error page",
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "redirect_uri is not one the client registered",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

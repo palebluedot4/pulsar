@@ -74,8 +74,9 @@ read -rs password && printf %s "$password" | argon2 "$(openssl rand -hex 16)" -i
 # Once per database; every later start needs the same value.
 export PULSAR_SECRET="$(openssl rand -base64 32)"
 # Listens on :8080; PULSAR_ADDR overrides. The issuer must be https, except
-# on a loopback host. conformance/registry.json lists no Client or End-User;
-# name a registry of your own to sign anyone in.
+# on a loopback host. conformance/registry.json lists only the conformance
+# suite's Clients, which redirect to the suite, and an End-User whose
+# password is published; name a registry of your own to sign anyone in.
 PULSAR_ISSUER=http://localhost:8080 \
   PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
   PULSAR_REGISTRY=conformance/registry.json \
@@ -118,11 +119,16 @@ make conformance
 
 This runs pulsar and the
 [OpenID conformance suite](https://gitlab.com/openid/conformance-suite)
-at `release-v5.3.4` in Docker Compose, and the suite's
+at `release-v5.3.4` in Docker Compose, and two of the suite's plans:
 `oidcc-config-certification-test-plan`, which checks the discovery document
-and the JWK Set. It exits non-zero on a failure or a warning that
-`conformance/` does not list with a reason, and leaves the results in
-`conformance/results/`. CI runs the same target on every pull request.
+and the JWK Set, and `oidcc-basic-certification-test-plan`, which signs an
+End-User in through the authorization code flow with static Clients and
+discovery, and checks the responses of the authorization, token and
+UserInfo endpoints. The suite's browser automation fills in the login and
+consent pages. The run exits non-zero on a failure, a warning or a skipped
+module that `conformance/` does not list with a reason, and leaves the
+results in `conformance/results/`. CI runs the same target on every pull
+request.
 [conformance/README.md](conformance/README.md) describes the files it uses.
 
 ## How it is built

@@ -31,8 +31,9 @@ services:
       timeout: 5s
       retries: 15
 
-  # pulsar's name and port are also in config-op.json, runner/run.sh and
-  # the certificate make conformance generates; change them together.
+  # pulsar's name and port are also in config-op.json, config-basic.json,
+  # runner/run.sh and the certificate make conformance generates; change
+  # them together.
   pulsar:
     build:
       context: ..
@@ -44,7 +45,7 @@ services:
       PULSAR_ISSUER: https://pulsar:9443
       PULSAR_DATABASE_URL: postgres://postgres@postgres:5432/postgres?sslmode=disable
       PULSAR_SECRET: ${PULSAR_SECRET:?run through make conformance}
-      # Empty until the Basic OP plan needs a Client and an End-User (#24).
+      # The Clients and End-User config-basic.json signs in with.
       PULSAR_REGISTRY: /conformance/registry.json
       PULSAR_TLS_CERT: /tls/cert.pem
       PULSAR_TLS_KEY: /tls/key.pem
@@ -98,8 +99,10 @@ services:
     # Only what the runner reads, and where it writes; not tls/.
     volumes:
       - ./config-op.json:/conformance/config-op.json:ro
+      - ./config-basic.json:/conformance/config-basic.json:ro
       - ./expected-failures.json:/conformance/expected-failures.json:ro
       - ./expected-warnings.json:/conformance/expected-warnings.json:ro
+      - ./expected-skips.json:/conformance/expected-skips.json:ro
       - ./results:/results
     depends_on:
       - nginx

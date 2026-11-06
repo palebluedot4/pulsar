@@ -1,9 +1,11 @@
 #!/bin/sh
-# Runs the Config OP plan against pulsar through the suite's CI runner, once
-# pulsar reports ready, and exports the results to /results. The runner
-# waits for the suite by itself, and exits non-zero when a module fails to
-# finish, a condition fails or warns without an entry in the expected files,
-# or an entry there matches nothing.
+# Runs the Config OP and Basic OP plans against pulsar through the suite's
+# CI runner, once pulsar reports ready, and exports the results to /results.
+# The runner waits for the suite by itself, and exits non-zero when a module
+# fails to finish, a condition fails or warns without an entry in the
+# expected files, a module is skipped without one, or an entry there
+# matches nothing. Both configurations share an alias, so the plans run one
+# after the other.
 set -eu
 
 ready_url=https://pulsar:9443/readyz
@@ -26,5 +28,7 @@ done
 exec python3 /suite/run-test-plan.py \
 	--verbose \
 	--expected-failures-file '/conformance/expected-failures.json|/conformance/expected-warnings.json' \
+	--expected-skips-file /conformance/expected-skips.json \
 	--export-dir /results \
-	oidcc-config-certification-test-plan /conformance/config-op.json
+	oidcc-config-certification-test-plan /conformance/config-op.json \
+	'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]' /conformance/config-basic.json

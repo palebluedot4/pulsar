@@ -14,7 +14,7 @@ This file is a map. Detail lives where it is linked.
 | `make check`       | Tidy, stale generated query code, lint and formatting, spelling, requirement traceability, workflow lint, tests against PostgreSQL at `PULSAR_TEST_DATABASE_URL`. Runs when an agent stops, unless that working tree was already checked. |
 | `make verify`      | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                                                                                                        |
 | `make fmt`         | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                                                                                                      |
-| `make conformance` | The OpenID conformance suite's Config OP plan against pulsar, in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.                                                                 |
+| `make conformance` | The OpenID conformance suite's Config OP and Basic OP plans against pulsar, in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.                                                   |
 
 Work is not done until `make verify` passes. Run `make help` for the rest.
 Tools are installed by `make setup`, which the maintainer runs outside the

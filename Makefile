@@ -150,13 +150,17 @@ CONFORMANCE_COMPOSE := docker compose --file conformance/compose.yaml
 # Each expected-results file, with the one result its entries may accept,
 # and what jq requires of every entry: each field the suite's runner reads
 # (it fails with a KeyError, after running the whole plan, on one that is
-# missing), the file's own result, and a reason.
-CONFORMANCE_EXPECTED := failure:conformance/expected-failures.json warning:conformance/expected-warnings.json
+# missing), the file's own result, and a reason. A skip entry names a
+# module, not a condition, so it has no result of its own, and must not
+# carry one that would make it look like a failure or warning.
+CONFORMANCE_EXPECTED := failure:conformance/expected-failures.json warning:conformance/expected-warnings.json skip:conformance/expected-skips.json
 CONFORMANCE_ENTRY := type == "array" and all(.[]; \
-	(["test-name", "variant", "configuration-filename", "current-block", "condition"] - keys) == [] \
-	and .["expected-result"] == $$result and (.comment | type) == "string" and .comment != "")
+	(["test-name", "variant", "configuration-filename"] - keys) == [] \
+	and (.comment | type) == "string" and .comment != "" \
+	and if $$result == "skip" then has("expected-result") | not \
+	else (["current-block", "condition"] - keys) == [] and .["expected-result"] == $$result end)
 
-conformance: ## Run the OpenID conformance suite's Config OP plan against pulsar; needs Docker
+conformance: ## Run the OpenID conformance suite's Config OP and Basic OP plans against pulsar; needs Docker
 	@for e in $(CONFORMANCE_EXPECTED); do \
 		result=$${e%%:*}; f=$${e#*:}; \
 		jq -e --arg result "$$result" '$(CONFORMANCE_ENTRY)' "$$f" >/dev/null \
