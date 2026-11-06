@@ -375,6 +375,37 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 	}
 }
 
+// REQ-CORE-4: an authorization request a Client sends by POST from its
+// own site arrives without the Login Session cookie, which is
+// SameSite=Lax, so it is sent to the login page; the browser sends the
+// cookie on that navigation, and a signed-in End-User goes straight back
+// to the authorization endpoint and on to the Client.
+func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	b := &browser{t: t, handler: handler}
+	b.signIn(b.authorize(http.MethodGet, authorizationParams()))
+	session := b.session
+
+	// The cross-site POST: the browser withholds the cookie.
+	b.session = nil
+	loginURL := location(t, b.authorize(http.MethodPost, authorizationParams()))
+	if loginURL.Path != loginPath {
+		t.Fatalf("POST %s without the cookie redirected to %q, want the login page %q", authorizationPath, loginURL, loginPath)
+	}
+
+	b.session = session
+	next := location(t, b.send(http.MethodGet, loginURL.RequestURI(), nil))
+	if next.Path != authorizationPath {
+		t.Fatalf("GET %s while signed in redirected to %q, want %q", loginURL.RequestURI(), next, authorizationPath)
+	}
+	callback := location(t, b.send(http.MethodGet, next.RequestURI(), nil))
+	if got := withoutQuery(callback); got != rpRedirectURI || callback.Query().Get("code") == "" {
+		t.Errorf("authorization request after the login page redirected to %q, want a code at %q", callback, rpRedirectURI)
+	}
+}
+
 // REQ-OAUTH-5, REQ-OAUTH-10, REQ-CORE-5, REQ-BCP-2, REQ-BCP-3: a request
 // whose Client is missing or unknown, or whose redirect URI is missing or
 // differs in any character from every one the Client registered, gets an
@@ -684,6 +715,41 @@ func TestTokenErrors(t *testing.T) {
 			gotHeader := headers(resp.header, wantHeader)
 			if diff := cmp.Diff(wantHeader, gotHeader); diff != "" {
 				t.Errorf("POST %s headers mismatch (-want +got):\n%s", tokenPath, diff)
+			}
+		})
+	}
+}
+
+// REQ-OAUTH-6: the token endpoint treats a parameter without a value as if
+// it had not been sent, and reads parameters from the body only, so a
+// malformed query does not fail the request.
+func TestTokenParameters(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name  string
+		query string
+		edit  func(url.Values)
+	}{
+		{name: "empty client_secret", edit: func(v url.Values) { v.Set("client_secret", "") }},
+		{name: "empty repeat of code", edit: func(v url.Values) { v.Add("code", "") }},
+		{name: "malformed query", query: "?%zz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			form := codeForm(code(t, handler, authorizationParams()))
+			if tt.edit != nil {
+				tt.edit(form)
+			}
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+tokenPath, strings.NewReader(form.Encode()))
+			req.URL.RawQuery = strings.TrimPrefix(tt.query, "?")
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.SetBasicAuth("rp", url.QueryEscape(rpSecret))
+			resp := (&browser{t: t, handler: handler}).do(req)
+			if resp.status != http.StatusOK {
+				t.Errorf("POST %s%s status = %d, want %d; body %q", tokenPath, tt.query, resp.status, http.StatusOK, resp.body)
 			}
 		})
 	}

@@ -15,10 +15,6 @@ import (
 	"github.com/palebluedot4/pulsar/internal/registry"
 )
 
-// maxAuthorizationRequestSize bounds the body of an authorization request
-// sent by POST.
-const maxAuthorizationRequestSize = 64 << 10
-
 // supportedScopes are the scope values pulsar grants. A Client may request
 // others; they are ignored, as RFC 6749 §3.3 allows.
 var supportedScopes = []string{"openid", "profile", "email", "address", "phone"}
@@ -40,15 +36,6 @@ const (
 	errRequestNotSupported     = "request_not_supported"
 	errRequestURINotSupported  = "request_uri_not_supported"
 )
-
-// Headers of the error page, which, like the login page, runs no script,
-// loads nothing and may not be framed.
-var errorPageHeaders = map[string]string{
-	"Content-Type":            "text/html; charset=utf-8",
-	"Cache-Control":           "no-store",
-	"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
-	"X-Frame-Options":         "DENY",
-}
 
 var errorPageTemplate = template.Must(template.New("error").Parse(`<!doctype html>
 <html lang="en">
@@ -77,8 +64,10 @@ func (p *Provider) HandleAuthorization(loginPath string) http.Handler {
 }
 
 func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, loginPath string) {
-	params, ok := readAuthorizationParams(w, r)
-	if !ok {
+	// The query of a GET, or the form-encoded body of a POST (OpenID
+	// Connect Core 1.0 §3.1.2.1).
+	params, err := readParams(w, r)
+	if err != nil {
 		p.errorPage(w, "The authorization request could not be read.")
 		return
 	}
@@ -121,7 +110,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, loginPath s
 		// 303, so that a request sent by POST is retrieved by GET; the
 		// parameters go in the query, to a fixed path on this origin.
 		w.Header().Set("Cache-Control", "no-store")
-		http.Redirect(w, r, loginPath+"?"+params.Encode(), http.StatusSeeOther)
+		http.Redirect(w, r, loginPath+"?"+params.Encode(), http.StatusSeeOther) //nolint:gosec // G710: loginPath is a fixed path on this origin; the query cannot change it.
 		return
 	}
 
@@ -134,17 +123,6 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, loginPath s
 	resp.redirect(w, r, url.Values{"code": {code}})
 }
 
-// repeated returns the first of names that params holds more than once,
-// which RFC 6749 §3.1 forbids.
-func repeated(params url.Values, names []string) (string, bool) {
-	for _, name := range names {
-		if len(params[name]) > 1 {
-			return name, true
-		}
-	}
-	return "", false
-}
-
 // authorizationRequest is an authorization request whose Client and
 // redirect URI are valid and whose other parameters pulsar accepts.
 type authorizationRequest struct {
@@ -152,35 +130,6 @@ type authorizationRequest struct {
 	redirectURI string
 	scopes      []string // the scope values granted
 	nonce       string
-}
-
-// readAuthorizationParams returns the parameters of an authorization
-// request: the query of a GET, or the form-encoded body of a POST (OpenID
-// Connect Core 1.0 §3.1.2.1). A parameter sent without a value is left out,
-// as if it had not been sent (RFC 6749 §3.1).
-func readAuthorizationParams(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
-	var raw url.Values
-	if r.Method == http.MethodPost {
-		r.Body = http.MaxBytesReader(w, r.Body, maxAuthorizationRequestSize)
-		if err := r.ParseForm(); err != nil {
-			return nil, false
-		}
-		raw = r.PostForm
-	} else {
-		var err error
-		if raw, err = url.ParseQuery(r.URL.RawQuery); err != nil {
-			return nil, false
-		}
-	}
-	params := make(url.Values, len(raw))
-	for name, values := range raw {
-		for _, v := range values {
-			if v != "" {
-				params[name] = append(params[name], v)
-			}
-		}
-	}
-	return params, true
 }
 
 // parseAuthorizationRequest checks the parameters of an authorization
@@ -227,11 +176,13 @@ func parseAuthorizationRequest(client *registry.Client, params url.Values) (req 
 }
 
 // issueCode stores and returns a new authorization code for req, for the
-// End-User of auth. Codes that have expired are deleted first.
+// End-User of auth.
 func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth login.Authentication) (string, error) {
 	now := time.Now()
+	// Issuing a code is when expired ones are deleted. A failure leaves
+	// them for the next and does not fail this one.
 	if err := p.queries.DeleteExpiredAuthorizationCodes(ctx, now); err != nil {
-		return "", err
+		p.logger.ErrorContext(ctx, "delete expired authorization codes", "error", err)
 	}
 	code, hash := newCode()
 	err := p.queries.InsertAuthorizationCode(ctx, queries.InsertAuthorizationCodeParams{
@@ -300,9 +251,7 @@ func (p *Provider) errorPage(w http.ResponseWriter, msg string) {
 		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
-	for k, v := range errorPageHeaders {
-		w.Header().Set(k, v)
-	}
+	login.SetPageHeaders(w.Header())
 	w.WriteHeader(http.StatusBadRequest)
 	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.
 }

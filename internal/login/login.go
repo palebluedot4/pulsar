@@ -67,6 +67,14 @@ var pageHeaders = map[string]string{
 	"X-Frame-Options":         "DENY",
 }
 
+// SetPageHeaders sets on h the headers of every page pulsar serves: the
+// login page, and the authorization endpoint's error page.
+func SetPageHeaders(h http.Header) {
+	for k, v := range pageHeaders {
+		h.Set(k, v)
+	}
+}
+
 // page is the login page's content.
 type page struct {
 	SignedInAs string // the username of the End-User signed in, if any
@@ -213,7 +221,8 @@ func (s *Sessions) endUser(r *http.Request) (*registry.EndUser, bool) {
 // by POST, at path. A login from a page whose URL has a query sends the
 // browser on to continuePath with the same query: that is how an
 // authorization request, sent to the login page with its parameters,
-// resumes after login. Any other login sends it back to the page. It logs
+// resumes after login. So does a visit to such a page by a browser already
+// signed in. Any other login sends it back to the page. It logs
 // to logger any error that ends a request.
 func (s *Sessions) Handler(path, continuePath string, logger *slog.Logger) http.Handler {
 	h := &handler{path: path, continuePath: continuePath, sessions: s, logger: logger}
@@ -233,9 +242,7 @@ type handler struct {
 // the page after it. Here every response is preceded by save, which
 // answers 500 alone if saving fails.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	for k, v := range pageHeaders {
-		w.Header().Set(k, v)
-	}
+	SetPageHeaders(w.Header())
 	w.Header().Add("Vary", "Cookie")
 	loaded, err := h.sessions.load(r)
 	if err != nil {
@@ -250,6 +257,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var p page
 	if u, ok := h.sessions.endUser(r); ok {
+		if r.URL.RawQuery != "" {
+			// An authorization request reached the login page without the
+			// Login Session cookie, as one a Client sends by POST from
+			// its own site does, since the cookie is SameSite=Lax. The
+			// browser has sent it now, so the request goes back.
+			h.continueAfterLogin(w, r)
+			return
+		}
 		p.SignedInAs = u.Username
 	}
 	h.render(w, r, p)
@@ -289,12 +304,19 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	if err := h.sessions.store.deleteEnded(ctx); err != nil {
 		h.logger.ErrorContext(ctx, "delete ended login sessions", "error", err)
 	}
+	h.continueAfterLogin(w, r)
+}
+
+// continueAfterLogin saves the Login Session and sends the browser on: to
+// continuePath with the page's query, if it has one, and back to the page
+// otherwise.
+func (h *handler) continueAfterLogin(w http.ResponseWriter, r *http.Request) {
 	if err := h.sessions.save(w, r); err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	// The query goes on unchanged to a fixed path on this origin, so it
-	// cannot send the browser anywhere else. 303, not 307, so that the
+	// cannot send the browser anywhere else. 303, not 307, so that a
 	// password in this request's body is not sent on (RFC 9700 §4.12).
 	next := h.path
 	if r.URL.RawQuery != "" {

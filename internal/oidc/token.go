@@ -18,9 +18,6 @@ import (
 	"github.com/palebluedot4/pulsar/internal/registry"
 )
 
-// maxTokenRequestSize bounds the body of a token request.
-const maxTokenRequestSize = 64 << 10
-
 // tokenParams are the parameters of a token request that pulsar reads.
 // Every other parameter is ignored (RFC 6749 §3.2).
 var tokenParams = []string{"grant_type", "code", "redirect_uri", "client_id", "client_secret"}
@@ -81,14 +78,12 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 // exchange reads a token request, authenticates its Client and exchanges
 // its code for tokens.
 func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenResponse, *tokenError) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxTokenRequestSize)
-	if err := r.ParseForm(); err != nil {
-		return nil, badRequest(errInvalidRequest, "The request body could not be read.")
+	// Parameters are read from the form-encoded body only (RFC 6749
+	// §4.1.3).
+	params, err := readParams(w, r)
+	if err != nil {
+		return nil, badRequest(errInvalidRequest, "The request body is not a form-encoded set of parameters.")
 	}
-	// Parameters are read from the body only (RFC 6749 §4.1.3); a
-	// parameter sent without a value is treated as if it had not been
-	// sent (RFC 6749 §3.1).
-	params := r.PostForm
 	if name, ok := repeated(params, tokenParams); ok {
 		return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
 	}
@@ -162,17 +157,22 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // issueTokens redeems code, for client and redirectURI, and returns the
 // tokens issued for it. The code is redeemed and the access token recorded
 // in one transaction, so that a code is redeemed at most once, and only
-// when its tokens are issued.
+// when its token is recorded. The tokens are signed after it commits, so
+// that the code's row is not locked meanwhile; signing fails only before
+// the signing keys are loaded, when the endpoint is not served.
 func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI string) (*tokenResponse, error) {
 	now := time.Now()
+	exp := now.Add(tokenLifetime)
 	hash := hashCode(code)
-	var resp *tokenResponse
+	jti := rand.Text()
+	var row queries.RedeemAuthorizationCodeRow
 	// Read committed whatever the database's default, so that a second
 	// redemption waits for the first and then finds the code redeemed,
 	// rather than failing to serialize.
 	err := pgx.BeginTxFunc(ctx, p.db, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		q := p.queries.WithTx(tx)
-		row, err := q.RedeemAuthorizationCode(ctx, queries.RedeemAuthorizationCodeParams{
+		var err error
+		row, err = q.RedeemAuthorizationCode(ctx, queries.RedeemAuthorizationCodeParams{
 			CodeHash:    hash,
 			ClientID:    client.ID,
 			RedirectUri: redirectURI,
@@ -186,54 +186,51 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		if err != nil {
 			return err
 		}
-		jti := rand.Text()
-		exp := now.Add(tokenLifetime)
-		scope := strings.Join(row.Scopes, " ")
-		accessToken, err := p.keys.SignJWT("at+jwt", accessTokenClaims{
-			Issuer:   p.issuer.String(),
-			Expiry:   exp.Unix(),
-			Audience: p.issuer.String(),
-			Subject:  row.Subject,
-			ClientID: client.ID,
-			IssuedAt: now.Unix(),
-			JTI:      jti,
-			Scope:    scope,
-		})
-		if err != nil {
-			return err
-		}
-		idToken, err := p.keys.SignJWT("JWT", idTokenClaims{
-			Issuer:          p.issuer.String(),
-			Subject:         row.Subject,
-			Audience:        client.ID,
-			Expiry:          exp.Unix(),
-			IssuedAt:        now.Unix(),
-			AuthTime:        row.AuthTime.Unix(),
-			Nonce:           row.Nonce,
-			AccessTokenHash: accessTokenHash(accessToken),
-		})
-		if err != nil {
-			return err
-		}
-		if err := q.DeleteExpiredAccessTokens(ctx, now); err != nil {
-			return err
-		}
-		if err := q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, Expiry: exp}); err != nil {
-			return err
-		}
-		resp = &tokenResponse{
-			AccessToken: accessToken,
-			TokenType:   "Bearer",
-			ExpiresIn:   int64(tokenLifetime / time.Second),
-			IDToken:     idToken,
-			Scope:       scope,
-		}
-		return nil
+		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, Expiry: exp})
 	})
 	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+	// Issuing a token is when expired ones are deleted. A failure leaves
+	// them for the next and does not fail this one.
+	if err := p.queries.DeleteExpiredAccessTokens(ctx, now); err != nil {
+		p.logger.ErrorContext(ctx, "delete expired access tokens", "error", err)
+	}
+
+	scope := strings.Join(row.Scopes, " ")
+	accessToken, err := p.keys.SignJWT("at+jwt", accessTokenClaims{
+		Issuer:   p.issuer.String(),
+		Expiry:   exp.Unix(),
+		Audience: p.issuer.String(),
+		Subject:  row.Subject,
+		ClientID: client.ID,
+		IssuedAt: now.Unix(),
+		JTI:      jti,
+		Scope:    scope,
+	})
+	if err != nil {
+		return nil, err
+	}
+	idToken, err := p.keys.SignJWT("JWT", idTokenClaims{
+		Issuer:          p.issuer.String(),
+		Subject:         row.Subject,
+		Audience:        client.ID,
+		Expiry:          exp.Unix(),
+		IssuedAt:        now.Unix(),
+		AuthTime:        row.AuthTime.Unix(),
+		Nonce:           row.Nonce,
+		AccessTokenHash: accessTokenHash(accessToken),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &tokenResponse{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   int64(tokenLifetime / time.Second),
+		IDToken:     idToken,
+		Scope:       scope,
+	}, nil
 }
 
 // idTokenClaims are the claims of an ID token (OpenID Connect Core 1.0 §2,
