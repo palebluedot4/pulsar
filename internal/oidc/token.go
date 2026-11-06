@@ -23,9 +23,13 @@ import (
 
 // tokenParams are the parameters of a token request that pulsar reads.
 // Every other parameter is ignored (RFC 6749 §3.2).
-var tokenParams = []string{"grant_type", "code", "redirect_uri", "code_verifier", "client_id", "client_secret", "client_assertion_type", "client_assertion"}
+var tokenParams = []string{
+	"grant_type", "code", "redirect_uri", "code_verifier", "refresh_token", "scope",
+	"client_id", "client_secret", "client_assertion_type", "client_assertion",
+}
 
-// Error codes of a token error response (RFC 6749 §5.2).
+// Error codes of a token error response (RFC 6749 §5.2), besides those
+// the authorization endpoint shares.
 const (
 	errInvalidClient        = "invalid_client"
 	errInvalidGrant         = "invalid_grant"
@@ -60,7 +64,9 @@ type tokenError struct {
 // or private_key_jwt, whichever it registered, or for a public Client that
 // sends its client_id. A code issued with a PKCE code challenge is
 // redeemed only with its code_verifier (RFC 7636 §4.6). A code issued with
-// offline access is redeemed for a refresh token too.
+// offline access is redeemed for a refresh token too, and a refresh token
+// for new tokens of each kind (RFC 6749 §6), with the same Client
+// authentication.
 func (p *Provider) HandleToken() http.Handler {
 	return http.HandlerFunc(p.token)
 }
@@ -86,10 +92,10 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 }
 
 // exchange reads a token request, authenticates its Client and exchanges
-// its code for tokens.
+// its grant for tokens.
 func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenResponse, *tokenError) {
 	// Parameters are read from the form-encoded body only (RFC 6749
-	// §4.1.3).
+	// §4.1.3, §6).
 	params, err := readParams(w, r)
 	if err != nil {
 		return nil, badRequest(errInvalidRequest, "The request body is not a form-encoded set of parameters.")
@@ -98,16 +104,24 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 		return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
 	}
 
-	// The request's form is checked before its Client authenticates, so
-	// that a malformed request does not use up a client assertion, which
-	// authenticates once.
+	// Each grant checks the request's form before its Client
+	// authenticates, so that a malformed request does not use up a client
+	// assertion, which authenticates once.
 	switch params.Get("grant_type") {
 	case "authorization_code":
+		return p.exchangeCode(r, params)
+	case "refresh_token":
+		return p.exchangeRefreshToken(r, params)
 	case "":
 		return nil, badRequest(errInvalidRequest, "The parameter grant_type is required.")
 	default:
-		return nil, badRequest(errUnsupportedGrantType, "Only the grant_type authorization_code is supported.")
+		return nil, badRequest(errUnsupportedGrantType, "Only the grant_types authorization_code and refresh_token are supported.")
 	}
+}
+
+// exchangeCode authenticates the Client of a token request for the
+// authorization_code grant and exchanges its code for tokens.
+func (p *Provider) exchangeCode(r *http.Request, params url.Values) (*tokenResponse, *tokenError) {
 	code, redirectURI := params.Get("code"), params.Get("redirect_uri")
 	switch {
 	case code == "":
@@ -367,21 +381,188 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	if refused {
 		return nil, errCodeNotRedeemable
 	}
-	// Issuing a token is when expired ones are deleted. A failure leaves
-	// them for the next and does not fail this one.
+	p.deleteExpiredAccessTokens(ctx, now)
+	return p.signTokens(client, issued{
+		subject:       row.Subject,
+		scopes:        row.Scopes,
+		authTime:      row.AuthTime,
+		nonce:         row.Nonce,
+		idTokenClaims: claims.IDToken,
+		jti:           jti,
+		refreshToken:  refreshToken,
+	}, now)
+}
+
+// exchangeRefreshToken authenticates the Client of a token request for the
+// refresh_token grant and exchanges its refresh token for tokens (RFC 6749
+// §6).
+func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*tokenResponse, *tokenError) {
+	refreshToken := params.Get("refresh_token")
+	if refreshToken == "" {
+		return nil, badRequest(errInvalidRequest, "The parameter refresh_token is required.")
+	}
+	// Each scope value adds an access range (RFC 6749 §3.3), so one given
+	// twice is asked for once.
+	var scopes []string
+	for s := range strings.FieldsSeq(params.Get("scope")) {
+		if !slices.Contains(scopes, s) {
+			scopes = append(scopes, s)
+		}
+	}
+
+	client, tokErr := p.authenticateClient(r, params)
+	if tokErr != nil {
+		return nil, tokErr
+	}
+	resp, err := p.refresh(r.Context(), client, refreshToken, scopes)
+	switch {
+	case errors.Is(err, errRefreshTokenNotRedeemable):
+		return nil, badRequest(errInvalidGrant, "The refresh token is invalid, expired, revoked or already used, or was issued to another client.")
+	case errors.Is(err, errScopeNotGranted):
+		return nil, badRequest(errInvalidScope, "The scope must not include any scope not originally granted.")
+	case err != nil:
+		p.logger.ErrorContext(r.Context(), "token endpoint", "error", err)
+		return nil, &tokenError{status: http.StatusInternalServerError, Code: errServerError}
+	}
+	return resp, nil
+}
+
+// errRefreshTokenNotRedeemable is returned by refresh for a refresh token
+// that is unknown or already used, or whose Refresh Token Family belongs to
+// another Client, has ended or has been revoked.
+var errRefreshTokenNotRedeemable = errors.New("the refresh token cannot be redeemed")
+
+// errScopeNotGranted is returned by refresh for a scope that includes a
+// value the Refresh Token Family was not granted.
+var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
+
+// refresh redeems refreshToken, for client, and returns the tokens issued
+// for it: an access token for scopes, or for the family's scopes if scopes
+// is empty; an ID token; and the refresh token that replaces this one, in
+// the same Refresh Token Family, for the family's scopes (RFC 6749 §6). A
+// refresh token is redeemed once, so that a Client holds one at a time
+// (RFC 9700 §4.14.2). Each token is the family's: the access token is
+// recorded with the family and the code that started it, and the ID
+// token's sub, aud and auth_time are those of the authorization the code
+// was issued for (OpenID Connect Core 1.0 §12.2).
+//
+// The refresh token is redeemed, and its replacement and the access token
+// recorded, in one transaction, so that of two redemptions of one refresh
+// token, at most one succeeds. A scope that exceeds the family's rolls it
+// back, so that the refresh token can still be redeemed. The tokens are
+// signed after it commits, as issueTokens signs them.
+func (p *Provider) refresh(ctx context.Context, client *registry.Client, refreshToken string, scopes []string) (*tokenResponse, error) {
+	now := time.Now()
+	jti := rand.Text()
+	var row queries.RedeemRefreshTokenRow
+	var claims claimsRequest
+	var replacement string
+	err := pgx.BeginTxFunc(ctx, p.db, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
+		q := p.queries.WithTx(tx)
+		var err error
+		row, err = q.RedeemRefreshToken(ctx, queries.RedeemRefreshTokenParams{
+			TokenHash: hashCode(refreshToken),
+			ClientID:  client.ID,
+			Now:       now,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errRefreshTokenNotRedeemable
+		}
+		if err != nil {
+			return err
+		}
+		if len(scopes) == 0 {
+			scopes = row.Scopes
+		} else if !isSubset(scopes, row.Scopes) {
+			return errScopeNotGranted
+		}
+		if claims, err = decodeClaimsRequest(row.Claims); err != nil {
+			return err
+		}
+		userInfoClaims, err := claims.UserInfo.encode()
+		if err != nil {
+			return err
+		}
+		var replacementHash []byte
+		replacement, replacementHash = newRefreshToken()
+		if err := q.InsertRefreshToken(ctx, queries.InsertRefreshTokenParams{TokenHash: replacementHash, FamilyID: row.ID}); err != nil {
+			return err
+		}
+		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{
+			Jti:            jti,
+			CodeHash:       row.CodeHash,
+			FamilyID:       pgtype.Int8{Int64: row.ID, Valid: true},
+			UserinfoClaims: userInfoClaims,
+			Expiry:         now.Add(TokenLifetime),
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	p.deleteExpiredAccessTokens(ctx, now)
+	// The ID token has no nonce, which §12.2 allows only with the value
+	// of the original, and recommends against.
+	return p.signTokens(client, issued{
+		subject:       row.Subject,
+		scopes:        scopes,
+		authTime:      row.AuthTime,
+		idTokenClaims: claims.IDToken,
+		jti:           jti,
+		refreshToken:  replacement,
+	}, now)
+}
+
+// isSubset reports whether every value of sub is one of set.
+func isSubset(sub, set []string) bool {
+	for _, v := range sub {
+		if !slices.Contains(set, v) {
+			return false
+		}
+	}
+	return true
+}
+
+// deleteExpiredAccessTokens deletes the records of access tokens expired
+// at now. Issuing a token is when they are deleted. A failure leaves them
+// for the next and does not fail this one.
+func (p *Provider) deleteExpiredAccessTokens(ctx context.Context, now time.Time) {
 	if err := p.queries.DeleteExpiredAccessTokens(ctx, now); err != nil {
 		p.logger.ErrorContext(ctx, "delete expired access tokens", "error", err)
 	}
+}
 
-	scope := strings.Join(row.Scopes, " ")
+// issued is what a token response is issued for, and the tokens recorded
+// for it that signTokens does not sign.
+type issued struct {
+	subject string
+	// scopes are those of the access token.
+	scopes   []string
+	authTime time.Time
+	// nonce is the ID token's, or "" for none.
+	nonce string
+	// idTokenClaims are the claims the claims parameter requested in the ID
+	// token.
+	idTokenClaims requestedClaims
+	// jti is the access token's, as it is recorded.
+	jti string
+	// refreshToken is the refresh token issued, or "" for none.
+	refreshToken string
+}
+
+// signTokens returns the token response for t, issued to client at now:
+// an access token and an ID token, each valid for TokenLifetime, and t's
+// refresh token, if any.
+func (p *Provider) signTokens(client *registry.Client, t issued, now time.Time) (*tokenResponse, error) {
+	exp := now.Add(TokenLifetime)
+	scope := strings.Join(t.scopes, " ")
 	accessToken, err := p.keys.SignJWT("at+jwt", accessTokenClaims{
 		Issuer:   p.issuer.String(),
 		Expiry:   exp.Unix(),
 		Audience: p.issuer.String(),
-		Subject:  row.Subject,
+		Subject:  t.subject,
 		ClientID: client.ID,
 		IssuedAt: now.Unix(),
-		JTI:      jti,
+		JTI:      t.jti,
 		Scope:    scope,
 	})
 	if err != nil {
@@ -394,24 +575,24 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	// UserInfo, since an access token is issued (§5.4).
 	idClaims := map[string]any{
 		"iss":       p.issuer.String(),
-		"sub":       row.Subject,
+		"sub":       t.subject,
 		"aud":       client.ID,
 		"exp":       exp.Unix(),
 		"iat":       now.Unix(),
-		"auth_time": row.AuthTime.Unix(),
+		"auth_time": t.authTime.Unix(),
 		"at_hash":   accessTokenHash(accessToken),
 	}
-	if row.Nonce != "" {
-		idClaims["nonce"] = row.Nonce
+	if t.nonce != "" {
+		idClaims["nonce"] = t.nonce
 	}
 	// An End-User removed from the registry since the code was issued has
 	// no claims to release, and no error follows from that (§5.5.1).
-	if u, ok := p.registry.EndUser(row.Subject); ok && len(claims.IDToken) > 0 {
+	if u, ok := p.registry.EndUser(t.subject); ok && len(t.idTokenClaims) > 0 {
 		all, err := endUserClaims(u)
 		if err != nil {
 			return nil, err
 		}
-		claims.IDToken.release(idClaims, all)
+		t.idTokenClaims.release(idClaims, all)
 	}
 	idToken, err := p.keys.SignJWT("JWT", idClaims)
 	if err != nil {
@@ -422,7 +603,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		TokenType:    "Bearer",
 		ExpiresIn:    int64(TokenLifetime / time.Second),
 		IDToken:      idToken,
-		RefreshToken: refreshToken,
+		RefreshToken: t.refreshToken,
 		Scope:        scope,
 	}, nil
 }

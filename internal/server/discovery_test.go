@@ -11,7 +11,7 @@ import (
 
 // REQ-DISC-2, REQ-DISC-3, REQ-DISC-4, REQ-DISC-5, REQ-DISC-6, REQ-DISC-7,
 // REQ-DISC-8, REQ-DISC-9, REQ-DISC-10, REQ-DISC-11, REQ-DISC-12,
-// REQ-DISC-14, REQ-DISC-15, REQ-DISC-16, REQ-DISC-17,
+// REQ-DISC-14, REQ-DISC-15, REQ-DISC-16, REQ-DISC-17, REQ-DISC-19,
 // REQ-ISS-1, REQ-BCP-1: the discovery document, at the path derived from
 // the issuer, with the metadata spec #11 lists.
 func TestDiscovery(t *testing.T) {
@@ -56,10 +56,10 @@ func TestDiscovery(t *testing.T) {
 				"token_endpoint":                        tt.issuer + "/token",
 				"userinfo_endpoint":                     tt.issuer + "/userinfo",
 				"jwks_uri":                              tt.issuer + "/jwks",
-				"scopes_supported":                      []any{"openid", "profile", "email", "address", "phone"},
+				"scopes_supported":                      []any{"openid", "profile", "email", "address", "phone", "offline_access"},
 				"response_types_supported":              []any{"code"},
 				"response_modes_supported":              []any{"query"},
-				"grant_types_supported":                 []any{"authorization_code"},
+				"grant_types_supported":                 []any{"authorization_code", "refresh_token"},
 				"subject_types_supported":               []any{"public"},
 				"id_token_signing_alg_values_supported": []any{"RS256"},
 				"token_endpoint_auth_methods_supported": []any{

@@ -18,18 +18,20 @@ with the access token in the `Authorization` header or the body; the
 `claims` parameter requests individual claims in the ID token or from
 UserInfo. A request with `offline_access` and `prompt=consent` asks the
 End-User for offline access, and if they allow it, the token response
-carries a refresh token, which no grant redeems yet
-([#51](https://github.com/palebluedot4/pulsar/issues/51)). A second
+carries a refresh token. The Client redeems it with the `refresh_token`
+grant, for a narrower scope if it asks, for a new access token, ID token
+and refresh token, for up to thirty days; each refresh token is redeemed
+once. A second
 redemption of a code that is otherwise valid, by its own Client, with its
 redirect URI, and with a matching `code_verifier` exactly when the code
 has a challenge, revokes the access tokens issued from it, and
 `pulsar keys rotate` rotates the signing key. The OpenID conformance
 suite's Config OP and Basic OP plans run against it in CI; on
 2026-11-06, at commit `8d6ab47`, they finished with no failures, as
-[Checking conformance](#checking-conformance) details. The next
-specification is refresh tokens, each replaced on every use, a replaced one
-presented again revoking its whole Refresh Token Family
-([#47](https://github.com/palebluedot4/pulsar/issues/47)).
+[Checking conformance](#checking-conformance) details. Next in the
+refresh token specification
+([#47](https://github.com/palebluedot4/pulsar/issues/47)): a replaced
+refresh token presented again revokes its whole Refresh Token Family.
 
 ## Running it
 
@@ -136,7 +138,12 @@ at `release-v5.3.4` in Docker Compose, and two of the suite's plans:
 and the JWK Set, and `oidcc-basic-certification-test-plan`, which signs an
 End-User in through the authorization code flow with static Clients and
 discovery, and checks the responses of the authorization, token and
-UserInfo endpoints. The suite's browser automation fills in the login and
+UserInfo endpoints. Its `oidcc-refresh-token` module redeems a refresh
+token once with `scope` and once without, checks the response, the
+refreshed ID token, and UserInfo with the new access token, and checks
+that another Client's refresh token is refused. It never presents a
+refresh token twice, so only pulsar's own tests check that each is
+redeemed once. The suite's browser automation fills in the login and
 consent pages. The run exits non-zero on a failure, a warning or a skipped
 module that `conformance/` does not list with a reason, and leaves the
 results in `conformance/results/`. CI runs the same target on every pull

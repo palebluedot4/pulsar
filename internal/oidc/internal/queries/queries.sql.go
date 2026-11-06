@@ -315,3 +315,50 @@ func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthori
 	)
 	return i, err
 }
+
+const redeemRefreshToken = `-- name: RedeemRefreshToken :one
+UPDATE refresh_tokens r
+SET used = true
+FROM refresh_token_families f
+WHERE r.token_hash = $1
+    AND f.id = r.family_id
+    AND f.client_id = $2
+    AND f.expiry > $3
+    AND NOT f.revoked
+    AND NOT r.used
+RETURNING f.id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time
+`
+
+type RedeemRefreshTokenParams struct {
+	TokenHash []byte
+	ClientID  string
+	Now       time.Time
+}
+
+type RedeemRefreshTokenRow struct {
+	ID       int64
+	CodeHash []byte
+	Subject  string
+	Scopes   []string
+	Claims   []byte
+	AuthTime time.Time
+}
+
+// Marks the refresh token used and returns its family and what the family
+// was granted, if the token has not been used and its family belongs to
+// this Client, has not ended and has not been revoked. Under read
+// committed, of two transactions redeeming one refresh token, the second
+// waits for the first and then finds it used.
+func (q *Queries) RedeemRefreshToken(ctx context.Context, arg RedeemRefreshTokenParams) (RedeemRefreshTokenRow, error) {
+	row := q.db.QueryRow(ctx, redeemRefreshToken, arg.TokenHash, arg.ClientID, arg.Now)
+	var i RedeemRefreshTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.CodeHash,
+		&i.Subject,
+		&i.Scopes,
+		&i.Claims,
+		&i.AuthTime,
+	)
+	return i, err
+}

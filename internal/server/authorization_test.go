@@ -772,7 +772,7 @@ func TestAuthorizationEmptyParameters(t *testing.T) {
 // fails, in the JSON form of RFC 6749 §5.2, when the Client does not
 // authenticate by its registered method, or the code is unknown, used,
 // issued to another Client or for another redirect URI, or the grant type
-// is not authorization_code.
+// is neither authorization_code nor refresh_token.
 func TestTokenErrors(t *testing.T) {
 	t.Parallel()
 
@@ -800,8 +800,8 @@ func TestTokenErrors(t *testing.T) {
 		},
 		{name: "code already redeemed", clientID: "rp", secret: rpSecret, redeemFirst: true, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 		{
-			name: "grant_type refresh_token", clientID: "rp", secret: rpSecret,
-			edit:       func(v url.Values) { v.Set("grant_type", "refresh_token") },
+			name: "grant_type password", clientID: "rp", secret: rpSecret,
+			edit:       func(v url.Values) { v.Set("grant_type", "password") },
 			wantStatus: http.StatusBadRequest, wantError: "unsupported_grant_type",
 		},
 		{

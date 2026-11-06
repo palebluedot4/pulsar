@@ -33,10 +33,7 @@ var supportedScopes = []login.Scope{
 
 // offlineAccessScope asks for a refresh token (OpenID Connect Core 1.0
 // §11). It is granted only with prompt=consent, and never from a Consent
-// (see login.OfflineAccess).
-//
-// TODO(#51): list it in discovery, with the refresh_token grant that
-// redeems its refresh tokens.
+// (see login.OfflineAccess). Discovery lists it after supportedScopes.
 var offlineAccessScope = login.Scope{
 	Value:       login.OfflineAccess,
 	Description: "access while you are away, so that the client can keep acting for you when you are not signed in",
