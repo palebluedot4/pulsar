@@ -15,6 +15,18 @@ that pulsar, as an OP, must or should meet.
   Authorization Servers MUST include a nonce Claim in the ID Token with the
   Claim Value being the nonce value sent in the Authentication Request."
 
+- REQ-CORE-10 (§2, `iss`): "REQUIRED. Issuer Identifier for the Issuer of
+  the response."
+- REQ-CORE-11 (§2, `exp`): "REQUIRED. Expiration time on or after which the
+  ID Token MUST NOT be accepted by the RP when performing authentication
+  with the OP."
+- REQ-CORE-12 (§2, `iat`): "REQUIRED. Time at which the JWT was issued."
+- REQ-CORE-13 (§2, `auth_time`): "When a max_age request is made or when
+  auth_time is requested as an Essential Claim, then this Claim is
+  REQUIRED; otherwise, its inclusion is OPTIONAL."
+
+  pulsar includes `auth_time` in every ID token.
+
 ## Authorization endpoint (§3.1.2)
 
 - REQ-CORE-4 (§3.1.2.1): "Authorization Servers MUST support the use of the

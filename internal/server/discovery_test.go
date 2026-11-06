@@ -41,10 +41,7 @@ func TestDiscovery(t *testing.T) {
 				"Cache-Control":               "public, max-age=3600",
 				"Access-Control-Allow-Origin": "*",
 			}
-			gotHeader := make(map[string]string, len(wantHeader))
-			for k := range wantHeader {
-				gotHeader[k] = rec.Header().Get(k)
-			}
+			gotHeader := headers(rec.Header(), wantHeader)
 			if diff := cmp.Diff(wantHeader, gotHeader); diff != "" {
 				t.Errorf("GET %s headers mismatch (-want +got):\n%s", tt.path, diff)
 			}

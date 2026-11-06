@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"bytes"
+	"context"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -124,13 +125,24 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, loginPath s
 		return
 	}
 
-	code, err := p.issueCode(r, req, auth)
+	code, err := p.issueCode(r.Context(), req, auth)
 	if err != nil {
 		p.logger.ErrorContext(r.Context(), "issue authorization code", "error", err)
 		resp.redirectError(w, r, errServerError, "")
 		return
 	}
 	resp.redirect(w, r, url.Values{"code": {code}})
+}
+
+// repeated returns the first of names that params holds more than once,
+// which RFC 6749 §3.1 forbids.
+func repeated(params url.Values, names []string) (string, bool) {
+	for _, name := range names {
+		if len(params[name]) > 1 {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // authorizationRequest is an authorization request whose Client and
@@ -175,10 +187,8 @@ func readAuthorizationParams(w http.ResponseWriter, r *http.Request) (url.Values
 // request for client, whose redirect URI is valid, and returns the request,
 // or the error code and description to redirect with.
 func parseAuthorizationRequest(client *registry.Client, params url.Values) (req authorizationRequest, errCode, errDesc string) {
-	for _, name := range authorizationParams {
-		if len(params[name]) > 1 {
-			return req, errInvalidRequest, "The parameter " + name + " is repeated."
-		}
+	if name, ok := repeated(params, authorizationParams); ok {
+		return req, errInvalidRequest, "The parameter " + name + " is repeated."
 	}
 	switch {
 	case params.Has("request"):
@@ -218,8 +228,7 @@ func parseAuthorizationRequest(client *registry.Client, params url.Values) (req 
 
 // issueCode stores and returns a new authorization code for req, for the
 // End-User of auth. Codes that have expired are deleted first.
-func (p *Provider) issueCode(r *http.Request, req authorizationRequest, auth login.Authentication) (string, error) {
-	ctx := r.Context()
+func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth login.Authentication) (string, error) {
 	now := time.Now()
 	if err := p.queries.DeleteExpiredAuthorizationCodes(ctx, now); err != nil {
 		return "", err

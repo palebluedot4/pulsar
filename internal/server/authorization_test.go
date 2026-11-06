@@ -143,6 +143,16 @@ func (b *browser) authorize(method string, params url.Values) response {
 	return b.send(method, authorizationPath+"?"+params.Encode(), nil)
 }
 
+// headers returns the value of each header that want names, so that a
+// test compares with want only the headers it checks.
+func headers(h http.Header, want map[string]string) map[string]string {
+	got := make(map[string]string, len(want))
+	for k := range want {
+		got[k] = h.Get(k)
+	}
+	return got
+}
+
 // location returns the Location of a 303 response, failing the test for
 // any other.
 func location(t *testing.T, resp response) *url.URL {
@@ -244,8 +254,9 @@ func verify(t *testing.T, handler http.Handler, token string) jwt {
 	return jwt{alg: h.Algorithm, kid: h.KeyID, typ: typ, claims: claims}
 }
 
-// REQ-CORE-2, REQ-CORE-3, REQ-CORE-4, REQ-CORE-7, REQ-OAUTH-3,
-// REQ-OAUTH-4, REQ-OAUTH-9, REQ-OAUTH-13, REQ-ISS-2, REQ-AT-1, REQ-AT-2,
+// REQ-CORE-2, REQ-CORE-3, REQ-CORE-4, REQ-CORE-7, REQ-CORE-10,
+// REQ-CORE-11, REQ-CORE-12, REQ-CORE-13, REQ-OAUTH-3, REQ-OAUTH-4,
+// REQ-OAUTH-9, REQ-OAUTH-13, REQ-OAUTH-21, REQ-ISS-2, REQ-AT-1, REQ-AT-2,
 // REQ-AT-3, REQ-AT-4, REQ-AT-5, REQ-BCP-4: a Client sends an End-User
 // without a Login Session to the authorization endpoint, by GET or POST;
 // the End-User signs in and returns to it; the Client redeems the code
@@ -282,8 +293,13 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 				query := callback.Query()
 				code := query.Get("code")
 				wantQuery := url.Values{"code": {code}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
-				if diff := cmp.Diff(wantQuery, query); diff != "" || code == "" {
+				if diff := cmp.Diff(wantQuery, query); diff != "" {
 					t.Errorf("authorization response parameters mismatch (-want +got):\n%s", diff)
+				}
+				// At least 160 bits, so that guessing a code is as unlikely
+				// as RFC 6749 §10.10 recommends.
+				if raw, err := base64.RawURLEncoding.DecodeString(code); err != nil || len(raw) < 20 {
+					t.Errorf("authorization response code = %q, want at least 160 bits in base64url", code)
 				}
 
 				resp = tokenRequest(t, handler, "rp", rpSecret, codeForm(code))
@@ -291,10 +307,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 					t.Fatalf("POST %s status = %d, want %d; body %q", tokenPath, resp.status, http.StatusOK, resp.body)
 				}
 				wantHeader := map[string]string{"Content-Type": "application/json", "Cache-Control": "no-store", "Pragma": "no-cache"}
-				gotHeader := make(map[string]string, len(wantHeader))
-				for k := range wantHeader {
-					gotHeader[k] = resp.header.Get(k)
-				}
+				gotHeader := headers(resp.header, wantHeader)
 				if diff := cmp.Diff(wantHeader, gotHeader); diff != "" {
 					t.Errorf("POST %s headers mismatch (-want +got):\n%s", tokenPath, diff)
 				}
@@ -308,8 +321,15 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 				if err := json.Unmarshal([]byte(resp.body), &tokens); err != nil {
 					t.Fatalf("POST %s body is not a token response: %v", tokenPath, err)
 				}
-				if got, want := [3]any{tokens.TokenType, tokens.ExpiresIn, tokens.Scope}, [3]any{"Bearer", int64(600), "openid profile"}; got != want {
-					t.Errorf("POST %s token_type, expires_in, scope = %v, want %v", tokenPath, got, want)
+				type fields struct {
+					TokenType string
+					ExpiresIn int64
+					Scope     string
+				}
+				wantFields := fields{TokenType: "Bearer", ExpiresIn: 600, Scope: "openid profile"}
+				gotFields := fields{TokenType: tokens.TokenType, ExpiresIn: tokens.ExpiresIn, Scope: tokens.Scope}
+				if diff := cmp.Diff(wantFields, gotFields); diff != "" {
+					t.Errorf("POST %s token response mismatch (-want +got):\n%s", tokenPath, diff)
 				}
 
 				now := float64(start.Unix())
@@ -334,11 +354,14 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 					t.Errorf("access token header alg, kid, typ = %q, %q, %q, want RS256, %q, at+jwt", accessToken.alg, accessToken.kid, accessToken.typ, idToken.kid)
 				}
 				jti, _ := accessToken.claims["jti"].(string)
+				if jti == "" {
+					t.Errorf("access token jti = %v, want a non-empty string", accessToken.claims["jti"])
+				}
 				wantAccess := map[string]any{
 					"iss": loginIssuer, "aud": loginIssuer, "sub": aliceSubject, "client_id": "rp",
 					"exp": exp, "iat": now, "jti": jti, "scope": "openid profile",
 				}
-				if diff := cmp.Diff(wantAccess, accessToken.claims); diff != "" || jti == "" {
+				if diff := cmp.Diff(wantAccess, accessToken.claims); diff != "" {
 					t.Errorf("access token claims mismatch (-want +got):\n%s", diff)
 				}
 
@@ -401,10 +424,7 @@ func TestAuthorizationErrorPage(t *testing.T) {
 					"X-Frame-Options":         "DENY",
 					"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
 				}
-				gotHeader := make(map[string]string, len(wantHeader))
-				for k := range wantHeader {
-					gotHeader[k] = resp.header.Get(k)
-				}
+				gotHeader := headers(resp.header, wantHeader)
 				if diff := cmp.Diff(wantHeader, gotHeader); diff != "" {
 					t.Errorf("%s %s headers mismatch (-want +got):\n%s", method, authorizationPath, diff)
 				}
@@ -413,8 +433,8 @@ func TestAuthorizationErrorPage(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-5, REQ-OAUTH-9, REQ-ISS-2, REQ-CORE-6, REQ-CORE-8,
-// REQ-CORE-9: once the Client and redirect URI are valid, an invalid
+// REQ-OAUTH-5, REQ-OAUTH-9, REQ-OAUTH-17, REQ-OAUTH-18, REQ-ISS-2,
+// REQ-CORE-6, REQ-CORE-8, REQ-CORE-9: once the Client and redirect URI are valid, an invalid
 // request is redirected to the redirect URI with the error, state and
 // iss, before any login; the redirect URI keeps its own query.
 func TestAuthorizationErrorRedirect(t *testing.T) {
@@ -546,7 +566,8 @@ func TestAuthorizationEmptyParameters(t *testing.T) {
 }
 
 // REQ-OAUTH-3, REQ-OAUTH-5, REQ-OAUTH-8, REQ-OAUTH-11, REQ-OAUTH-12,
-// REQ-OAUTH-13, REQ-OAUTH-14, REQ-OAUTH-15, REQ-OAUTH-16: a token request
+// REQ-OAUTH-13, REQ-OAUTH-14, REQ-OAUTH-15, REQ-OAUTH-16, REQ-OAUTH-19,
+// REQ-OAUTH-20: a token request
 // fails, in the JSON form of RFC 6749 §5.2, when the Client does not
 // authenticate by its registered method, or the code is unknown, used,
 // issued to another Client or for another redirect URI, or the grant type
@@ -556,14 +577,14 @@ func TestTokenErrors(t *testing.T) {
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 	tests := []struct {
-		name         string
-		clientID     string
-		secret       string
-		redeemFirst  bool // whether the code is redeemed once before the request
-		edit         func(url.Values)
-		wantStatus   int
-		wantError    string
-		wantAuthHint bool // whether WWW-Authenticate names the Basic scheme
+		name                string
+		clientID            string
+		secret              string
+		redeemFirst         bool // whether the code is redeemed once before the request
+		edit                func(url.Values)
+		wantStatus          int
+		wantError           string
+		wantWWWAuthenticate bool // whether WWW-Authenticate names the Basic scheme
 	}{
 		{name: "code issued to another Client", clientID: "other", secret: otherSecret, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 		{
@@ -617,13 +638,12 @@ func TestTokenErrors(t *testing.T) {
 			edit:       func(v url.Values) { v.Set("client_id", "other") },
 			wantStatus: http.StatusBadRequest, wantError: "invalid_request",
 		},
-		{name: "wrong secret", clientID: "rp", secret: otherSecret, wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantAuthHint: true},
-		{name: "secret not form-encoded", clientID: "rp", secret: "", wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantAuthHint: true},
-		{name: "unknown Client", clientID: "unknown", secret: rpSecret, wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantAuthHint: true},
-		{name: "no authentication", wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantAuthHint: true},
+		{name: "wrong secret", clientID: "rp", secret: otherSecret, wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantWWWAuthenticate: true},
+		{name: "unknown Client", clientID: "unknown", secret: rpSecret, wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantWWWAuthenticate: true},
+		{name: "no authentication", wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantWWWAuthenticate: true},
 		{
 			name: "client_secret_post Client by Basic", clientID: "post", secret: postSecret,
-			wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantAuthHint: true,
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client", wantWWWAuthenticate: true,
 		},
 	}
 	for _, tt := range tests {
@@ -638,17 +658,7 @@ func TestTokenErrors(t *testing.T) {
 			if tt.edit != nil {
 				tt.edit(form)
 			}
-			var resp response
-			if tt.name == "secret not form-encoded" {
-				// The secret's "%" starts no valid escape, so a Client
-				// that does not form-encode it fails.
-				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+tokenPath, strings.NewReader(form.Encode()))
-				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-				req.SetBasicAuth("rp", rpSecret)
-				resp = (&browser{t: t, handler: handler}).do(req)
-			} else {
-				resp = tokenRequest(t, handler, tt.clientID, tt.secret, form)
-			}
+			resp := tokenRequest(t, handler, tt.clientID, tt.secret, form)
 
 			if resp.status != tt.wantStatus {
 				t.Errorf("POST %s status = %d, want %d", tokenPath, resp.status, tt.wantStatus)
@@ -668,13 +678,10 @@ func TestTokenErrors(t *testing.T) {
 				"Pragma":           "no-cache",
 				"WWW-Authenticate": "",
 			}
-			if tt.wantAuthHint {
+			if tt.wantWWWAuthenticate {
 				wantHeader["WWW-Authenticate"] = `Basic realm="` + loginIssuer + `"`
 			}
-			gotHeader := make(map[string]string, len(wantHeader))
-			for k := range wantHeader {
-				gotHeader[k] = resp.header.Get(k)
-			}
+			gotHeader := headers(resp.header, wantHeader)
 			if diff := cmp.Diff(wantHeader, gotHeader); diff != "" {
 				t.Errorf("POST %s headers mismatch (-want +got):\n%s", tokenPath, diff)
 			}
@@ -682,17 +689,37 @@ func TestTokenErrors(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-7, REQ-OAUTH-16: a code can be redeemed for 60 seconds after
-// it is issued, and not after.
+// REQ-OAUTH-3: a Client whose secret holds characters that form-encoding
+// changes, and that sends it in HTTP Basic authentication without
+// form-encoding it, fails to authenticate: "%" in rp's secret starts no
+// valid escape.
+func TestTokenBasicCredentialsFormEncoded(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	form := codeForm(code(t, handler, authorizationParams()))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+tokenPath, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("rp", rpSecret)
+	resp := (&browser{t: t, handler: handler}).do(req)
+	if resp.status != http.StatusUnauthorized {
+		t.Errorf("POST %s with the secret not form-encoded status = %d, want %d", tokenPath, resp.status, http.StatusUnauthorized)
+	}
+}
+
+// REQ-OAUTH-7, REQ-OAUTH-16, REQ-OAUTH-19: a code can be redeemed for 60
+// seconds after it is issued; after that, the token request fails with
+// invalid_grant.
 func TestTokenCodeExpiry(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		wait       time.Duration
 		wantStatus int
+		wantError  string
 	}{
 		{wait: 59 * time.Second, wantStatus: http.StatusOK},
-		{wait: 60 * time.Second, wantStatus: http.StatusBadRequest},
+		{wait: 60 * time.Second, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.wait.String(), func(t *testing.T) {
@@ -705,6 +732,15 @@ func TestTokenCodeExpiry(t *testing.T) {
 				resp := tokenRequest(t, handler, "rp", rpSecret, form)
 				if resp.status != tt.wantStatus {
 					t.Errorf("POST %s %v after the code was issued status = %d, want %d; body %q", tokenPath, tt.wait, resp.status, tt.wantStatus, resp.body)
+				}
+				var body struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal([]byte(resp.body), &body); err != nil {
+					t.Fatalf("POST %s body %q is not JSON: %v", tokenPath, resp.body, err)
+				}
+				if body.Error != tt.wantError {
+					t.Errorf("POST %s %v after the code was issued error = %q, want %q", tokenPath, tt.wait, body.Error, tt.wantError)
 				}
 			})
 		})

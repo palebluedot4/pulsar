@@ -65,7 +65,7 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("Pragma", "no-cache")
 
-	resp, tokErr := p.redeem(w, r)
+	resp, tokErr := p.exchange(w, r)
 	if tokErr != nil {
 		if tokErr.status == http.StatusUnauthorized {
 			// RFC 6749 §5.2: the scheme the Client used, or, if it used
@@ -78,7 +78,9 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (p *Provider) redeem(w http.ResponseWriter, r *http.Request) (*tokenResponse, *tokenError) {
+// exchange reads a token request, authenticates its Client and exchanges
+// its code for tokens.
+func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenResponse, *tokenError) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxTokenRequestSize)
 	if err := r.ParseForm(); err != nil {
 		return nil, badRequest(errInvalidRequest, "The request body could not be read.")
@@ -87,10 +89,8 @@ func (p *Provider) redeem(w http.ResponseWriter, r *http.Request) (*tokenRespons
 	// parameter sent without a value is treated as if it had not been
 	// sent (RFC 6749 §3.1).
 	params := r.PostForm
-	for _, name := range tokenParams {
-		if len(params[name]) > 1 {
-			return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
-		}
+	if name, ok := repeated(params, tokenParams); ok {
+		return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
 	}
 
 	client, tokErr := p.authenticateClient(r, params)
@@ -179,6 +179,8 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			Now:         now,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
+			// TODO(#22): when the code was redeemed before, revoke the
+			// access tokens issued from it.
 			return errCodeNotRedeemable
 		}
 		if err != nil {

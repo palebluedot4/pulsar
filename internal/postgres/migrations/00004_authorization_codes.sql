@@ -23,14 +23,16 @@ CREATE TABLE authorization_codes (
     -- When the code expires, by pulsar's clock: 60 seconds after issue.
     expiry timestamptz NOT NULL,
     -- Whether a token request has redeemed the code. A redeemed code is
-    -- kept until it expires, so that a second redemption can be told from
-    -- an unknown code.
+    -- kept until it expires, so that a second redemption can later revoke
+    -- the access tokens issued from it (TODO(#22)).
     redeemed boolean NOT NULL DEFAULT false
 );
 
 -- For deleting the codes that have expired.
 CREATE INDEX authorization_codes_expiry_idx ON authorization_codes (expiry);
 
+-- Each access token issued, so that UserInfo (#21) can refuse one that a
+-- reused code has revoked (#22).
 CREATE TABLE access_tokens (
     -- The access token's jti claim.
     jti text PRIMARY KEY,
