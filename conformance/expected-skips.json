@@ -1,0 +1,14 @@
+[
+  {
+    "test-name": "oidcc-refresh-token",
+    "variant": "*",
+    "configuration-filename": "*config-basic.json",
+    "comment": "pulsar issues no refresh token and does not advertise the refresh_token grant; refresh tokens are out of #11's scope. The module skips when the token response has none."
+  },
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*config-basic.json",
+    "comment": "pulsar does not support request objects and answers the request parameter with request_not_supported (OpenID Connect Core 1.0 §6.1, REQ-CORE-8), on which the module skips."
+  }
+]
