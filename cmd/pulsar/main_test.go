@@ -372,12 +372,7 @@ func TestRunStoresPrivateKeyEncrypted(t *testing.T) {
 	}
 	n := new(big.Int).SetBytes(nBytes)
 
-	conn, err := pgx.Connect(t.Context(), databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) }) // Closing after use; a failure loses nothing.
-	rows, err := conn.Query(t.Context(), "SELECT * FROM signing_keys")
+	rows, err := connect(t, databaseURL).Query(t.Context(), "SELECT * FROM signing_keys")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,50 +441,100 @@ func holdsFactor(n *big.Int, b []byte, size int) bool {
 // makes one wait a second to migrate. So the test holds the lock under
 // which a key is stored, as a third replica storing one would, until both
 // wait for it. Like goose's, the lock's ID is part of the contract.
+//
+// The connection string, or the database, may set another default
+// isolation level. Under repeatable read a transaction's snapshot is taken
+// by its first statement, the one that waits for the lock, so a recheck in
+// it would miss the key stored meanwhile; under serializable one replica's
+// insert would fail.
 func TestRunConcurrentStartsGenerateOneKey(t *testing.T) {
 	t.Parallel()
 
-	databaseURL := postgrestest.NewDatabase(t)
+	tests := []struct {
+		name      string
+		isolation string // default_transaction_isolation, or "" for the server's
+	}{
+		{name: "default isolation"},
+		{name: "repeatable read", isolation: "repeatable read"},
+		{name: "serializable", isolation: "serializable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			databaseURL := postgrestest.NewDatabase(t)
+			if tt.isolation != "" {
+				databaseURL = withParam(t, databaseURL, "default_transaction_isolation", tt.isolation)
+			}
+			tx, err := connect(t, databaseURL).Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(t.Context(), "SELECT pg_advisory_xact_lock($1)", signing.GenerationLockID); err != nil {
+				t.Fatal(err)
+			}
+
+			env := map[string]string{
+				"PULSAR_ISSUER":       loopbackIssuer,
+				"PULSAR_DATABASE_URL": databaseURL,
+			}
+			replicas := []*pulsar{start(t, env), start(t, env)}
+			addrs := []string{replicas[0].waitListening(), replicas[1].waitListening()}
+			waitForLockWaiters(t, tx, signing.GenerationLockID, 2)
+			if err := tx.Rollback(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+
+			var published []jwkSet
+			for i, p := range replicas {
+				p.waitKeysLoaded()
+				published = append(published, fetchJWKS(t, "http://"+addrs[i]+"/jwks"))
+			}
+			for _, p := range replicas {
+				if err := p.stop(); err != nil {
+					t.Errorf("run() = %v, want nil", err)
+				}
+			}
+			if got := len(published[0].Keys); got != 1 {
+				t.Errorf("GET /jwks from the first replica has %d keys, want 1", got)
+			}
+			if diff := cmp.Diff(published[0], published[1]); diff != "" {
+				t.Errorf("GET /jwks from two replicas started together mismatch (-first +second):\n%s", diff)
+			}
+		})
+	}
+}
+
+// withParam returns databaseURL with the query parameter key added, set to
+// value. pgx sends a parameter it does not know itself to the server as a
+// run-time setting.
+func withParam(t *testing.T, databaseURL, key, value string) string {
+	t.Helper()
+	u, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Escaped by hand: url.Values encodes a space as "+", which pgx passes
+	// on literally.
+	param := url.PathEscape(key) + "=" + url.PathEscape(value)
+	if u.RawQuery == "" {
+		u.RawQuery = param
+	} else {
+		u.RawQuery += "&" + param
+	}
+	return u.String()
+}
+
+// connect opens a connection to databaseURL of the test's own, closed when
+// the test ends.
+func connect(t *testing.T, databaseURL string) *pgx.Conn {
+	t.Helper()
 	conn, err := pgx.Connect(t.Context(), databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) }) // Closing after use; a failure loses nothing.
-	tx, err := conn.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(t.Context(), "SELECT pg_advisory_xact_lock($1)", signing.GenerationLockID); err != nil {
-		t.Fatal(err)
-	}
-
-	env := map[string]string{
-		"PULSAR_ISSUER":       loopbackIssuer,
-		"PULSAR_DATABASE_URL": databaseURL,
-	}
-	replicas := []*pulsar{start(t, env), start(t, env)}
-	addrs := []string{replicas[0].waitListening(), replicas[1].waitListening()}
-	waitForLockWaiters(t, tx, 2)
-	if err := tx.Rollback(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	var published []jwkSet
-	for i, p := range replicas {
-		p.waitKeysLoaded()
-		published = append(published, fetchJWKS(t, "http://"+addrs[i]+"/jwks"))
-	}
-	for _, p := range replicas {
-		if err := p.stop(); err != nil {
-			t.Errorf("run() = %v, want nil", err)
-		}
-	}
-	if got := len(published[0].Keys); got != 1 {
-		t.Errorf("GET /jwks from the first replica has %d keys, want 1", got)
-	}
-	if diff := cmp.Diff(published[0], published[1]); diff != "" {
-		t.Errorf("GET /jwks from two replicas started together mismatch (-first +second):\n%s", diff)
-	}
+	return conn
 }
 
 // Restarting pulsar against a database it has already migrated applies
@@ -637,11 +682,7 @@ func TestRunStopsWhileWaitingForMigrationLock(t *testing.T) {
 // and returns a function that releases it. The session ends with the test.
 func holdMigrationLock(t *testing.T, databaseURL string) (unlock func()) {
 	t.Helper()
-	conn, err := pgx.Connect(t.Context(), databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close(context.WithoutCancel(t.Context())) }) // Closing after use; a failure loses nothing.
+	conn := connect(t, databaseURL)
 	if _, err := conn.Exec(t.Context(), "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
 		t.Fatal(err)
 	}
@@ -654,15 +695,18 @@ func holdMigrationLock(t *testing.T, databaseURL string) (unlock func()) {
 }
 
 // waitForLockWaiters waits, polling through tx, until n sessions in its
-// database wait for an advisory lock.
-func waitForLockWaiters(t *testing.T, tx pgx.Tx, n int) {
+// database wait for the advisory lock id.
+func waitForLockWaiters(t *testing.T, tx pgx.Tx, id int64, n int) {
 	t.Helper()
 	deadline := time.Now().Add(logWait)
 	for {
 		var waiting int
+		// PostgreSQL shows a lock on one bigint key with its high half as
+		// classid, its low half as objid and 1 as objsubid.
 		err := tx.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks
 			WHERE locktype = 'advisory' AND NOT granted
-			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting)
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			AND objsubid = 1 AND ((classid::bigint << 32) | objid::bigint) = $1`, id).Scan(&waiting)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -670,7 +714,7 @@ func waitForLockWaiters(t *testing.T, tx pgx.Tx, n int) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d sessions wait for an advisory lock after %v, want %d", waiting, logWait, n)
+			t.Fatalf("%d sessions wait for advisory lock %#x after %v, want %d", waiting, id, logWait, n)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
