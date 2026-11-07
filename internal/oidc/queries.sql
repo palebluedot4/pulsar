@@ -38,19 +38,35 @@ FROM authorization_codes
 WHERE code_hash = @code_hash
 FOR UPDATE;
 
+-- name: RevokeRefreshTokenFamilyOfCode :exec
+-- Revokes the Refresh Token Family the code started, if any. It locks the
+-- family's row, so that a refresh in progress in the family commits first;
+-- the caller then deletes the records of the access tokens issued from the
+-- code in a later statement, which sees the one that refresh recorded.
+UPDATE refresh_token_families
+SET revoked = true
+WHERE code_hash = @code_hash;
+
 -- name: DeleteAccessTokensOfCode :exec
--- Revokes the access tokens issued from the code, by deleting their
--- records.
+-- Revokes the access tokens issued from the code, directly or in its
+-- Refresh Token Family, by deleting their records.
 DELETE FROM access_tokens
 WHERE code_hash = @code_hash;
 
 -- name: DeleteExpiredAuthorizationCodes :exec
--- Deletes the codes that have expired, except a redeemed one whose access
--- tokens may not have: it is kept until @redeemed_expiry, so that a second
--- redemption can still show its parameters are the code's and revoke them.
-DELETE FROM authorization_codes
-WHERE expiry <= @now
-    AND (NOT redeemed OR expiry <= @redeemed_expiry);
+-- Deletes the codes that have expired, except a redeemed one whose tokens
+-- may still be revoked: it is kept until @redeemed_expiry, when its access
+-- tokens have expired, and while the Refresh Token Family it started has
+-- not ended, so that a second redemption can still show its parameters are
+-- the code's and revoke them.
+DELETE FROM authorization_codes c
+WHERE c.expiry <= @now
+    AND (NOT c.redeemed OR c.expiry <= @redeemed_expiry)
+    AND NOT EXISTS (
+        SELECT FROM refresh_token_families f
+        WHERE f.code_hash = c.code_hash
+            AND f.expiry > @now
+    );
 
 -- name: InsertAccessToken :exec
 -- family_id is NULL for an access token issued in no Refresh Token Family.
@@ -68,22 +84,40 @@ RETURNING id;
 INSERT INTO refresh_tokens (token_hash, family_id)
 VALUES (@token_hash, @family_id);
 
--- name: RedeemRefreshToken :one
--- Marks the refresh token used and returns its family and what the family
--- was granted, if the token has not been used and its family belongs to
--- this Client, has not ended and has not been revoked. Under read
--- committed, of two transactions redeeming one refresh token, the second
--- waits for the first and then finds it used.
-UPDATE refresh_tokens r
-SET used = true
-FROM refresh_token_families f
+-- name: LockRefreshTokenFamily :one
+-- Locks the row of the refresh token's Refresh Token Family until the
+-- transaction ends, and returns the family. Every transaction that redeems
+-- one of the family's refresh tokens or revokes the family locks the row
+-- first, so they take turns: one waits for another in progress to commit,
+-- and then reads the family, and in later statements its refresh tokens
+-- and access tokens, as that one left them. The lock is the one an UPDATE
+-- of the row takes, which does not block recording a refresh token in the
+-- family.
+SELECT f.id, f.client_id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time, f.expiry, f.revoked
+FROM refresh_tokens r
+JOIN refresh_token_families f ON f.id = r.family_id
 WHERE r.token_hash = @token_hash
-    AND f.id = r.family_id
-    AND f.client_id = @client_id
-    AND f.expiry > @now
-    AND NOT f.revoked
-    AND NOT r.used
-RETURNING f.id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time;
+FOR NO KEY UPDATE OF f;
+
+-- name: UseRefreshToken :execrows
+-- Marks the refresh token used, and affects no row if it was already used.
+UPDATE refresh_tokens
+SET used = true
+WHERE token_hash = @token_hash
+    AND NOT used;
+
+-- name: RevokeRefreshTokenFamily :exec
+-- Revokes the Refresh Token Family, whose row the caller has locked. The
+-- caller then deletes the records of its access tokens.
+UPDATE refresh_token_families
+SET revoked = true
+WHERE id = @id;
+
+-- name: DeleteAccessTokensOfFamily :exec
+-- Revokes the access tokens issued in the Refresh Token Family, including
+-- the one issued from its code, by deleting their records.
+DELETE FROM access_tokens
+WHERE family_id = @family_id;
 
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens

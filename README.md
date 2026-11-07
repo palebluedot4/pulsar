@@ -21,16 +21,20 @@ End-User for offline access, and if they allow it, the token response
 carries a refresh token. The Client redeems it with the `refresh_token`
 grant, for a narrower scope if it asks, for a new access token, ID token
 and refresh token, for up to thirty days; each refresh token is redeemed
-once. A second redemption of a code that is otherwise valid, by its own
-Client, with its redirect URI, and with a matching `code_verifier` exactly
-when the code has a challenge, revokes the access tokens issued from it,
-and `pulsar keys rotate` rotates the signing key. The OpenID conformance
+once. A refresh token presented again by its own Client revokes its whole
+Refresh Token Family, with no grace period: its refresh tokens are refused
+from then on, and UserInfo refuses its access tokens. A second redemption
+of a code that is otherwise valid, by its own Client, with its redirect
+URI, and with a matching `code_verifier` exactly when the code has a
+challenge, revokes the access tokens issued from it and, for as long as
+the family lives, the Refresh Token Family it started. `pulsar keys
+rotate` rotates the signing key. The OpenID conformance
 suite's Config OP and Basic OP plans run against it in CI; on 2026-11-06,
 at commit `8d6ab47`, they finished with no failures, as [Checking
 conformance](#checking-conformance) details. Next in the refresh token
 specification ([#47](https://github.com/palebluedot4/pulsar/issues/47)): a
-replaced refresh token presented again revokes its whole Refresh Token
-Family.
+refresh token of a Client or End-User removed from the registry is
+refused, and ended Refresh Token Families are deleted.
 
 ## Running it
 
@@ -143,7 +147,9 @@ refreshed ID token, and UserInfo with the new access token, and checks
 that another Client's refresh token is refused. It never presents a
 refresh token twice
 ([research](docs/research/refresh-tokens.md#the-suites-oidcc-refresh-token-module)),
-so only pulsar's own tests check that each is redeemed once. The suite's
+so it tests neither rotation nor reuse detection: only pulsar's own tests
+check that each refresh token is redeemed once, and that one presented
+again, or a code replayed, revokes its Refresh Token Family. The suite's
 browser automation fills in the login and consent pages. The run exits
 non-zero on a failure, a warning or a skipped module that `conformance/`
 does not list with a reason, and leaves the results in

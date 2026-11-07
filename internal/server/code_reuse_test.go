@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
@@ -69,6 +71,68 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 	}
 }
 
+// REQ-OAUTH-29, REQ-BCP-11: a second redemption of a code issued with
+// offline access, by its own Client, with its redirect URI and matching
+// code_verifier, revokes the Refresh Token Family the code started: it
+// fails with invalid_grant, the family's newest refresh token then fails
+// with invalid_grant too, and UserInfo refuses with 401 the access tokens
+// issued in the family, from the code and from a refresh. It does so at
+// once, after the code has expired, and a day later, after another code
+// has been issued, which deletes the expired codes no longer kept: a code
+// is kept while its family lives.
+func TestTokenCodeReuseRevokesFamily(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		wait     time.Duration // between the code's redemption and the refresh before the second
+		client   pkceClient
+		verifier string
+	}{
+		{name: "at once", client: rpNoPKCE},
+		{name: "after the code expired", wait: 2 * time.Minute, client: rpNoPKCE},
+		{name: "a day later", wait: 24 * time.Hour, client: rpNoPKCE},
+		{name: "a day later, by a public Client", wait: 24 * time.Hour, client: publicPKCE, verifier: pkceVerifier},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+			synctest.Test(t, func(t *testing.T) {
+				handler := newBubbleFlowHandler(t, databaseURL)
+				form := tt.client.form(tt.client.offlineCode(t, handler, nil), tt.verifier)
+				first := tokenResponseOf(t, tt.client.redeem(t, handler, form))
+				time.Sleep(tt.wait)
+				refreshed := tokenResponseOf(t, tt.client.refresh(t, handler, first.RefreshToken, ""))
+				tt.client.code(t, handler)
+				// The access tokens of the family not yet expired: the
+				// refresh's, and the code's unless the wait outlasted it.
+				accessTokens := []string{refreshed.AccessToken}
+				if tt.wait < 10*time.Minute {
+					accessTokens = append(accessTokens, first.AccessToken)
+				}
+				for i, accessToken := range accessTokens {
+					if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+						t.Errorf("UserInfo with access token %d before the second redemption claims mismatch (-want +got):\n%s", i, diff)
+					}
+				}
+
+				if got := tokenErrorCode(t, tt.client.redeem(t, handler, form), http.StatusBadRequest); got != "invalid_grant" {
+					t.Errorf("second POST %s error = %q, want %q", tokenPath, got, "invalid_grant")
+				}
+				if got := tokenErrorCode(t, tt.client.refresh(t, handler, refreshed.RefreshToken, ""), http.StatusBadRequest); got != "invalid_grant" {
+					t.Errorf("POST %s with the family's newest refresh token error = %q, want %q", tokenPath, got, "invalid_grant")
+				}
+				for i, accessToken := range accessTokens {
+					if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
+						t.Errorf("UserInfo with access token %d after the second redemption error = %q, want %q", i, got, "invalid_token")
+					}
+				}
+			})
+		})
+	}
+}
+
 // REQ-OAUTH-29, REQ-OAUTH-8, REQ-OAUTH-14, REQ-OAUTH-19, REQ-OAUTH-26,
 // REQ-PKCE-4: a second redemption of a code whose parameters are not those
 // of a valid request revokes nothing (OAuth 2.1 draft -17 §7.5.3): one by
@@ -76,7 +140,8 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 // does not match fails with invalid_grant; one whose Client fails to
 // authenticate, or authenticates by a method other than the one it
 // registered, fails with invalid_client. Either way, UserInfo still
-// accepts the access token issued from the code.
+// accepts the access token issued from the code, which was issued with
+// offline access, and the refresh token issued from it is still redeemed.
 func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 	t.Parallel()
 
@@ -171,16 +236,17 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			c := tt.client.code(t, handler)
-			accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, tt.client.form(c, tt.verifier)))
+			c := tt.client.offlineCode(t, handler, url.Values{"scope": {"openid profile offline_access"}})
+			first := tokenResponseOf(t, tt.client.redeem(t, handler, tt.client.form(c, tt.verifier)))
 
 			replay := tokenRequest(t, handler, tt.basic.id, tt.basic.secret, tt.form(c))
 			if got := tokenErrorCode(t, replay, tt.wantStatus); got != tt.wantError {
 				t.Errorf("second POST %s error = %q, want %q", tokenPath, got, tt.wantError)
 			}
-			if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+			if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, first.AccessToken))); diff != "" {
 				t.Errorf("UserInfo after the second redemption claims mismatch (-want +got):\n%s", diff)
 			}
+			tokenResponseOf(t, tt.client.refresh(t, handler, first.RefreshToken, ""))
 		})
 	}
 }
@@ -221,9 +287,7 @@ func TestTokenCodeReuseAfterRecordDeletedRevokesNothing(t *testing.T) {
 // The redemption in progress is the test's own transaction. It marks the
 // code redeemed and moves to it the record of an access token that
 // UserInfo has accepted, issued from another code, and commits once the
-// request waits on a lock. The wait for that is on the real clock, not in
-// a testing/synctest bubble, since what the request waits on is
-// PostgreSQL, which a bubble cannot tell from a goroutine still running.
+// request waits on a lock.
 func TestTokenCodeReuseWaitsForRedemptionInProgress(t *testing.T) {
 	t.Parallel()
 
@@ -253,24 +317,42 @@ func TestTokenCodeReuseWaitsForRedemptionInProgress(t *testing.T) {
 		t.Fatalf("moving the access token's record to the code: %v", err)
 	}
 
+	resp := serveWhileLocked(t, pool, handler, newTokenRequest(t, "rp", rpSecret, codeForm(c)), tx)
+	if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
+		t.Errorf("POST %s of the expired code error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+	if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
+		t.Errorf("UserInfo with the token of the redemption in progress error = %q, want %q", got, "invalid_token")
+	}
+}
+
+// serveWhileLocked serves req on its own goroutine while tx, the test's
+// transaction in progress, holds locks the request must wait for. Once a
+// backend of the test's database waits on a lock, it commits tx, and
+// returns the response. It fails the test if the request finishes first,
+// or does not wait within 10 seconds. The wait is on the real clock, not
+// in a testing/synctest bubble, since what the request waits on is
+// PostgreSQL, which a bubble cannot tell from a goroutine still running.
+func serveWhileLocked(t *testing.T, pool *pgxpool.Pool, handler http.Handler, req *http.Request, tx pgx.Tx) response {
+	t.Helper()
 	// The request is served on its own goroutine, which must not fail the
 	// test, so it is sent without the helpers that do.
-	req := newTokenRequest(t, "rp", rpSecret, codeForm(c))
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		done <- rec
 	}()
+	ctx := t.Context()
 	deadline := time.Now().Add(10 * time.Second)
 	for waiting := false; !waiting; {
 		select {
 		case rec := <-done:
-			t.Fatalf("POST %s finished while a redemption of its code was in progress, want it to wait; body %q", tokenPath, rec.Body)
+			t.Fatalf("%s %s finished while the test's transaction was in progress, want it to wait; body %q", req.Method, req.URL.Path, rec.Body)
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("POST %s did not wait on a lock within 10s", tokenPath)
+			t.Fatalf("%s %s did not wait on a lock within 10s", req.Method, req.URL.Path)
 		}
 		err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock')").Scan(&waiting)
 		if err != nil {
@@ -281,15 +363,8 @@ func TestTokenCodeReuseWaitsForRedemptionInProgress(t *testing.T) {
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
-
 	rec := <-done
-	resp := response{status: rec.Code, header: rec.Header(), body: rec.Body.String()}
-	if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
-		t.Errorf("POST %s of the expired code error = %q, want %q", tokenPath, got, "invalid_grant")
-	}
-	if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
-		t.Errorf("UserInfo with the token of the redemption in progress error = %q, want %q", got, "invalid_token")
-	}
+	return response{status: rec.Code, header: rec.Header(), body: rec.Body.String()}
 }
 
 // REQ-OAUTH-29: a code that is not redeemed, presented again, revokes no

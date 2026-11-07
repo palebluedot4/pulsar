@@ -73,20 +73,15 @@ func TestOfflineAccess(t *testing.T) {
 
 // REQ-OAUTH-21, REQ-OAUTH-31, REQ-OAUTH-41: the refresh token from a code
 // issued with offline access, and the one that replaces it, are each at
-// least 160 bits, and are stored only as their hashes. The access tokens
-// issued from the code and from the refresh are recorded as the family's,
-// with the code that started it.
-//
-// TODO(#52): check that the access tokens are the family's by revoking
-// the family, and keep reading the database only for the hash-only
-// storage of REQ-OAUTH-31.
+// least 160 bits, and are stored only as their hashes. That the access
+// tokens issued from the code and from a refresh are the family's,
+// TestRefreshTokenReuseRevokesFamily shows by revoking it.
 func TestRefreshTokenStorage(t *testing.T) {
 	t.Parallel()
 
 	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
 	handler := newFlowHandler(t, pool)
-	c := code(t, handler, offlineAccessParams())
-	first := tokenResponseOf(t, tokenRequest(t, handler, "rp", rpSecret, codeForm(c)))
+	first := rpNoPKCE.offlineTokens(t, handler, "", nil)
 	refreshed := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
 
 	for _, issued := range []tokenResponse{first, refreshed} {
@@ -101,19 +96,10 @@ func TestRefreshTokenStorage(t *testing.T) {
 			t.Errorf("rows holding the refresh token itself = %d, error %v; want 0", holding, err)
 		}
 		tokenHash := sha256.Sum256([]byte(issued.RefreshToken))
-		codeHash := sha256.Sum256([]byte(c))
 		var recorded bool
-		err = pool.QueryRow(t.Context(), `
-			SELECT EXISTS (
-				SELECT FROM refresh_tokens r
-				JOIN refresh_token_families f ON f.id = r.family_id
-				JOIN access_tokens a ON a.family_id = f.id
-				WHERE r.token_hash = $1 AND f.code_hash = $2 AND a.code_hash = $2 AND a.jti = $3
-			)`,
-			tokenHash[:], codeHash[:], verify(t, handler, issued.AccessToken).claims["jti"],
-		).Scan(&recorded)
+		err = pool.QueryRow(t.Context(), "SELECT EXISTS (SELECT FROM refresh_tokens WHERE token_hash = $1)", tokenHash[:]).Scan(&recorded)
 		if err != nil || !recorded {
-			t.Errorf("access token recorded with the family of its refresh token and the family's code = %t, error %v; want true", recorded, err)
+			t.Errorf("refresh token recorded by its hash = %t, error %v; want true", recorded, err)
 		}
 	}
 }

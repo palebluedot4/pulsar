@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -47,11 +48,10 @@ func tokenResponseOf(t *testing.T, resp response) tokenResponse {
 	return r
 }
 
-// offlineTokens signs alice in through c's authorization request for
+// offlineCode signs alice in through c's authorization request for
 // offline access, with the parameters of set in addition, allows it on the
-// consent page, and returns the response to the code's redemption with
-// verifier, unless it is "".
-func (c pkceClient) offlineTokens(t *testing.T, handler http.Handler, verifier string, set url.Values) tokenResponse {
+// consent page, and returns the code.
+func (c pkceClient) offlineCode(t *testing.T, handler http.Handler, set url.Values) string {
 	t.Helper()
 	params := clientParams(c.clientID, c.redirectURI)
 	params.Set("scope", "openid offline_access")
@@ -60,7 +60,14 @@ func (c pkceClient) offlineTokens(t *testing.T, handler http.Handler, verifier s
 		withChallenge(params, c.challenge)
 	}
 	maps.Copy(params, set)
-	r := tokenResponseOf(t, c.redeem(t, handler, c.form(code(t, handler, params), verifier)))
+	return code(t, handler, params)
+}
+
+// offlineTokens returns the response to the redemption, with verifier
+// unless it is "", of a code from offlineCode.
+func (c pkceClient) offlineTokens(t *testing.T, handler http.Handler, verifier string, set url.Values) tokenResponse {
+	t.Helper()
+	r := tokenResponseOf(t, c.redeem(t, handler, c.form(c.offlineCode(t, handler, set), verifier)))
 	if r.RefreshToken == "" {
 		t.Fatalf("POST %s for a code issued with offline access has no refresh_token", tokenPath)
 	}
@@ -457,34 +464,189 @@ func TestRefreshTokenFamilyExpiry(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-35, REQ-BCP-9: of token requests that redeem one refresh
-// token at once, exactly one succeeds, and the others fail with
-// invalid_grant.
+// wantRevoked fails the test unless refreshToken is refused with
+// invalid_grant when c presents it, and UserInfo refuses each of
+// accessTokens with 401 and invalid_token.
+func (c pkceClient) wantRevoked(t *testing.T, handler http.Handler, refreshToken string, accessTokens []string) {
+	t.Helper()
+	if got := tokenErrorCode(t, c.refresh(t, handler, refreshToken, ""), http.StatusBadRequest); got != "invalid_grant" {
+		t.Errorf("POST %s with the family's newest refresh token error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+	for i, accessToken := range accessTokens {
+		if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
+			t.Errorf("UserInfo with the family's access token %d error = %q, want %q", i, got, "invalid_token")
+		}
+	}
+}
+
+// REQ-BCP-11, REQ-BCP-9, REQ-OAUTH-19, REQ-OAUTH-35: a refresh token
+// already redeemed, presented again by its own Client, confidential or
+// public, fails with invalid_grant and revokes its whole Refresh Token
+// Family, whichever of the family's refresh tokens it is: the newest
+// refresh token then fails with invalid_grant too, and UserInfo refuses
+// with 401 every access token issued in the family, the one issued from
+// its code included.
+func TestRefreshTokenReuseRevokesFamily(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name     string
+		client   pkceClient
+		verifier string
+		reused   int // which refresh token is presented again: 0 for the code's, then one per refresh
+	}{
+		{name: "the code's refresh token", client: rpNoPKCE, reused: 0},
+		{name: "a refresh's refresh token", client: rpNoPKCE, reused: 1},
+		{name: "by a public Client", client: publicPKCE, verifier: pkceVerifier, reused: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			first := tt.client.offlineTokens(t, handler, tt.verifier, nil)
+			refreshTokens := []string{first.RefreshToken}
+			accessTokens := []string{first.AccessToken}
+			for range 2 {
+				r := tokenResponseOf(t, tt.client.refresh(t, handler, refreshTokens[len(refreshTokens)-1], ""))
+				refreshTokens = append(refreshTokens, r.RefreshToken)
+				accessTokens = append(accessTokens, r.AccessToken)
+			}
+			for i, accessToken := range accessTokens {
+				if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+					t.Errorf("UserInfo with the family's access token %d before the reuse claims mismatch (-want +got):\n%s", i, diff)
+				}
+			}
+
+			if got := tokenErrorCode(t, tt.client.refresh(t, handler, refreshTokens[tt.reused], ""), http.StatusBadRequest); got != "invalid_grant" {
+				t.Errorf("POST %s with a refresh token already redeemed error = %q, want %q", tokenPath, got, "invalid_grant")
+			}
+			tt.client.wantRevoked(t, handler, refreshTokens[len(refreshTokens)-1], accessTokens)
+		})
+	}
+}
+
+// REQ-BCP-11, REQ-OAUTH-14, REQ-OAUTH-19, REQ-OAUTH-26, REQ-OAUTH-34: a
+// refresh token already redeemed, presented again by another Client, gets
+// invalid_grant; presented by a Client that fails to authenticate, or that
+// authenticates by a method other than its registered one, it gets
+// invalid_client. Either way it revokes nothing: the family's newest
+// refresh token is still redeemed, and UserInfo still accepts the
+// family's access tokens.
+func TestRefreshTokenReuseWithInvalidParametersRevokesNothing(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name string
+		// The request that presents the refresh token again: the credentials
+		// it sends by HTTP Basic authentication, if any, and what its form
+		// adds.
+		basic      credentials
+		form       url.Values
+		wantStatus int
+		wantError  string
+	}{
+		{name: "by another Client", basic: credentials{"other", otherSecret}, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
+		{name: "as a public Client", form: url.Values{"client_id": {"public"}}, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
+		{name: "with a wrong secret", basic: credentials{"rp", otherSecret}, wantStatus: http.StatusUnauthorized, wantError: "invalid_client"},
+		{
+			name: "by a method other than the registered one", form: url.Values{"client_id": {"rp"}, "client_secret": {rpSecret}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			first := rpNoPKCE.offlineTokens(t, handler, "", nil)
+			refreshed := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
+
+			form := refreshForm(first.RefreshToken, "")
+			maps.Copy(form, tt.form)
+			if got := tokenErrorCode(t, tokenRequest(t, handler, tt.basic.id, tt.basic.secret, form), tt.wantStatus); got != tt.wantError {
+				t.Errorf("POST %s with a refresh token already redeemed error = %q, want %q", tokenPath, got, tt.wantError)
+			}
+			for i, accessToken := range []string{first.AccessToken, refreshed.AccessToken} {
+				if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+					t.Errorf("UserInfo with the family's access token %d claims mismatch (-want +got):\n%s", i, diff)
+				}
+			}
+			tokenResponseOf(t, rpNoPKCE.refresh(t, handler, refreshed.RefreshToken, ""))
+		})
+	}
+}
+
+// REQ-OAUTH-35, REQ-BCP-9, REQ-BCP-11: of token requests that redeem one
+// refresh token at once, exactly one succeeds, and the others fail with
+// invalid_grant and, presenting a refresh token already redeemed, revoke
+// the family: the refresh token the one that succeeded issued is then
+// refused, and UserInfo refuses its access token and the code's.
 func TestRefreshTokenConcurrentRedemption(t *testing.T) {
 	t.Parallel()
 
 	const requests = 8
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	refreshToken := rpNoPKCE.offlineTokens(t, handler, "", nil).RefreshToken
+	first := rpNoPKCE.offlineTokens(t, handler, "", nil)
 	resps := make([]response, requests)
 	var wg sync.WaitGroup
 	for i := range requests {
 		wg.Go(func() {
-			resps[i] = rpNoPKCE.refresh(t, handler, refreshToken, "")
+			resps[i] = rpNoPKCE.refresh(t, handler, first.RefreshToken, "")
 		})
 	}
 	wg.Wait()
 	counts := map[int]int{}
+	var won tokenResponse
 	for _, r := range resps {
 		counts[r.status]++
-		if r.status != http.StatusOK {
-			if got := tokenErrorCode(t, r, http.StatusBadRequest); got != "invalid_grant" {
-				t.Errorf("POST %s of a refresh token redeemed at once by another request error = %q, want %q", tokenPath, got, "invalid_grant")
-			}
+		if r.status == http.StatusOK {
+			won = tokenResponseOf(t, r)
+			continue
+		}
+		if got := tokenErrorCode(t, r, http.StatusBadRequest); got != "invalid_grant" {
+			t.Errorf("POST %s of a refresh token redeemed at once by another request error = %q, want %q", tokenPath, got, "invalid_grant")
 		}
 	}
 	want := map[int]int{http.StatusOK: 1, http.StatusBadRequest: requests - 1}
 	if diff := cmp.Diff(want, counts); diff != "" {
-		t.Errorf("statuses of %d concurrent redemptions of one refresh token mismatch (-want +got):\n%s", requests, diff)
+		t.Fatalf("statuses of %d concurrent redemptions of one refresh token mismatch (-want +got):\n%s", requests, diff)
+	}
+	rpNoPKCE.wantRevoked(t, handler, won.RefreshToken, []string{first.AccessToken, won.AccessToken})
+}
+
+// REQ-BCP-11: a refresh sent while its Refresh Token Family is being
+// revoked waits for the revocation to commit, and then fails with
+// invalid_grant, so that no access token is issued in a family after its
+// revocation has looked for the family's access tokens.
+//
+// The revocation in progress is the test's own transaction, which marks
+// the family revoked, as a refresh token presented again does first, and
+// commits once the request waits on a lock.
+func TestRefreshTokenWaitsForRevocationInProgress(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	refreshToken := rpNoPKCE.offlineTokens(t, handler, "", nil).RefreshToken
+	hash := sha256.Sum256([]byte(refreshToken))
+
+	ctx := t.Context()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin() error = %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	tag, err := tx.Exec(ctx, `
+		UPDATE refresh_token_families f SET revoked = true
+		FROM refresh_tokens r
+		WHERE r.token_hash = $1 AND f.id = r.family_id`,
+		hash[:],
+	)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("revoking the family: %d rows, error %v; want 1 row", tag.RowsAffected(), err)
+	}
+
+	resp := serveWhileLocked(t, pool, handler, newTokenRequest(t, "rp", rpSecret, refreshForm(refreshToken, "")), tx)
+	if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
+		t.Errorf("POST %s during the family's revocation error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
 }
