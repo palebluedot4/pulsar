@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 	"github.com/palebluedot4/pulsar/internal/registry"
 	"github.com/palebluedot4/pulsar/internal/signing"
@@ -181,6 +182,16 @@ func newBubblePool(t *testing.T, databaseURL string) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// deleteDue deletes the codes and tokens due at the bubble's now from the
+// database behind pool, as pulsar's periodic task does (cmd/pulsar) when
+// it runs then.
+func deleteDue(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if err := oidc.DeleteDue(t.Context(), pool, time.Now()); err != nil {
+		t.Fatalf("oidc.DeleteDue() = %v, want nil", err)
+	}
 }
 
 // authorizationParams returns the parameters of a valid authorization

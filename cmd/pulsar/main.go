@@ -6,8 +6,9 @@
 // that replicas starting together migrate once, and then loads its signing
 // keys, generating the first if there is none. /readyz and the JWK Set
 // answer 503 until both are done, and pulsar exits if either fails. It
-// then reloads the signing keys once a minute, and serves until it
-// receives an interrupt or SIGTERM, when it shuts down gracefully.
+// then reloads the signing keys once a minute, deletes the records due
+// every 15 minutes, and serves until it receives an interrupt or SIGTERM,
+// when it shuts down gracefully.
 //
 // Usage:
 //
@@ -50,12 +51,15 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/login"
+	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres"
 	"github.com/palebluedot4/pulsar/internal/registry"
 	"github.com/palebluedot4/pulsar/internal/server"
@@ -172,25 +176,26 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 	logger.InfoContext(ctx, "listening", "addr", ln.Addr().String(), "tls", tlsConfig != nil)
 
 	// Migrate and load the signing keys, report the result on startErr,
-	// and then, if both succeeded, reload the keys until the run ends.
-	// The keys are logged as loaded only once the replica is ready, so
-	// that whoever reads the log line, a test included, finds /readyz
-	// past its start-up 503, answering as a ping of the database does.
+	// and then, if both succeeded, reload the keys and delete the records
+	// due until the run ends. The keys are logged as loaded only once the
+	// replica is ready, so that whoever reads the log line, a test
+	// included, finds /readyz past its start-up 503, answering as a ping
+	// of the database does.
 	keysCtx, stopKeys := context.WithCancel(ctx)
 	defer stopKeys()
 	startErr := make(chan error, 1)
-	keysDone := make(chan struct{})
-	go func() {
-		defer close(keysDone)
+	var background sync.WaitGroup
+	background.Go(func() {
 		err := prepare(keysCtx, pool, keys, logger)
 		startErr <- err
 		if err == nil {
 			close(ready)
+			background.Go(func() { deleteDue(keysCtx, pool, logger) })
 			active, _ := keys.Active() // prepare has loaded the keys, so Active cannot fail.
 			logger.InfoContext(keysCtx, "signing keys loaded", "kid", active.KID)
 			keys.Run(keysCtx, logger)
 		}
-	}()
+	})
 
 	// Serve until a signal, a failed start or a failed server. A start
 	// that fails because a signal canceled it is a graceful exit, as a
@@ -222,9 +227,9 @@ wait:
 			runErr = errors.Join(runErr, err)
 		}
 	}
-	// Wait until migrating, loading or reloading has stopped and released
-	// its connection.
-	<-keysDone
+	// Wait until migrating, loading, reloading and deleting have stopped
+	// and released their connections.
+	background.Wait()
 
 	if serving {
 		logger.InfoContext(ctx, "shutting down")
@@ -259,6 +264,38 @@ func rotateKeys(ctx context.Context, cfg config.Config, logger *slog.Logger) err
 	}
 	logger.InfoContext(ctx, "signing key stored", "kid", rotated.KID, "signs_from", rotated.SignsFrom)
 	return nil
+}
+
+// deletionInterval is how often a replica deletes the records due:
+// Keycloak's default for its scheduled deletion, the one provider
+// surveyed in docs/research/refresh-tokens.md that schedules deletion
+// in-process. Every endpoint checks a record's expiry itself, so the
+// interval bounds only how long a record stays past it, not what pulsar
+// accepts.
+const deletionInterval = 15 * time.Minute
+
+// deleteDue deletes the records due, every deletionInterval until ctx is
+// done: internal/oidc's codes, tokens and client assertions, and
+// internal/login's Login Sessions. Every replica runs it: each deletion is
+// idempotent, so replicas deleting at once only wait for each other's row
+// locks. A failed deletion is logged and left for the next run.
+func deleteDue(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
+	ticker := time.NewTicker(deletionInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			if err := oidc.DeleteDue(ctx, pool, now); err != nil && ctx.Err() == nil {
+				logger.ErrorContext(ctx, "delete due codes and tokens", "error", err)
+			}
+			if err := login.DeleteEndedSessions(ctx, pool, now); err != nil && ctx.Err() == nil {
+				logger.ErrorContext(ctx, "delete ended login sessions", "error", err)
+			}
+		}
+	}
 }
 
 // prepare migrates the database and then loads the signing keys,

@@ -282,12 +282,6 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		// Interaction).
 		m.Put(ctx, loginForKey, requestKey(r.URL.RawQuery))
 	}
-	// A login is rare next to the requests a Login Session serves, so it
-	// is when Login Sessions that have ended are deleted. A failure leaves
-	// them for the next login and does not fail this one.
-	if err := h.sessions.store.deleteEnded(ctx); err != nil {
-		h.logger.ErrorContext(ctx, "delete ended login sessions", "error", err)
-	}
 	h.continueAfterLogin(w, r)
 }
 
