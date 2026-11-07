@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/palebluedot4/pulsar/internal/login"
 	"github.com/palebluedot4/pulsar/internal/oidc/internal/queries"
@@ -281,13 +280,14 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // it, so that one who has only seen a code cannot end the End-User's
 // access with another Client (docs/research/refresh-tokens.md). The code's
 // expiry is not checked: a valid replay after the code has expired revokes
-// too, for as long as the code's record is kept, which is while its family
-// lives.
+// too, for as long as the code's record is kept: until its access token
+// expires, or while its family lives, and not once its tokens are revoked.
 //
 // A code issued with offline access starts a Refresh Token Family, which
 // ends familyLifetime after the code is redeemed, and is redeemed for the
-// family's first refresh token too. The access token is recorded as the
-// family's.
+// family's first refresh token too. Every access token of the family,
+// this one included, is recorded with the code's hash, by which revoking
+// the family finds them.
 //
 // The code is redeemed and the access token recorded in one transaction,
 // with the family and its refresh token, if any, so that a code is
@@ -304,8 +304,8 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	var row queries.RedeemAuthorizationCodeRow
 	var claims claimsRequest
 	// Whether the code is refused, after the transaction commits what the
-	// refusal changed.
-	var refused bool
+	// refusal changed, and whether its tokens were revoked.
+	var refused, revoked bool
 	// Read committed whatever the database's default, so that a second
 	// redemption waits for the first and then finds the code redeemed,
 	// rather than failing to serialize.
@@ -341,6 +341,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if !stored.Redeemed || stored.ClientID != client.ID || stored.RedirectUri != redirectURI || stored.CodeChallenge != challenge {
 				return nil
 			}
+			revoked = true
 			return revokeCode(ctx, q, hash)
 		}
 		if err != nil {
@@ -356,8 +357,11 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		if claims, userInfoClaims, err = decodeStoredClaims(row.Claims); err != nil {
 			return err
 		}
-		var familyID pgtype.Int8
+		// The code is kept while its tokens may be revoked: until its access
+		// token expires, or until its family ends.
+		keepUntil := exp
 		if slices.Contains(row.Scopes, login.OfflineAccess) {
+			keepUntil = now.Add(familyLifetime)
 			id, err := q.InsertRefreshTokenFamily(ctx, queries.InsertRefreshTokenFamilyParams{
 				CodeHash: hash,
 				ClientID: client.ID,
@@ -365,7 +369,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 				Scopes:   row.Scopes,
 				Claims:   row.Claims,
 				AuthTime: row.AuthTime,
-				Expiry:   now.Add(familyLifetime),
+				Expiry:   keepUntil,
 			})
 			if err != nil {
 				return err
@@ -373,17 +377,22 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if refreshToken, err = insertRefreshToken(ctx, q, id); err != nil {
 				return err
 			}
-			familyID = pgtype.Int8{Int64: id, Valid: true}
 		}
-		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, FamilyID: familyID, UserinfoClaims: userInfoClaims, Expiry: exp})
+		if err := q.KeepAuthorizationCodeUntil(ctx, queries.KeepAuthorizationCodeUntilParams{CodeHash: hash, DeleteAfter: keepUntil}); err != nil {
+			return err
+		}
+		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, UserinfoClaims: userInfoClaims, Expiry: exp})
 	})
 	if err != nil {
 		return nil, err
 	}
+	if revoked {
+		p.releaseCode(ctx, hash, now)
+	}
 	if refused {
 		return nil, errCodeNotRedeemable
 	}
-	p.deleteExpiredAccessTokens(ctx, now)
+	p.deleteExpired(ctx, now)
 	return p.signTokens(client, issuance{
 		subject:       row.Subject,
 		scopes:        row.Scopes,
@@ -444,9 +453,11 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // the same Refresh Token Family, for the family's scopes (RFC 6749 §6). A
 // refresh token is redeemed once, so that a Client holds one at a time
 // (RFC 9700 §4.14.2). Each token is the family's: the access token is
-// recorded with the family and the code that started it, and the ID
-// token's sub, aud and auth_time are those of the authorization the code
-// was issued for (OpenID Connect Core 1.0 §12.2).
+// recorded with the code that started it, and the ID token's sub, aud and
+// auth_time are those of the authorization the code was issued for (OpenID
+// Connect Core 1.0 §12.2). A refresh token whose End-User has been removed
+// from the registry is refused; one whose Client has been removed never
+// gets here, since the Client cannot authenticate.
 //
 // A refresh token already used, presented again by its own Client while
 // its family lives, shows that it was stolen, and from whom pulsar cannot
@@ -455,8 +466,8 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // the code included, are deleted, so that UserInfo refuses them (RFC 9700
 // §4.14.2). There is no grace period, not even for a Client retrying a
 // refresh whose response it never received. A refresh token presented by
-// another Client revokes nothing, as a code replayed by another Client
-// does not (OAuth 2.1 draft -17 §7.5.3), so that one who has only seen a
+// another Client revokes nothing, as most providers surveyed have it
+// (docs/research/refresh-tokens.md), so that one who has only seen a
 // refresh token cannot end the End-User's offline access.
 //
 // The refresh token is redeemed, and its replacement and the access token
@@ -496,6 +507,9 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		if row.ClientID != client.ID || row.Revoked || !row.Expiry.After(now) {
 			return errRefreshTokenNotRedeemable
 		}
+		if _, ok := p.registry.EndUser(row.Subject); !ok {
+			return errRefreshTokenNotRedeemable
+		}
 		n, err := q.MarkRefreshTokenUsed(ctx, hash)
 		if err != nil {
 			return err
@@ -521,7 +535,6 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{
 			Jti:            jti,
 			CodeHash:       row.CodeHash,
-			FamilyID:       pgtype.Int8{Int64: row.ID, Valid: true},
 			UserinfoClaims: userInfoClaims,
 			Expiry:         exp,
 		})
@@ -530,9 +543,10 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		return nil, err
 	}
 	if reused {
+		p.releaseCode(ctx, row.CodeHash, now)
 		return nil, errRefreshTokenNotRedeemable
 	}
-	p.deleteExpiredAccessTokens(ctx, now)
+	p.deleteExpired(ctx, now)
 	// The ID token has no nonce, which §12.2 allows only with the value
 	// of the original, and recommends against.
 	return p.signTokens(client, issuance{
@@ -590,12 +604,29 @@ func isSubset(sub, set []string) bool {
 	return true
 }
 
-// deleteExpiredAccessTokens deletes the records of access tokens expired
-// at now. Issuing a token is when they are deleted. A failure leaves them
-// for the next and does not fail this one.
-func (p *Provider) deleteExpiredAccessTokens(ctx context.Context, now time.Time) {
+// releaseCode lets the code whose hash is codeHash be deleted from now on,
+// its tokens having been revoked, so that it is no longer kept for its
+// Refresh Token Family. It runs after the revocation commits, so that a
+// refresh never waits for a code's row while it holds its family's, which
+// a replay of the code locks in the other order. A failure leaves the code
+// until its family ends, when it would be deleted anyway, and does not
+// fail the request.
+func (p *Provider) releaseCode(ctx context.Context, codeHash []byte, now time.Time) {
+	if err := p.queries.KeepAuthorizationCodeUntil(ctx, queries.KeepAuthorizationCodeUntilParams{CodeHash: codeHash, DeleteAfter: now}); err != nil {
+		p.logger.ErrorContext(ctx, "release authorization code", "error", err)
+	}
+}
+
+// deleteExpired deletes the records of access tokens expired at now, and
+// the Refresh Token Families ended at now with their refresh tokens.
+// Issuing a token is when they are deleted. A failure leaves them for the
+// next and does not fail this one.
+func (p *Provider) deleteExpired(ctx context.Context, now time.Time) {
 	if err := p.queries.DeleteExpiredAccessTokens(ctx, now); err != nil {
 		p.logger.ErrorContext(ctx, "delete expired access tokens", "error", err)
+	}
+	if err := p.queries.DeleteEndedRefreshTokenFamilies(ctx, now); err != nil {
+		p.logger.ErrorContext(ctx, "delete ended refresh token families", "error", err)
 	}
 }
 

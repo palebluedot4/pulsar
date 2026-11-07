@@ -256,8 +256,8 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 // REQ-OAUTH-29: a code whose record has been deleted revokes nothing when
 // presented again: without the record, nothing shows that the request's
 // parameters are the code's. pulsar deletes a redeemed code's record only
-// once the access tokens issued from it have expired; the test deletes it
-// sooner, so that the tokens are still there to be revoked.
+// once its tokens can no longer be revoked; the test deletes it sooner, so
+// that the tokens are still there to be revoked.
 func TestTokenCodeReuseAfterRecordDeletedRevokesNothing(t *testing.T) {
 	t.Parallel()
 

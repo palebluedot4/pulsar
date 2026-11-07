@@ -8,8 +8,6 @@ package queries
 import (
 	"context"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const deleteAccessTokensOfCode = `-- name: DeleteAccessTokensOfCode :exec
@@ -24,6 +22,19 @@ func (q *Queries) DeleteAccessTokensOfCode(ctx context.Context, codeHash []byte)
 	return err
 }
 
+const deleteEndedRefreshTokenFamilies = `-- name: DeleteEndedRefreshTokenFamilies :exec
+DELETE FROM refresh_token_families
+WHERE expiry <= $1
+`
+
+// Deletes the Refresh Token Families that have ended, revoked or not, and
+// their refresh tokens with them. Their codes are deleted by
+// DeleteExpiredAuthorizationCodes, being kept no longer than the family.
+func (q *Queries) DeleteEndedRefreshTokenFamilies(ctx context.Context, now time.Time) error {
+	_, err := q.db.Exec(ctx, deleteEndedRefreshTokenFamilies, now)
+	return err
+}
+
 const deleteExpiredAccessTokens = `-- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
 WHERE expiry <= $1
@@ -35,33 +46,12 @@ func (q *Queries) DeleteExpiredAccessTokens(ctx context.Context, now time.Time) 
 }
 
 const deleteExpiredAuthorizationCodes = `-- name: DeleteExpiredAuthorizationCodes :exec
-DELETE FROM authorization_codes c
-WHERE c.expiry <= $1
-    AND (NOT c.redeemed OR c.expiry <= $2)
-    AND NOT EXISTS (
-        SELECT FROM refresh_token_families f
-        WHERE f.code_hash = c.code_hash
-            AND f.expiry > $1
-            AND NOT f.revoked
-    )
+DELETE FROM authorization_codes
+WHERE delete_after <= $1
 `
 
-type DeleteExpiredAuthorizationCodesParams struct {
-	Now            time.Time
-	RedeemedExpiry time.Time
-}
-
-// Deletes the codes that have expired, except a redeemed one whose tokens
-// may still be revoked: it is kept until @redeemed_expiry, when its access
-// tokens have expired, and while the Refresh Token Family it started has
-// neither ended nor been revoked, so that a second redemption can still
-// show its parameters are the code's and revoke them.
-//
-// TODO(#53): a code kept for its family is read and checked here on every
-// run, for up to the family's 30 days; record when each code may be
-// deleted, so that this reads only those due.
-func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, arg DeleteExpiredAuthorizationCodesParams) error {
-	_, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, arg.Now, arg.RedeemedExpiry)
+func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, now time.Time) error {
+	_, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, now)
 	return err
 }
 
@@ -97,24 +87,21 @@ func (q *Queries) FindAccessToken(ctx context.Context, arg FindAccessTokenParams
 }
 
 const insertAccessToken = `-- name: InsertAccessToken :exec
-INSERT INTO access_tokens (jti, code_hash, family_id, userinfo_claims, expiry)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
+VALUES ($1, $2, $3, $4)
 `
 
 type InsertAccessTokenParams struct {
 	Jti            string
 	CodeHash       []byte
-	FamilyID       pgtype.Int8
 	UserinfoClaims []byte
 	Expiry         time.Time
 }
 
-// family_id is NULL for an access token issued in no Refresh Token Family.
 func (q *Queries) InsertAccessToken(ctx context.Context, arg InsertAccessTokenParams) error {
 	_, err := q.db.Exec(ctx, insertAccessToken,
 		arg.Jti,
 		arg.CodeHash,
-		arg.FamilyID,
 		arg.UserinfoClaims,
 		arg.Expiry,
 	)
@@ -123,8 +110,8 @@ func (q *Queries) InsertAccessToken(ctx context.Context, arg InsertAccessTokenPa
 
 const insertAuthorizationCode = `-- name: InsertAuthorizationCode :exec
 
-INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry, delete_after)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
 `
 
 type InsertAuthorizationCodeParams struct {
@@ -142,6 +129,7 @@ type InsertAuthorizationCodeParams struct {
 
 // Every time is pulsar's, passed in: no query reads the database's clock,
 // so that tests control it.
+// A code not redeemed may be deleted once it has expired.
 func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthorizationCodeParams) error {
 	_, err := q.db.Exec(ctx, insertAuthorizationCode,
 		arg.CodeHash,
@@ -237,6 +225,28 @@ func (q *Queries) InsertRefreshTokenFamily(ctx context.Context, arg InsertRefres
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const keepAuthorizationCodeUntil = `-- name: KeepAuthorizationCodeUntil :exec
+UPDATE authorization_codes
+SET delete_after = $1
+WHERE code_hash = $2
+`
+
+type KeepAuthorizationCodeUntilParams struct {
+	DeleteAfter time.Time
+	CodeHash    []byte
+}
+
+// Sets when the code's row may be deleted. A redeemed code is kept while
+// the tokens issued from it may still be revoked, so that a second
+// redemption can still show its parameters are the code's: until the
+// access token issued from it expires, or, if it started a Refresh Token
+// Family, until the family ends. Once they are revoked, it need not be
+// kept.
+func (q *Queries) KeepAuthorizationCodeUntil(ctx context.Context, arg KeepAuthorizationCodeUntilParams) error {
+	_, err := q.db.Exec(ctx, keepAuthorizationCodeUntil, arg.DeleteAfter, arg.CodeHash)
+	return err
 }
 
 const lockAuthorizationCode = `-- name: LockAuthorizationCode :one

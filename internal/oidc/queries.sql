@@ -2,8 +2,9 @@
 -- so that tests control it.
 
 -- name: InsertAuthorizationCode :exec
-INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry)
-VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_challenge, @claims, @auth_time, @expiry);
+-- A code not redeemed may be deleted once it has expired.
+INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry, delete_after)
+VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_challenge, @claims, @auth_time, @expiry, @expiry);
 
 -- name: RedeemAuthorizationCode :one
 -- Marks the code redeemed and returns what it was issued for, if it was
@@ -54,30 +55,24 @@ WHERE code_hash = @code_hash;
 DELETE FROM access_tokens
 WHERE code_hash = @code_hash;
 
+-- name: KeepAuthorizationCodeUntil :exec
+-- Sets when the code's row may be deleted. A redeemed code is kept while
+-- the tokens issued from it may still be revoked, so that a second
+-- redemption can still show its parameters are the code's: until the
+-- access token issued from it expires, or, if it started a Refresh Token
+-- Family, until the family ends. Once they are revoked, it need not be
+-- kept.
+UPDATE authorization_codes
+SET delete_after = @delete_after
+WHERE code_hash = @code_hash;
+
 -- name: DeleteExpiredAuthorizationCodes :exec
--- Deletes the codes that have expired, except a redeemed one whose tokens
--- may still be revoked: it is kept until @redeemed_expiry, when its access
--- tokens have expired, and while the Refresh Token Family it started has
--- neither ended nor been revoked, so that a second redemption can still
--- show its parameters are the code's and revoke them.
---
--- TODO(#53): a code kept for its family is read and checked here on every
--- run, for up to the family's 30 days; record when each code may be
--- deleted, so that this reads only those due.
-DELETE FROM authorization_codes c
-WHERE c.expiry <= @now
-    AND (NOT c.redeemed OR c.expiry <= @redeemed_expiry)
-    AND NOT EXISTS (
-        SELECT FROM refresh_token_families f
-        WHERE f.code_hash = c.code_hash
-            AND f.expiry > @now
-            AND NOT f.revoked
-    );
+DELETE FROM authorization_codes
+WHERE delete_after <= @now;
 
 -- name: InsertAccessToken :exec
--- family_id is NULL for an access token issued in no Refresh Token Family.
-INSERT INTO access_tokens (jti, code_hash, family_id, userinfo_claims, expiry)
-VALUES (@jti, @code_hash, sqlc.narg('family_id'), @userinfo_claims, @expiry);
+INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
+VALUES (@jti, @code_hash, @userinfo_claims, @expiry);
 
 -- name: InsertRefreshTokenFamily :one
 -- Starts the Refresh Token Family of the code whose hash is code_hash, and
@@ -114,6 +109,13 @@ WHERE token_hash = @token_hash
 
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
+WHERE expiry <= @now;
+
+-- name: DeleteEndedRefreshTokenFamilies :exec
+-- Deletes the Refresh Token Families that have ended, revoked or not, and
+-- their refresh tokens with them. Their codes are deleted by
+-- DeleteExpiredAuthorizationCodes, being kept no longer than the family.
+DELETE FROM refresh_token_families
 WHERE expiry <= @now;
 
 -- name: InsertClientAssertion :execrows

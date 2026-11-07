@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -66,7 +67,50 @@ const aliceClaims = `{
 // Client.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
-	reg, err := registry.Parse([]byte(`{
+	reg, err := registry.Parse(flowRegistryFile(tb))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return reg
+}
+
+// flowRegistryWithout returns flowRegistry without the Client whose
+// client_id, or the End-User whose sub, is id, as a deployment's registry
+// is once one is removed from its file.
+func flowRegistryWithout(tb testing.TB, id string) *registry.Registry {
+	tb.Helper()
+	var file map[string][]map[string]any
+	if err := json.Unmarshal(flowRegistryFile(tb), &file); err != nil {
+		tb.Fatal(err)
+	}
+	removed := 0
+	for _, list := range []string{"clients", "end_users"} {
+		file[list] = slices.DeleteFunc(file[list], func(e map[string]any) bool {
+			if e["client_id"] == id || e["sub"] == id {
+				removed++
+				return true
+			}
+			return false
+		})
+	}
+	if removed != 1 {
+		tb.Fatalf("flowRegistry has %d entries named %q, want 1", removed, id)
+	}
+	b, err := json.Marshal(file)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	reg, err := registry.Parse(b)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return reg
+}
+
+// flowRegistryFile returns the registry file of flowRegistry.
+func flowRegistryFile(tb testing.TB) []byte {
+	tb.Helper()
+	return []byte(`{
 		"clients": [
 			{"client_id": "rp", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hashPassword(tb, rpSecret) + `",
 			 "redirect_uris": ["` + rpRedirectURI + `", "` + rpQueryRedirectURI + `"]},
@@ -83,11 +127,7 @@ func flowRegistry(tb testing.TB) *registry.Registry {
 			 "claims": ` + aliceClaims + `},
 			{"sub": "` + bobSubject + `", "username": "bob", "password_hash": "` + hashPassword(tb, bobPassword) + `"}
 		]
-	}`))
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return reg
+	}`)
 }
 
 // newFlowHandler returns the handler of an OP at loginIssuer, with the
@@ -95,11 +135,19 @@ func flowRegistry(tb testing.TB) *registry.Registry {
 // keys loaded.
 func newFlowHandler(tb testing.TB, pool *pgxpool.Pool) http.Handler {
 	tb.Helper()
+	return newFlowHandlerFor(tb, pool, flowRegistry(tb))
+}
+
+// newFlowHandlerFor returns the handler of newFlowHandler with the
+// registry reg, as pulsar is when started with another registry file
+// against the same database.
+func newFlowHandlerFor(tb testing.TB, pool *pgxpool.Pool, reg *registry.Registry) http.Handler {
+	tb.Helper()
 	keys := signing.New(pool, config.Secret{})
 	if err := keys.Load(tb.Context()); err != nil {
 		tb.Fatalf("Load() error = %v", err)
 	}
-	return New(slog.New(slog.NewTextHandler(tb.Output(), nil)), mustParse(tb, loginIssuer), pool, keys, flowRegistry(tb), ready())
+	return New(slog.New(slog.NewTextHandler(tb.Output(), nil)), mustParse(tb, loginIssuer), pool, keys, reg, ready())
 }
 
 // newFlowHandlerWithoutDatabase returns the handler of newFlowHandler with
@@ -120,12 +168,19 @@ func newFlowHandlerWithoutDatabase(tb testing.TB) http.Handler {
 // TestLoginSessionLimits.
 func newBubbleFlowHandler(t *testing.T, databaseURL string) http.Handler {
 	t.Helper()
+	return newFlowHandler(t, newBubblePool(t, databaseURL))
+}
+
+// newBubblePool opens a pool for the database at databaseURL inside a
+// testing/synctest bubble, and closes it as the bubble ends.
+func newBubblePool(t *testing.T, databaseURL string) *pgxpool.Pool {
+	t.Helper()
 	pool, err := pgxpool.New(t.Context(), databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	return newFlowHandler(t, pool)
+	return pool
 }
 
 // authorizationParams returns the parameters of a valid authorization
