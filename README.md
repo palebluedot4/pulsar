@@ -21,9 +21,10 @@ End-User for offline access, and if they allow it, the token response
 carries a refresh token. The Client redeems it with the `refresh_token`
 grant, for a narrower scope if it asks, for a new access token, ID token
 and refresh token, for up to thirty days; each refresh token is redeemed
-once. A refresh token presented again by its own Client revokes its whole
-Refresh Token Family, with no grace period: its refresh tokens are refused
-from then on, and UserInfo refuses its access tokens. A second redemption
+once. A refresh token already redeemed, presented again by its own Client
+while its Refresh Token Family lives, revokes the whole family, with no
+grace period: its refresh tokens are refused from then on, and UserInfo
+refuses its access tokens. A second redemption
 of a code that is otherwise valid, by its own Client, with its redirect
 URI, and with a matching `code_verifier` exactly when the code has a
 challenge, revokes the access tokens issued from it and, for as long as

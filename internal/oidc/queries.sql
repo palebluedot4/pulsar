@@ -99,7 +99,7 @@ JOIN refresh_token_families f ON f.id = r.family_id
 WHERE r.token_hash = @token_hash
 FOR NO KEY UPDATE OF f;
 
--- name: UseRefreshToken :execrows
+-- name: MarkRefreshTokenUsed :execrows
 -- Marks the refresh token used, and affects no row if it was already used.
 UPDATE refresh_tokens
 SET used = true
@@ -117,7 +117,7 @@ WHERE id = @id;
 -- Revokes the access tokens issued in the Refresh Token Family, including
 -- the one issued from its code, by deleting their records.
 DELETE FROM access_tokens
-WHERE family_id = @family_id;
+WHERE family_id = sqlc.arg(family_id)::bigint;
 
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
