@@ -17,10 +17,22 @@ DELETE FROM access_tokens
 WHERE code_hash = $1
 `
 
-// Revokes the access tokens issued from the code, by deleting their
-// records.
+// Revokes the access tokens issued from the code, directly or in its
+// Refresh Token Family, by deleting their records.
 func (q *Queries) DeleteAccessTokensOfCode(ctx context.Context, codeHash []byte) error {
 	_, err := q.db.Exec(ctx, deleteAccessTokensOfCode, codeHash)
+	return err
+}
+
+const deleteAccessTokensOfFamily = `-- name: DeleteAccessTokensOfFamily :exec
+DELETE FROM access_tokens
+WHERE family_id = $1
+`
+
+// Revokes the access tokens issued in the Refresh Token Family, including
+// the one issued from its code, by deleting their records.
+func (q *Queries) DeleteAccessTokensOfFamily(ctx context.Context, familyID pgtype.Int8) error {
+	_, err := q.db.Exec(ctx, deleteAccessTokensOfFamily, familyID)
 	return err
 }
 
@@ -35,9 +47,14 @@ func (q *Queries) DeleteExpiredAccessTokens(ctx context.Context, now time.Time) 
 }
 
 const deleteExpiredAuthorizationCodes = `-- name: DeleteExpiredAuthorizationCodes :exec
-DELETE FROM authorization_codes
-WHERE expiry <= $1
-    AND (NOT redeemed OR expiry <= $2)
+DELETE FROM authorization_codes c
+WHERE c.expiry <= $1
+    AND (NOT c.redeemed OR c.expiry <= $2)
+    AND NOT EXISTS (
+        SELECT FROM refresh_token_families f
+        WHERE f.code_hash = c.code_hash
+            AND f.expiry > $1
+    )
 `
 
 type DeleteExpiredAuthorizationCodesParams struct {
@@ -45,9 +62,11 @@ type DeleteExpiredAuthorizationCodesParams struct {
 	RedeemedExpiry time.Time
 }
 
-// Deletes the codes that have expired, except a redeemed one whose access
-// tokens may not have: it is kept until @redeemed_expiry, so that a second
-// redemption can still show its parameters are the code's and revoke them.
+// Deletes the codes that have expired, except a redeemed one whose tokens
+// may still be revoked: it is kept until @redeemed_expiry, when its access
+// tokens have expired, and while the Refresh Token Family it started has
+// not ended, so that a second redemption can still show its parameters are
+// the code's and revoke them.
 func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, arg DeleteExpiredAuthorizationCodesParams) error {
 	_, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, arg.Now, arg.RedeemedExpiry)
 	return err
@@ -261,6 +280,51 @@ func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash []byte) (L
 	return i, err
 }
 
+const lockRefreshTokenFamily = `-- name: LockRefreshTokenFamily :one
+SELECT f.id, f.client_id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time, f.expiry, f.revoked
+FROM refresh_tokens r
+JOIN refresh_token_families f ON f.id = r.family_id
+WHERE r.token_hash = $1
+FOR NO KEY UPDATE OF f
+`
+
+type LockRefreshTokenFamilyRow struct {
+	ID       int64
+	ClientID string
+	CodeHash []byte
+	Subject  string
+	Scopes   []string
+	Claims   []byte
+	AuthTime time.Time
+	Expiry   time.Time
+	Revoked  bool
+}
+
+// Locks the row of the refresh token's Refresh Token Family until the
+// transaction ends, and returns the family. Every transaction that redeems
+// one of the family's refresh tokens or revokes the family locks the row
+// first, so they take turns: one waits for another in progress to commit,
+// and then reads the family, and in later statements its refresh tokens
+// and access tokens, as that one left them. The lock is the one an UPDATE
+// of the row takes, which does not block recording a refresh token in the
+// family.
+func (q *Queries) LockRefreshTokenFamily(ctx context.Context, tokenHash []byte) (LockRefreshTokenFamilyRow, error) {
+	row := q.db.QueryRow(ctx, lockRefreshTokenFamily, tokenHash)
+	var i LockRefreshTokenFamilyRow
+	err := row.Scan(
+		&i.ID,
+		&i.ClientID,
+		&i.CodeHash,
+		&i.Subject,
+		&i.Scopes,
+		&i.Claims,
+		&i.AuthTime,
+		&i.Expiry,
+		&i.Revoked,
+	)
+	return i, err
+}
+
 const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :one
 UPDATE authorization_codes
 SET redeemed = true
@@ -316,49 +380,46 @@ func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthori
 	return i, err
 }
 
-const redeemRefreshToken = `-- name: RedeemRefreshToken :one
-UPDATE refresh_tokens r
-SET used = true
-FROM refresh_token_families f
-WHERE r.token_hash = $1
-    AND f.id = r.family_id
-    AND f.client_id = $2
-    AND f.expiry > $3
-    AND NOT f.revoked
-    AND NOT r.used
-RETURNING f.id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time
+const revokeRefreshTokenFamily = `-- name: RevokeRefreshTokenFamily :exec
+UPDATE refresh_token_families
+SET revoked = true
+WHERE id = $1
 `
 
-type RedeemRefreshTokenParams struct {
-	TokenHash []byte
-	ClientID  string
-	Now       time.Time
+// Revokes the Refresh Token Family, whose row the caller has locked. The
+// caller then deletes the records of its access tokens.
+func (q *Queries) RevokeRefreshTokenFamily(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, revokeRefreshTokenFamily, id)
+	return err
 }
 
-type RedeemRefreshTokenRow struct {
-	ID       int64
-	CodeHash []byte
-	Subject  string
-	Scopes   []string
-	Claims   []byte
-	AuthTime time.Time
+const revokeRefreshTokenFamilyOfCode = `-- name: RevokeRefreshTokenFamilyOfCode :exec
+UPDATE refresh_token_families
+SET revoked = true
+WHERE code_hash = $1
+`
+
+// Revokes the Refresh Token Family the code started, if any. It locks the
+// family's row, so that a refresh in progress in the family commits first;
+// the caller then deletes the records of the access tokens issued from the
+// code in a later statement, which sees the one that refresh recorded.
+func (q *Queries) RevokeRefreshTokenFamilyOfCode(ctx context.Context, codeHash []byte) error {
+	_, err := q.db.Exec(ctx, revokeRefreshTokenFamilyOfCode, codeHash)
+	return err
 }
 
-// Marks the refresh token used and returns its family and what the family
-// was granted, if the token has not been used and its family belongs to
-// this Client, has not ended and has not been revoked. Under read
-// committed, of two transactions redeeming one refresh token, the second
-// waits for the first and then finds it used.
-func (q *Queries) RedeemRefreshToken(ctx context.Context, arg RedeemRefreshTokenParams) (RedeemRefreshTokenRow, error) {
-	row := q.db.QueryRow(ctx, redeemRefreshToken, arg.TokenHash, arg.ClientID, arg.Now)
-	var i RedeemRefreshTokenRow
-	err := row.Scan(
-		&i.ID,
-		&i.CodeHash,
-		&i.Subject,
-		&i.Scopes,
-		&i.Claims,
-		&i.AuthTime,
-	)
-	return i, err
+const useRefreshToken = `-- name: UseRefreshToken :execrows
+UPDATE refresh_tokens
+SET used = true
+WHERE token_hash = $1
+    AND NOT used
+`
+
+// Marks the refresh token used, and affects no row if it was already used.
+func (q *Queries) UseRefreshToken(ctx context.Context, tokenHash []byte) (int64, error) {
+	result, err := q.db.Exec(ctx, useRefreshToken, tokenHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

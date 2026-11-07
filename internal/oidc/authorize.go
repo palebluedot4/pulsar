@@ -533,8 +533,9 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 	// Issuing a code is when expired ones are deleted. A failure leaves
 	// them for the next and does not fail this one. A redeemed code is
 	// kept until the access tokens issued from it have expired too, at
-	// most TokenLifetime after the code, so that a second redemption still
-	// revokes them (RFC 6749 §4.1.2).
+	// most TokenLifetime after the code, and while the Refresh Token Family
+	// it started lives, so that a second redemption still revokes them
+	// (RFC 6749 §4.1.2).
 	if err := p.queries.DeleteExpiredAuthorizationCodes(ctx, queries.DeleteExpiredAuthorizationCodesParams{
 		Now:            now,
 		RedeemedExpiry: now.Add(-TokenLifetime),

@@ -29,7 +29,8 @@ CREATE TABLE refresh_token_families (
     -- When the family ends, by pulsar's clock: 30 days after the code was
     -- redeemed, however often it is refreshed.
     expiry timestamptz NOT NULL,
-    -- Whether the family has been revoked, as a whole.
+    -- Whether the family has been revoked, as a whole: by a refresh token
+    -- of it presented again, or by its code (#52).
     revoked boolean NOT NULL DEFAULT false
 );
 

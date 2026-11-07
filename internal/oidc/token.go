@@ -270,17 +270,19 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // verifier of the form RFC 7636 §4.1 allows can be tried against a code,
 // and a weak one cannot be guessed in the code's lifetime.
 //
-// A code that was redeemed before, presented again, revokes the access
-// tokens issued from it (RFC 6749 §4.1.2): their records are deleted, so
-// that UserInfo refuses them. It does so only if the request is otherwise
-// valid: client is the code's Client, which has authenticated by its
-// registered method before this is called, redirectURI is the code's, and
-// challenge is the code's. A replay with any other parameters revokes
-// nothing, as OAuth 2.1 draft -17 §7.5.3 has it, so that one who has only
-// seen a code cannot end the End-User's access with another Client
-// (docs/research/refresh-tokens.md). The code's expiry is not checked: a
-// valid replay after the code has expired revokes too, for as long as the
-// code's record is kept.
+// A code that was redeemed before, presented again, revokes the tokens
+// issued from it (RFC 6749 §4.1.2): the Refresh Token Family it started,
+// if any, and the access tokens issued from it, directly or in the family,
+// whose records are deleted, so that UserInfo refuses them. It does so
+// only if the request is otherwise valid: client is the code's Client,
+// which has authenticated by its registered method before this is called,
+// redirectURI is the code's, and challenge is the code's. A replay with
+// any other parameters revokes nothing, as OAuth 2.1 draft -17 §7.5.3 has
+// it, so that one who has only seen a code cannot end the End-User's
+// access with another Client (docs/research/refresh-tokens.md). The code's
+// expiry is not checked: a valid replay after the code has expired revokes
+// too, for as long as the code's record is kept, which is while its family
+// lives.
 //
 // A code issued with offline access starts a Refresh Token Family, which
 // ends familyLifetime after the code is redeemed, and is redeemed for the
@@ -339,10 +341,13 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if !stored.Redeemed || stored.ClientID != client.ID || stored.RedirectUri != redirectURI || stored.CodeChallenge != challenge {
 				return nil
 			}
-			// TODO(#52): revoke the Refresh Token Family the code started
-			// too. Until then its refresh token stays redeemable, and an
-			// access token a concurrent refresh records may escape this
-			// deletion.
+			// The family is revoked first, which waits for a refresh in
+			// progress in it, so that the deletion then sees the access
+			// token that refresh recorded, and a later refresh finds the
+			// family revoked.
+			if err := q.RevokeRefreshTokenFamilyOfCode(ctx, hash); err != nil {
+				return err
+			}
 			return q.DeleteAccessTokensOfCode(ctx, hash)
 		}
 		if err != nil {
@@ -450,31 +455,60 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // token's sub, aud and auth_time are those of the authorization the code
 // was issued for (OpenID Connect Core 1.0 §12.2).
 //
+// A refresh token already used, presented again by its own Client while
+// its family lives, shows that it was stolen, and from whom pulsar cannot
+// tell, so the whole family is revoked: its refresh tokens are refused
+// from then on, and the records of its access tokens, the one issued from
+// the code included, are deleted, so that UserInfo refuses them (RFC 9700
+// §4.14.2). There is no grace period, not even for a Client retrying a
+// refresh whose response it never received. A refresh token presented by
+// another Client revokes nothing, as a code replayed by another Client
+// does not (OAuth 2.1 draft -17 §7.5.3), so that one who has only seen a
+// refresh token cannot end the End-User's offline access.
+//
 // The refresh token is redeemed, and its replacement and the access token
-// recorded, in one transaction, so that of two redemptions of one refresh
-// token, at most one succeeds. A scope that exceeds the family's rolls it
-// back, so that the refresh token can still be redeemed. The tokens are
-// signed after it commits, as issueTokens signs them.
+// recorded, in one transaction, which first locks the family's row, as
+// revoking the family does. So of two redemptions of one refresh token,
+// the second waits for the first, finds the token used, and revokes the
+// family; and a refresh and a revocation of one family take turns, so that
+// the revocation sees every access token the family has recorded, and no
+// refresh issues one after it. A scope that exceeds the family's rolls the
+// transaction back, so that the refresh token can still be redeemed. The
+// tokens are signed after it commits, as issueTokens signs them.
 func (p *Provider) refresh(ctx context.Context, client *registry.Client, refreshToken string, scopes []string) (*tokenResponse, error) {
 	now := time.Now()
 	exp := now.Add(TokenLifetime)
+	hash := hashCode(refreshToken)
 	jti := rand.Text()
-	var row queries.RedeemRefreshTokenRow
+	var row queries.LockRefreshTokenFamilyRow
 	var claims claimsRequest
 	var replacement string
+	// Whether the refresh token is refused, after the transaction commits
+	// the revocation of its family.
+	var reused bool
 	err := pgx.BeginTxFunc(ctx, p.db, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		q := p.queries.WithTx(tx)
 		var err error
-		row, err = q.RedeemRefreshToken(ctx, queries.RedeemRefreshTokenParams{
-			TokenHash: hashCode(refreshToken),
-			ClientID:  client.ID,
-			Now:       now,
-		})
+		row, err = q.LockRefreshTokenFamily(ctx, hash)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errRefreshTokenNotRedeemable
 		}
 		if err != nil {
 			return err
+		}
+		if row.ClientID != client.ID || row.Revoked || !row.Expiry.After(now) {
+			return errRefreshTokenNotRedeemable
+		}
+		n, err := q.UseRefreshToken(ctx, hash)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			reused = true
+			if err := q.RevokeRefreshTokenFamily(ctx, row.ID); err != nil {
+				return err
+			}
+			return q.DeleteAccessTokensOfFamily(ctx, pgtype.Int8{Int64: row.ID, Valid: true})
 		}
 		if len(scopes) == 0 {
 			scopes = row.Scopes
@@ -498,6 +532,9 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 	})
 	if err != nil {
 		return nil, err
+	}
+	if reused {
+		return nil, errRefreshTokenNotRedeemable
 	}
 	p.deleteExpiredAccessTokens(ctx, now)
 	// The ID token has no nonce, which §12.2 allows only with the value
