@@ -715,3 +715,62 @@ func FuzzClientAssertion(f *testing.F) {
 		}
 	})
 }
+
+// REQ-OAUTH-44: failed attempts to authenticate as a Client are not
+// counted against it, so that no one who knows its client_id, which is
+// public, can hold up its token requests: after many with a wrong secret,
+// by either method, it still authenticates with its own.
+func TestTokenClientSecretNotThrottled(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name        string
+		clientID    string
+		redirectURI string
+		wrong       func() response
+		right       func(code string) response
+	}{
+		{
+			name:        "client_secret_basic",
+			clientID:    "rp",
+			redirectURI: rpRedirectURI,
+			wrong: func() response {
+				return tokenRequest(t, handler, "rp", "wrong", codeForm("unknown"))
+			},
+			right: func(code string) response {
+				return tokenRequest(t, handler, "rp", rpSecret, codeForm(code))
+			},
+		},
+		{
+			name:        "client_secret_post",
+			clientID:    "post",
+			redirectURI: postRedirectURI,
+			wrong: func() response {
+				return postTokenRequest(t, handler, url.Values{
+					"grant_type": {"authorization_code"}, "code": {"unknown"}, "redirect_uri": {postRedirectURI},
+					"client_id": {"post"}, "client_secret": {"wrong"},
+				})
+			},
+			right: func(code string) response {
+				return postTokenRequest(t, handler, url.Values{
+					"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {postRedirectURI},
+					"client_id": {"post"}, "client_secret": {postSecret},
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for i := range 20 {
+				if got := tokenErrorCode(t, tt.wrong(), http.StatusUnauthorized); got != "invalid_client" {
+					t.Fatalf("POST %s with a wrong secret, number %d: error = %q, want %q", tokenPath, i+1, got, "invalid_client")
+				}
+			}
+			if got := idTokenAudience(t, handler, tt.right(code(t, handler, clientParams(tt.clientID, tt.redirectURI)))); got != tt.clientID {
+				t.Errorf("POST %s after 20 wrong secrets: ID token aud = %v, want %q", tokenPath, got, tt.clientID)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 	"github.com/palebluedot4/pulsar/internal/registry"
@@ -148,7 +150,7 @@ func newFlowHandlerFor(tb testing.TB, pool *pgxpool.Pool, reg *registry.Registry
 	if err := keys.Load(tb.Context()); err != nil {
 		tb.Fatalf("Load() error = %v", err)
 	}
-	return New(slog.New(slog.NewTextHandler(tb.Output(), nil)), mustParse(tb, loginIssuer), pool, keys, reg, ready())
+	return New(slog.New(slog.NewTextHandler(tb.Output(), nil)), mustParse(tb, loginIssuer), pool, keys, reg, guessing.New(pool, nil), ready())
 }
 
 // newFlowHandlerWithoutDatabase returns the handler of newFlowHandler with
@@ -158,7 +160,7 @@ func newFlowHandlerWithoutDatabase(tb testing.TB) http.Handler {
 	tb.Helper()
 	pool := postgrestest.Open(tb, postgrestest.UnreachableURL(tb))
 	logger := slog.New(slog.DiscardHandler)
-	return New(logger, mustParse(tb, loginIssuer), pool, signing.New(pool, config.Secret{}), flowRegistry(tb), ready())
+	return New(logger, mustParse(tb, loginIssuer), pool, signing.New(pool, config.Secret{}), flowRegistry(tb), guessing.New(pool, nil), ready())
 }
 
 // newBubbleFlowHandler returns the handler of newFlowHandler for the
@@ -269,6 +271,12 @@ func (b *browser) signIn(resp response) response {
 	return b.signInAs(resp, "alice", alicePassword)
 }
 
+// signInMu is held while a test signs in through signInAs, so that the
+// tests sign in one at a time. pulsar counts logins made at once as one
+// End-User as made one after another, and makes more than five wait (ADR
+// 0005), and many tests' subtests sign in as alice at once.
+var signInMu sync.Mutex
+
 // signInAs is signIn as the End-User with username and password.
 func (b *browser) signInAs(resp response, username, password string) response {
 	b.t.Helper()
@@ -276,7 +284,9 @@ func (b *browser) signInAs(resp response, username, password string) response {
 	if loginURL.Path != loginPath {
 		b.t.Fatalf("authorization request redirected to %q, want the login page %q", loginURL, loginPath)
 	}
+	signInMu.Lock()
 	resp = b.send(http.MethodPost, loginURL.RequestURI(), url.Values{"username": {username}, "password": {password}})
+	signInMu.Unlock()
 	return b.send(http.MethodGet, location(b.t, resp).RequestURI(), nil)
 }
 

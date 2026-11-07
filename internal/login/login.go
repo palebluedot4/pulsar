@@ -12,6 +12,12 @@
 //
 // The login and consent forms refuse cross-origin submissions, through
 // [http.CrossOriginProtection], and neither page may be framed.
+//
+// Logins are counted, through [guessing.Limiter], against the End-User
+// whose username is given, or against the username if no End-User has it,
+// and one that comes too soon after too many without a success gets 429
+// before its password is checked (RFC 6749 §10.10). One that finds no room
+// to check its password gets 503.
 package login
 
 import (
@@ -20,11 +26,13 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/login/internal/queries"
 	"github.com/palebluedot4/pulsar/internal/registry"
 )
@@ -203,10 +211,11 @@ func (s *Sessions) endUser(r *http.Request) (*registry.EndUser, bool) {
 // resumes after login, and the login is recorded as made for that request
 // (see [Interaction]). Such a page shows the form even to a browser
 // already signed in, and fills its username with the request's
-// login_hint. Any other login sends the browser back to the page. It logs
-// to logger any error that ends a request.
-func (s *Sessions) Handler(path, continuePath string, logger *slog.Logger) http.Handler {
-	h := &handler{path: path, continuePath: continuePath, sessions: s, logger: logger}
+// login_hint. Any other login sends the browser back to the page. Logins
+// are counted by attempts. It logs to logger any error that ends a
+// request.
+func (s *Sessions) Handler(path, continuePath string, attempts *guessing.Limiter, logger *slog.Logger) http.Handler {
+	h := &handler{path: path, continuePath: continuePath, sessions: s, attempts: attempts, logger: logger}
 	return http.NewCrossOriginProtection().Handler(h)
 }
 
@@ -214,6 +223,7 @@ type handler struct {
 	path         string // the page's request path
 	continuePath string // where a login from a page with a query goes on to
 	sessions     *Sessions
+	attempts     *guessing.Limiter
 	logger       *slog.Logger
 }
 
@@ -245,7 +255,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if u, ok := h.sessions.endUser(r); ok && r.URL.RawQuery == "" {
 		p.SignedInAs = u.Username
 	}
-	h.render(w, r, p)
+	h.render(w, r, http.StatusOK, p)
 }
 
 // login authenticates the End-User whose username and password the form
@@ -257,14 +267,36 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
+	ctx := r.Context()
 	username := r.PostForm.Get("username")
-	u, ok := h.sessions.registry.AuthenticateEndUser(username, r.PostForm.Get("password"))
+	account := h.account(username)
+	wait, err := h.attempts.Attempt(ctx, account)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait/time.Second)))
+		h.render(w, r, http.StatusTooManyRequests, page{Username: username, Error: tooManyAttempts(wait)})
+		return
+	}
+	u, ok, err := h.sessions.registry.AuthenticateEndUser(ctx, username, r.PostForm.Get("password"))
+	if err != nil {
+		// The only error is registry.ErrBusy: too many logins and token
+		// requests at once on this replica (RFC 9110 §15.6.4).
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
 	if !ok {
-		h.render(w, r, page{Username: username, Error: failedLogin})
+		h.render(w, r, http.StatusOK, page{Username: username, Error: failedLogin})
+		return
+	}
+	if err := h.attempts.Succeeded(ctx, account); err != nil {
+		h.fail(w, r, err)
 		return
 	}
 
-	ctx := r.Context()
 	m := h.sessions.manager
 	if err := m.RenewToken(ctx); err != nil {
 		h.fail(w, r, fmt.Errorf("renew the Login Session token: %w", err))
@@ -303,7 +335,32 @@ func (h *handler) continueAfterLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next is a fixed path on this origin; the query cannot change it.
 }
 
-func (h *handler) render(w http.ResponseWriter, r *http.Request, p page) {
+// account returns the account a login as username is counted against: the
+// End-User's, if one has the username, and the username's otherwise.
+// Both take as long, so neither tells which usernames exist.
+func (h *handler) account(username string) guessing.Account {
+	if u, ok := h.sessions.registry.EndUserNamed(username); ok {
+		return h.attempts.EndUser(u.Subject)
+	}
+	return h.attempts.Username(username)
+}
+
+// tooManyAttempts is what a login refused for coming too soon says: how
+// long until the next may be made, in whole seconds, or minutes from a
+// minute up.
+func tooManyAttempts(wait time.Duration) string {
+	n, unit := int(wait/time.Second), "second"
+	if wait >= time.Minute {
+		n, unit = int((wait+time.Minute-1)/time.Minute), "minute"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	return fmt.Sprintf("Too many failed attempts to sign in with this username. Try again in %d %s.", n, unit)
+}
+
+// render writes the login page with p, under status.
+func (h *handler) render(w http.ResponseWriter, r *http.Request, status int, p page) {
 	var buf bytes.Buffer
 	if err := pageTemplate.Execute(&buf, p); err != nil {
 		h.fail(w, r, fmt.Errorf("render login page: %w", err))
@@ -313,6 +370,7 @@ func (h *handler) render(w http.ResponseWriter, r *http.Request, p page) {
 		h.fail(w, r, err)
 		return
 	}
+	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.
 }
 

@@ -35,8 +35,8 @@ registry cannot authenticate, so it redeems neither. Removal revokes
 nothing, so one added back has the tokens not yet expired again. Every
 15 minutes, each replica deletes the codes no longer kept for a second
 redemption to revoke, the expired access tokens, client assertions and
-Login Sessions, and the ended Refresh Token Families with their refresh
-tokens. `pulsar keys
+Login Sessions, the ended Refresh Token Families with their refresh
+tokens, and the counts of login attempts forgotten a day after the last. `pulsar keys
 rotate` rotates the signing key. The OpenID conformance
 suite's Config OP and Basic OP plans run against it in CI; on 2026-11-06,
 at commit `8d6ab47`, they finished with no failures, as [Checking
@@ -92,6 +92,12 @@ implementation's `argon2` command prints:
 # 2 passes over 32 MiB, one lane: above OWASP's minimum for Argon2id.
 read -rs password && printf %s "$password" | argon2 "$(openssl rand -hex 16)" -id -t 2 -m 15 -p 1 -e
 ```
+
+A client secret must be at least 256 bits from a cryptographically strong
+random source, such as `openssl rand -base64 32` prints. Logins are
+throttled per End-User, but client secrets are not, so their length alone
+keeps them from being guessed
+([ADR 0005](docs/adr/0005-guessing-throttled-per-account-by-delay.md)).
 
 ```sh
 # Once per database; every later start needs the same value.

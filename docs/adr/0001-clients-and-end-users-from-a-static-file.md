@@ -17,9 +17,11 @@ conformance configuration can also refer to.
   type, not pairwise.
 - Startup fails on a duplicate `client_id`, Subject or username.
 - Client secrets and End-User passwords appear in the file only as Argon2id
-  hashes. Operators choose client secrets, so pulsar cannot assume they are
-  high-entropy, and one hashing scheme serves both. The cost is one Argon2id
-  verification per confidential Client authentication, as for a login; Ory
-  Hydra likewise offers bcrypt for client secrets. Throttling the token
-  endpoint is deferred with login throttling.
+  hashes. Operators choose client secrets, so pulsar cannot check that they
+  are high-entropy, and one hashing scheme serves both. The cost is one
+  Argon2id verification per confidential Client authentication, as for a
+  login; Ory Hydra likewise offers bcrypt for client secrets. The README
+  requires client secrets of at least 256 random bits, which guards them
+  against guessing in place of the count that guards logins
+  ([ADR 0005](0005-guessing-throttled-per-account-by-delay.md)).
 - Changing a Client or End-User means editing the file and restarting.

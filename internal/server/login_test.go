@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -20,6 +21,7 @@ import (
 	"golang.org/x/crypto/argon2"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 	"github.com/palebluedot4/pulsar/internal/registry"
 	"github.com/palebluedot4/pulsar/internal/signing"
@@ -72,7 +74,7 @@ func testRegistry(t *testing.T) *registry.Registry {
 // End-Users of testRegistry, backed by pool.
 func newLoginHandler(t *testing.T, pool *pgxpool.Pool) http.Handler {
 	t.Helper()
-	return New(slog.New(slog.NewTextHandler(t.Output(), nil)), mustParse(t, loginIssuer), pool, signing.New(pool, config.Secret{}), testRegistry(t), ready())
+	return New(slog.New(slog.NewTextHandler(t.Output(), nil)), mustParse(t, loginIssuer), pool, signing.New(pool, config.Secret{}), testRegistry(t), guessing.New(pool, nil), ready())
 }
 
 // browser stands in for an End-User's browser: it sends requests to a
@@ -186,7 +188,7 @@ func TestLoginBeforeReady(t *testing.T) {
 
 	pool := postgrestest.Open(t, postgrestest.NewEmptyDatabase(t))
 	logger := slog.New(slog.NewTextHandler(t.Output(), nil))
-	handler := New(logger, mustParse(t, loginIssuer), pool, signing.New(pool, config.Secret{}), testRegistry(t), make(chan struct{}))
+	handler := New(logger, mustParse(t, loginIssuer), pool, signing.New(pool, config.Secret{}), testRegistry(t), guessing.New(pool, nil), make(chan struct{}))
 	b := &browser{t: t, handler: handler}
 	for name, resp := range map[string]response{
 		"GET":  b.get(),
@@ -240,7 +242,6 @@ func TestLogin(t *testing.T) {
 func TestLoginFailure(t *testing.T) {
 	t.Parallel()
 
-	handler := newLoginHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 	tests := []struct {
 		name     string
 		username string
@@ -255,6 +256,9 @@ func TestLoginFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			// A database of its own, so that the failures of the other
+			// cases, as alice, do not count against this one's.
+			handler := newLoginHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 			b := &browser{t: t, handler: handler}
 			resp := b.login(tt.username, tt.password, nil)
 			if resp.status != http.StatusOK {
@@ -411,4 +415,96 @@ func TestLoginRefusesCrossOrigin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// REQ-OAUTH-45: after five failed logins as an End-User, each further one
+// must wait a second, then two, doubling; one that comes sooner gets 429
+// with Retry-After, even with the right password, and starts no Login
+// Session. A login once the wait is over is checked, and a successful one
+// clears the count. A username no End-User has is answered alike, so a
+// refusal does not tell which usernames exist.
+func TestLoginThrottled(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		pool, err := pgxpool.New(t.Context(), databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		handler := newLoginHandler(t, pool)
+
+		// fail logs in as username with a wrong password, which must be
+		// checked.
+		fail := func(username string) {
+			t.Helper()
+			resp := (&browser{t: t, handler: handler}).login(username, "wrong", nil)
+			if resp.status != http.StatusOK || !strings.Contains(resp.body, failedLogin) {
+				t.Fatalf("POST %s as %s with a wrong password status = %d, want %d and the failed login's page", loginPath, username, resp.status, http.StatusOK)
+			}
+		}
+		// refused logs in as username with alice's password, which must not
+		// be checked, and returns the page with the username blanked.
+		refused := func(username string, wait int, message string) string {
+			t.Helper()
+			b := &browser{t: t, handler: handler}
+			resp := b.login(username, alicePassword, nil)
+			if resp.status != http.StatusTooManyRequests {
+				t.Fatalf("POST %s as %s too soon status = %d, want %d", loginPath, username, resp.status, http.StatusTooManyRequests)
+			}
+			wantHeader := map[string]string{
+				"Retry-After":   strconv.Itoa(wait),
+				"Content-Type":  "text/html; charset=utf-8",
+				"Cache-Control": "no-store",
+			}
+			if diff := cmp.Diff(wantHeader, headers(resp.header, wantHeader)); diff != "" {
+				t.Errorf("POST %s as %s too soon headers mismatch (-want +got):\n%s", loginPath, username, diff)
+			}
+			if !strings.Contains(resp.body, message) {
+				t.Errorf("POST %s as %s too soon body = %q, want it to contain %q", loginPath, username, resp.body, message)
+			}
+			if b.session != nil {
+				t.Fatalf("POST %s as %s too soon set cookie %q, want none", loginPath, username, b.session.Name)
+			}
+			return strings.ReplaceAll(resp.body, `value="`+username+`"`, `value=""`)
+		}
+
+		first := map[string]string{}
+		for _, username := range []string{"alice", "carol"} {
+			for range 5 {
+				fail(username)
+			}
+			first[username] = refused(username, 1, "Try again in 1 second.")
+			for _, step := range []struct {
+				wait    int
+				message string
+			}{
+				{2, "Try again in 2 seconds."},
+				{4, "Try again in 4 seconds."},
+				{8, "Try again in 8 seconds."},
+				{16, "Try again in 16 seconds."},
+				{32, "Try again in 32 seconds."},
+				{64, "Try again in 2 minutes."},
+			} {
+				time.Sleep(time.Duration(step.wait/2) * time.Second)
+				fail(username)
+				refused(username, step.wait, step.message)
+			}
+		}
+		if diff := cmp.Diff(first["alice"], first["carol"]); diff != "" {
+			t.Errorf("POST %s too soon body mismatch between alice and carol, who does not exist (-alice +carol):\n%s", loginPath, diff)
+		}
+
+		time.Sleep(64 * time.Second)
+		b := &browser{t: t, handler: handler}
+		if resp := b.login("alice", alicePassword, nil); resp.status != http.StatusSeeOther {
+			t.Fatalf("POST %s as alice once the wait is over status = %d, want %d", loginPath, resp.status, http.StatusSeeOther)
+		}
+		// The count is cleared: five more failures are checked.
+		for range 5 {
+			fail("alice")
+		}
+		refused("alice", 1, "Try again in 1 second.")
+	})
 }

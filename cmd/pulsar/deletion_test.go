@@ -35,8 +35,8 @@ func startDeleting(t *testing.T, pool *pgxpool.Pool, logger *slog.Logger) {
 
 // insertRecords inserts, under label, a record due at at in each table
 // whose records pulsar deletes once due: an authorization code, an access
-// token, a Refresh Token Family with a refresh token, a client assertion
-// and a Login Session.
+// token, a Refresh Token Family with a refresh token, a client assertion,
+// a Login Session and a count of login attempts.
 func insertRecords(t *testing.T, pool *pgxpool.Pool, label string, at time.Time) {
 	t.Helper()
 	statements := []string{
@@ -51,6 +51,7 @@ func insertRecords(t *testing.T, pool *pgxpool.Pool, label string, at time.Time)
 		INSERT INTO refresh_tokens (token_hash, family_id) SELECT convert_to($1, 'UTF8'), id FROM f`,
 		`INSERT INTO client_assertions (client_id, jti_hash, expiry) VALUES ('rp', convert_to($1, 'UTF8'), $2)`,
 		`INSERT INTO login_sessions (token, data, expiry) VALUES ($1, '', $2)`,
+		`INSERT INTO login_attempts (account, attempts, next_attempt, delete_after) VALUES (convert_to($1, 'UTF8'), 1, $2, $2)`,
 	}
 	for _, s := range statements {
 		if _, err := pool.Exec(t.Context(), s, label, at); err != nil {
@@ -70,6 +71,7 @@ func records(t *testing.T, pool *pgxpool.Pool) []string {
 		UNION ALL SELECT 'refresh_tokens ' || convert_from(token_hash, 'UTF8') FROM refresh_tokens
 		UNION ALL SELECT 'client_assertions ' || convert_from(jti_hash, 'UTF8') FROM client_assertions
 		UNION ALL SELECT 'login_sessions ' || token FROM login_sessions
+		UNION ALL SELECT 'login_attempts ' || convert_from(account, 'UTF8') FROM login_attempts
 		ORDER BY 1`)
 	if err != nil {
 		t.Fatalf("listing the records: %v", err)
@@ -85,7 +87,7 @@ func records(t *testing.T, pool *pgxpool.Pool) []string {
 // records insertRecords inserted under it.
 func labeled(labels ...string) []string {
 	want := []string{}
-	for _, table := range []string{"access_tokens", "authorization_codes", "client_assertions", "login_sessions", "refresh_token_families", "refresh_tokens"} {
+	for _, table := range []string{"access_tokens", "authorization_codes", "client_assertions", "login_attempts", "login_sessions", "refresh_token_families", "refresh_tokens"} {
 		for _, label := range labels {
 			want = append(want, table+" "+label)
 		}
@@ -95,8 +97,9 @@ func labeled(labels ...string) []string {
 
 // The records due are deleted every deletionInterval, 15 minutes, and not
 // before: the authorization codes due, the access tokens, client
-// assertions and Login Sessions expired, and the Refresh Token Families
-// ended, with their refresh tokens. Those not yet due are kept.
+// assertions and Login Sessions expired, the Refresh Token Families
+// ended, with their refresh tokens, and the counts of login attempts
+// forgotten. Those not yet due are kept.
 func TestDeleteDueEveryInterval(t *testing.T) {
 	t.Parallel()
 
@@ -176,7 +179,7 @@ func TestDeleteDueLogsFailure(t *testing.T) {
 		var logs syncBuffer
 		startDeleting(t, pool, slog.New(slog.NewJSONHandler(&logs, nil)))
 
-		failures := []string{"delete due codes and tokens", "delete ended login sessions"}
+		failures := []string{"delete due codes and tokens", "delete ended login sessions", "delete forgotten login attempts"}
 		time.Sleep(deletionInterval)
 		synctest.Wait()
 		if diff := cmp.Diff(failures, logs.messages(t)); diff != "" {
