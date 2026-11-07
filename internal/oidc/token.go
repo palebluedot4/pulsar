@@ -499,7 +499,7 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		if row.ClientID != client.ID || row.Revoked || !row.Expiry.After(now) {
 			return errRefreshTokenNotRedeemable
 		}
-		n, err := q.UseRefreshToken(ctx, hash)
+		n, err := q.MarkRefreshTokenUsed(ctx, hash)
 		if err != nil {
 			return err
 		}
@@ -508,7 +508,7 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 			if err := q.RevokeRefreshTokenFamily(ctx, row.ID); err != nil {
 				return err
 			}
-			return q.DeleteAccessTokensOfFamily(ctx, pgtype.Int8{Int64: row.ID, Valid: true})
+			return q.DeleteAccessTokensOfFamily(ctx, row.ID)
 		}
 		if len(scopes) == 0 {
 			scopes = row.Scopes

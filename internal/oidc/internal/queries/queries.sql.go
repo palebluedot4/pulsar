@@ -26,12 +26,12 @@ func (q *Queries) DeleteAccessTokensOfCode(ctx context.Context, codeHash []byte)
 
 const deleteAccessTokensOfFamily = `-- name: DeleteAccessTokensOfFamily :exec
 DELETE FROM access_tokens
-WHERE family_id = $1
+WHERE family_id = $1::bigint
 `
 
 // Revokes the access tokens issued in the Refresh Token Family, including
 // the one issued from its code, by deleting their records.
-func (q *Queries) DeleteAccessTokensOfFamily(ctx context.Context, familyID pgtype.Int8) error {
+func (q *Queries) DeleteAccessTokensOfFamily(ctx context.Context, familyID int64) error {
 	_, err := q.db.Exec(ctx, deleteAccessTokensOfFamily, familyID)
 	return err
 }
@@ -325,6 +325,22 @@ func (q *Queries) LockRefreshTokenFamily(ctx context.Context, tokenHash []byte) 
 	return i, err
 }
 
+const markRefreshTokenUsed = `-- name: MarkRefreshTokenUsed :execrows
+UPDATE refresh_tokens
+SET used = true
+WHERE token_hash = $1
+    AND NOT used
+`
+
+// Marks the refresh token used, and affects no row if it was already used.
+func (q *Queries) MarkRefreshTokenUsed(ctx context.Context, tokenHash []byte) (int64, error) {
+	result, err := q.db.Exec(ctx, markRefreshTokenUsed, tokenHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :one
 UPDATE authorization_codes
 SET redeemed = true
@@ -406,20 +422,4 @@ WHERE code_hash = $1
 func (q *Queries) RevokeRefreshTokenFamilyOfCode(ctx context.Context, codeHash []byte) error {
 	_, err := q.db.Exec(ctx, revokeRefreshTokenFamilyOfCode, codeHash)
 	return err
-}
-
-const useRefreshToken = `-- name: UseRefreshToken :execrows
-UPDATE refresh_tokens
-SET used = true
-WHERE token_hash = $1
-    AND NOT used
-`
-
-// Marks the refresh token used, and affects no row if it was already used.
-func (q *Queries) UseRefreshToken(ctx context.Context, tokenHash []byte) (int64, error) {
-	result, err := q.db.Exec(ctx, useRefreshToken, tokenHash)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

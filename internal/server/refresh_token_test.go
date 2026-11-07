@@ -464,17 +464,29 @@ func TestRefreshTokenFamilyExpiry(t *testing.T) {
 	}
 }
 
-// wantRevoked fails the test unless refreshToken is refused with
+// wantRevoked fails the test unless newest, the newest refresh token of a
+// Refresh Token Family of c, which has not been redeemed, is refused with
 // invalid_grant when c presents it, and UserInfo refuses each of
-// accessTokens with 401 and invalid_token.
-func (c pkceClient) wantRevoked(t *testing.T, handler http.Handler, refreshToken string, accessTokens []string) {
+// accessTokens, the family's, with 401 and invalid_token.
+func (c pkceClient) wantRevoked(t *testing.T, handler http.Handler, newest string, accessTokens []string) {
 	t.Helper()
-	if got := tokenErrorCode(t, c.refresh(t, handler, refreshToken, ""), http.StatusBadRequest); got != "invalid_grant" {
+	if got := tokenErrorCode(t, c.refresh(t, handler, newest, ""), http.StatusBadRequest); got != "invalid_grant" {
 		t.Errorf("POST %s with the family's newest refresh token error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
 	for i, accessToken := range accessTokens {
 		if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
 			t.Errorf("UserInfo with the family's access token %d error = %q, want %q", i, got, "invalid_token")
+		}
+	}
+}
+
+// wantAccepted fails the test unless UserInfo accepts each of
+// accessTokens, which when describes, and returns want.
+func wantAccepted(t *testing.T, handler http.Handler, when string, want map[string]any, accessTokens []string) {
+	t.Helper()
+	for i, accessToken := range accessTokens {
+		if diff := cmp.Diff(want, userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
+			t.Errorf("UserInfo with access token %d %s claims mismatch (-want +got):\n%s", i, when, diff)
 		}
 	}
 }
@@ -511,11 +523,7 @@ func TestRefreshTokenReuseRevokesFamily(t *testing.T) {
 				refreshTokens = append(refreshTokens, r.RefreshToken)
 				accessTokens = append(accessTokens, r.AccessToken)
 			}
-			for i, accessToken := range accessTokens {
-				if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
-					t.Errorf("UserInfo with the family's access token %d before the reuse claims mismatch (-want +got):\n%s", i, diff)
-				}
-			}
+			wantAccepted(t, handler, "before the reuse", claimsOf(), accessTokens)
 
 			if got := tokenErrorCode(t, tt.client.refresh(t, handler, refreshTokens[tt.reused], ""), http.StatusBadRequest); got != "invalid_grant" {
 				t.Errorf("POST %s with a refresh token already redeemed error = %q, want %q", tokenPath, got, "invalid_grant")
@@ -565,11 +573,7 @@ func TestRefreshTokenReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 			if got := tokenErrorCode(t, tokenRequest(t, handler, tt.basic.id, tt.basic.secret, form), tt.wantStatus); got != tt.wantError {
 				t.Errorf("POST %s with a refresh token already redeemed error = %q, want %q", tokenPath, got, tt.wantError)
 			}
-			for i, accessToken := range []string{first.AccessToken, refreshed.AccessToken} {
-				if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
-					t.Errorf("UserInfo with the family's access token %d claims mismatch (-want +got):\n%s", i, diff)
-				}
-			}
+			wantAccepted(t, handler, "after the reuse", claimsOf(), []string{first.AccessToken, refreshed.AccessToken})
 			tokenResponseOf(t, rpNoPKCE.refresh(t, handler, refreshed.RefreshToken, ""))
 		})
 	}
@@ -648,5 +652,76 @@ func TestRefreshTokenWaitsForRevocationInProgress(t *testing.T) {
 	resp := serveWhileLocked(t, pool, handler, newTokenRequest(t, "rp", rpSecret, refreshForm(refreshToken, "")), tx)
 	if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
 		t.Errorf("POST %s during the family's revocation error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+}
+
+// REQ-BCP-11, REQ-OAUTH-29: a revocation of a Refresh Token Family, by a
+// refresh token of it presented again or by a valid second redemption of
+// its code, sent while a refresh in the family is in progress, waits for
+// the refresh to commit and then revokes the access token it recorded
+// too.
+//
+// The refresh in progress is the test's own transaction. As a refresh
+// does, it locks the family's row, marks the family's newest refresh token
+// used, and records an access token in the family: it moves there the
+// record of one UserInfo has accepted, issued from another code. It
+// commits once the request waits on a lock.
+func TestRevocationWaitsForRefreshInProgress(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// form is the form of the request that revokes the family, given
+		// the family's code and its first refresh token, already redeemed.
+		form func(code, refreshToken string) url.Values
+	}{
+		{name: "by a refresh token presented again", form: func(_, refreshToken string) url.Values { return refreshForm(refreshToken, "") }},
+		{name: "by a second redemption of the code", form: func(code, _ string) url.Values { return codeForm(code) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+			handler := newFlowHandler(t, pool)
+			c := rpNoPKCE.offlineCode(t, handler, nil)
+			first := tokenResponseOf(t, rpNoPKCE.redeem(t, handler, codeForm(c)))
+			newest := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, "")).RefreshToken
+			accessToken, _ := issuedTokens(t, handler, withScope("openid"))
+			wantAccepted(t, handler, "before the refresh in progress", claimsOf(), []string{accessToken})
+			codeHash := sha256.Sum256([]byte(c))
+			newestHash := sha256.Sum256([]byte(newest))
+
+			ctx := t.Context()
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("Begin() error = %v", err)
+			}
+			t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+			for _, s := range []struct {
+				what string
+				sql  string
+				args []any
+			}{
+				{"locking the family's row", "SELECT FROM refresh_token_families WHERE code_hash = $1 FOR NO KEY UPDATE", []any{codeHash[:]}},
+				{"marking the newest refresh token used", "UPDATE refresh_tokens SET used = true WHERE token_hash = $1", []any{newestHash[:]}},
+				{
+					"moving the access token's record to the family",
+					"UPDATE access_tokens a SET family_id = f.id, code_hash = f.code_hash FROM refresh_token_families f WHERE f.code_hash = $1 AND a.jti = $2",
+					[]any{codeHash[:], verify(t, handler, accessToken).claims["jti"]},
+				},
+			} {
+				if _, err := tx.Exec(ctx, s.sql, s.args...); err != nil {
+					t.Fatalf("%s: %v", s.what, err)
+				}
+			}
+
+			resp := serveWhileLocked(t, pool, handler, newTokenRequest(t, "rp", rpSecret, tt.form(c, first.RefreshToken)), tx)
+			if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
+				t.Errorf("POST %s during a refresh in the family error = %q, want %q", tokenPath, got, "invalid_grant")
+			}
+			if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
+				t.Errorf("UserInfo with the access token of the refresh in progress error = %q, want %q", got, "invalid_token")
+			}
+		})
 	}
 }

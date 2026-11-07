@@ -76,7 +76,8 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 // code_verifier, revokes the Refresh Token Family the code started: it
 // fails with invalid_grant, the family's newest refresh token then fails
 // with invalid_grant too, and UserInfo refuses with 401 the access tokens
-// issued in the family, from the code and from a refresh. It does so at
+// issued in the family not yet expired: the one from a refresh, and the
+// one from the code unless it has expired in the wait. It does so at
 // once, after the code has expired, and a day later, after another code
 // has been issued, which deletes the expired codes no longer kept: a code
 // is kept while its family lives.
@@ -111,23 +112,12 @@ func TestTokenCodeReuseRevokesFamily(t *testing.T) {
 				if tt.wait < 10*time.Minute {
 					accessTokens = append(accessTokens, first.AccessToken)
 				}
-				for i, accessToken := range accessTokens {
-					if diff := cmp.Diff(claimsOf(), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
-						t.Errorf("UserInfo with access token %d before the second redemption claims mismatch (-want +got):\n%s", i, diff)
-					}
-				}
+				wantAccepted(t, handler, "before the second redemption", claimsOf(), accessTokens)
 
 				if got := tokenErrorCode(t, tt.client.redeem(t, handler, form), http.StatusBadRequest); got != "invalid_grant" {
 					t.Errorf("second POST %s error = %q, want %q", tokenPath, got, "invalid_grant")
 				}
-				if got := tokenErrorCode(t, tt.client.refresh(t, handler, refreshed.RefreshToken, ""), http.StatusBadRequest); got != "invalid_grant" {
-					t.Errorf("POST %s with the family's newest refresh token error = %q, want %q", tokenPath, got, "invalid_grant")
-				}
-				for i, accessToken := range accessTokens {
-					if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
-						t.Errorf("UserInfo with access token %d after the second redemption error = %q, want %q", i, got, "invalid_token")
-					}
-				}
+				tt.client.wantRevoked(t, handler, refreshed.RefreshToken, accessTokens)
 			})
 		})
 	}
@@ -140,8 +130,8 @@ func TestTokenCodeReuseRevokesFamily(t *testing.T) {
 // does not match fails with invalid_grant; one whose Client fails to
 // authenticate, or authenticates by a method other than the one it
 // registered, fails with invalid_client. Either way, UserInfo still
-// accepts the access token issued from the code, which was issued with
-// offline access, and the refresh token issued from it is still redeemed.
+// accepts the access token issued from the code, and, for a code issued
+// with offline access, the refresh token issued from it is still redeemed.
 func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 	t.Parallel()
 
@@ -234,20 +224,31 @@ func TestTokenCodeReuseWithInvalidParametersRevokesNothing(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			c := tt.client.offlineCode(t, handler, url.Values{"scope": {"openid profile offline_access"}})
-			first := tokenResponseOf(t, tt.client.redeem(t, handler, tt.client.form(c, tt.verifier)))
+		for _, offline := range []bool{false, true} {
+			name := tt.name
+			if offline {
+				name += ", with offline access"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				var c string
+				if offline {
+					c = tt.client.offlineCode(t, handler, url.Values{"scope": {"openid profile offline_access"}})
+				} else {
+					c = tt.client.code(t, handler)
+				}
+				first := tokenResponseOf(t, tt.client.redeem(t, handler, tt.client.form(c, tt.verifier)))
 
-			replay := tokenRequest(t, handler, tt.basic.id, tt.basic.secret, tt.form(c))
-			if got := tokenErrorCode(t, replay, tt.wantStatus); got != tt.wantError {
-				t.Errorf("second POST %s error = %q, want %q", tokenPath, got, tt.wantError)
-			}
-			if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, first.AccessToken))); diff != "" {
-				t.Errorf("UserInfo after the second redemption claims mismatch (-want +got):\n%s", diff)
-			}
-			tokenResponseOf(t, tt.client.refresh(t, handler, first.RefreshToken, ""))
-		})
+				replay := tokenRequest(t, handler, tt.basic.id, tt.basic.secret, tt.form(c))
+				if got := tokenErrorCode(t, replay, tt.wantStatus); got != tt.wantError {
+					t.Errorf("second POST %s error = %q, want %q", tokenPath, got, tt.wantError)
+				}
+				wantAccepted(t, handler, "after the second redemption", claimsOf(aliceProfile), []string{first.AccessToken})
+				if offline {
+					tokenResponseOf(t, tt.client.refresh(t, handler, first.RefreshToken, ""))
+				}
+			})
+		}
 	}
 }
 
