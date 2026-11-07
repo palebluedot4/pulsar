@@ -51,7 +51,7 @@ func insertRecords(t *testing.T, pool *pgxpool.Pool, label string, at time.Time)
 		INSERT INTO refresh_tokens (token_hash, family_id) SELECT convert_to($1, 'UTF8'), id FROM f`,
 		`INSERT INTO client_assertions (client_id, jti_hash, expiry) VALUES ('rp', convert_to($1, 'UTF8'), $2)`,
 		`INSERT INTO login_sessions (token, data, expiry) VALUES ($1, '', $2)`,
-		`INSERT INTO login_attempts (account, attempts, next_attempt, delete_after) VALUES (convert_to($1, 'UTF8'), 1, $2, $2)`,
+		`INSERT INTO login_attempts (target, attempts, next_attempt, delete_after) VALUES (convert_to($1, 'UTF8'), 1, $2, $2)`,
 	}
 	for _, s := range statements {
 		if _, err := pool.Exec(t.Context(), s, label, at); err != nil {
@@ -71,7 +71,7 @@ func records(t *testing.T, pool *pgxpool.Pool) []string {
 		UNION ALL SELECT 'refresh_tokens ' || convert_from(token_hash, 'UTF8') FROM refresh_tokens
 		UNION ALL SELECT 'client_assertions ' || convert_from(jti_hash, 'UTF8') FROM client_assertions
 		UNION ALL SELECT 'login_sessions ' || token FROM login_sessions
-		UNION ALL SELECT 'login_attempts ' || convert_from(account, 'UTF8') FROM login_attempts
+		UNION ALL SELECT 'login_attempts ' || convert_from(target, 'UTF8') FROM login_attempts
 		ORDER BY 1`)
 	if err != nil {
 		t.Fatalf("listing the records: %v", err)

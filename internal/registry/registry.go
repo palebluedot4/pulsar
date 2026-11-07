@@ -32,12 +32,12 @@
 //
 // Each Argon2id verification takes the memory its hash's m parameter asks
 // for, and a registry runs at most as many at once as fill GOMAXPROCS, as
-// it is when the registry is parsed, times the memory of its largest hash: as many of the largest as there
-// are CPUs to run them, as libsodium advises and Keycloak does, and more of
-// smaller ones. A verification that finds no room waits for it, for up to
+// it is when the registry is parsed, times the memory of its largest hash:
+// as many of the largest as there are CPUs to run them, as libsodium
+// advises and Keycloak does, and more of smaller ones. A verification that finds no room waits for it, for up to
 // two seconds, and is then refused with [ErrBusy], so that logins and
 // token requests cannot together take more memory than that
-// (docs/adr/0005-guessing-throttled-per-account-by-delay.md).
+// (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
 package registry
 
 import (
@@ -494,7 +494,7 @@ func (r *Registry) AuthenticateClientSecret(ctx context.Context, method AuthMeth
 	if !ok || c.AuthMethod != method || c.secretHash == nil {
 		return nil, false, nil
 	}
-	if ok, err := r.verify(ctx, *c.secretHash, secret); !ok {
+	if match, err := r.verify(ctx, *c.secretHash, secret); !match {
 		return nil, false, err
 	}
 	return c, true, nil
@@ -527,7 +527,7 @@ func (r *Registry) AuthenticateEndUser(ctx context.Context, username, password s
 		}
 		return nil, false, nil
 	}
-	if ok, err := r.verify(ctx, u.passwordHash, password); !ok {
+	if match, err := r.verify(ctx, u.passwordHash, password); !match {
 		return nil, false, err
 	}
 	return u, true, nil

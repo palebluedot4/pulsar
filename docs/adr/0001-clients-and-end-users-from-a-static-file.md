@@ -23,5 +23,5 @@ conformance configuration can also refer to.
   login; Ory Hydra likewise offers bcrypt for client secrets. The README
   requires client secrets of at least 256 random bits, which guards them
   against guessing in place of the count that guards logins
-  ([ADR 0005](0005-guessing-throttled-per-account-by-delay.md)).
+  ([ADR 0005](0005-logins-throttled-per-end-user-by-delay.md)).
 - Changing a Client or End-User means editing the file and restarting.

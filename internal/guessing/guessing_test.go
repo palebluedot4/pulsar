@@ -15,8 +15,7 @@ import (
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
-// subject is the Subject of the End-User whose account the tests count
-// attempts at.
+// subject is the Subject of the End-User the tests count attempts at.
 const subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 
 // newLimiter returns a Limiter on the database at databaseURL, and the
@@ -33,22 +32,22 @@ func newLimiter(t *testing.T, databaseURL string) (*pgxpool.Pool, *guessing.Limi
 	return pool, guessing.New(pool, []byte("secret"))
 }
 
-// attempt makes an attempt at account and returns how long until the next
+// attempt makes an attempt at target and returns how long until the next
 // may be made, or 0 if this one was made.
-func attempt(t *testing.T, l *guessing.Limiter, account guessing.Account) time.Duration {
+func attempt(t *testing.T, l *guessing.Limiter, target guessing.Target) time.Duration {
 	t.Helper()
-	wait, err := l.Attempt(t.Context(), account)
+	wait, err := l.Attempt(t.Context(), target)
 	if err != nil {
 		t.Fatalf("Attempt() error = %v", err)
 	}
 	return wait
 }
 
-// attemptFree makes n attempts at account, each of which must be made.
-func attemptFree(t *testing.T, l *guessing.Limiter, account guessing.Account, n int) {
+// attemptFree makes n attempts at target, each of which must be made.
+func attemptFree(t *testing.T, l *guessing.Limiter, target guessing.Target, n int) {
 	t.Helper()
 	for i := range n {
-		if got := attempt(t, l, account); got != 0 {
+		if got := attempt(t, l, target); got != 0 {
 			t.Fatalf("Attempt() number %d = %v, want 0", i+1, got)
 		}
 	}
@@ -134,9 +133,9 @@ func TestAttemptForgotten(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-45: each account has a count of its own: an End-User's, a
+// REQ-OAUTH-45: each Target has a count of its own: an End-User's, a
 // username's, and each under the secret of its Limiter.
-func TestAttemptAccounts(t *testing.T) {
+func TestAttemptTargets(t *testing.T) {
 	t.Parallel()
 
 	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
@@ -147,13 +146,13 @@ func TestAttemptAccounts(t *testing.T) {
 			t.Fatalf("Attempt() at the End-User after five = %v, want %v", got, time.Second)
 		}
 		other := guessing.New(pool, []byte("another secret"))
-		for name, account := range map[string]guessing.Account{
+		for name, target := range map[string]guessing.Target{
 			"the username alike":                l.Username(subject),
 			"another End-User":                  l.EndUser("0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b"),
 			"the End-User under another secret": other.EndUser(subject),
 			"the username under another secret": other.Username(subject),
 		} {
-			if got := attempt(t, l, account); got != 0 {
+			if got := attempt(t, l, target); got != 0 {
 				t.Errorf("Attempt() at %s = %v, want 0", name, got)
 			}
 		}
@@ -206,19 +205,19 @@ func TestAttemptStoresNoUsername(t *testing.T) {
 		pool, l := newLimiter(t, databaseURL)
 		const typed = "correct horse battery staple"
 		attemptFree(t, l, l.Username(typed), 1)
-		rows, err := pool.Query(t.Context(), "SELECT account FROM login_attempts")
+		rows, err := pool.Query(t.Context(), "SELECT target FROM login_attempts")
 		if err != nil {
 			t.Fatal(err)
 		}
-		accounts, err := pgx.CollectRows(rows, pgx.RowTo[[]byte])
+		targets, err := pgx.CollectRows(rows, pgx.RowTo[[]byte])
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(accounts) != 1 {
-			t.Fatalf("login_attempts has %d rows, want 1", len(accounts))
+		if len(targets) != 1 {
+			t.Fatalf("login_attempts has %d rows, want 1", len(targets))
 		}
-		if got := accounts[0]; len(got) != 32 || bytes.Contains(got, []byte(typed)) {
-			t.Errorf("login_attempts.account = %q, want a 32-byte HMAC", got)
+		if got := targets[0]; len(got) != 32 || bytes.Contains(got, []byte(typed)) {
+			t.Errorf("login_attempts.target = %q, want a 32-byte HMAC", got)
 		}
 	})
 }

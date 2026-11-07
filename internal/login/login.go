@@ -17,11 +17,13 @@
 // whose username is given, or against the username if no End-User has it,
 // and one that comes too soon after too many without a success gets 429
 // before its password is checked (RFC 6749 §10.10). One that finds no room
-// to check its password gets 503.
+// to check its password gets 503, and still counts, so that keeping the
+// replica busy earns no attempts back.
 package login
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -212,10 +214,9 @@ func (s *Sessions) endUser(r *http.Request) (*registry.EndUser, bool) {
 // (see [Interaction]). Such a page shows the form even to a browser
 // already signed in, and fills its username with the request's
 // login_hint. Any other login sends the browser back to the page. Logins
-// are counted by attempts. It logs to logger any error that ends a
-// request.
-func (s *Sessions) Handler(path, continuePath string, attempts *guessing.Limiter, logger *slog.Logger) http.Handler {
-	h := &handler{path: path, continuePath: continuePath, sessions: s, attempts: attempts, logger: logger}
+// are counted by limiter. It logs to logger any error that ends a request.
+func (s *Sessions) Handler(path, continuePath string, limiter *guessing.Limiter, logger *slog.Logger) http.Handler {
+	h := &handler{path: path, continuePath: continuePath, sessions: s, limiter: limiter, logger: logger}
 	return http.NewCrossOriginProtection().Handler(h)
 }
 
@@ -223,7 +224,7 @@ type handler struct {
 	path         string // the page's request path
 	continuePath string // where a login from a page with a query goes on to
 	sessions     *Sessions
-	attempts     *guessing.Limiter
+	limiter      *guessing.Limiter
 	logger       *slog.Logger
 }
 
@@ -269,8 +270,8 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	username := r.PostForm.Get("username")
-	account := h.account(username)
-	wait, err := h.attempts.Attempt(ctx, account)
+	target := h.target(username)
+	wait, err := h.limiter.Attempt(ctx, target)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -281,18 +282,21 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, ok, err := h.sessions.registry.AuthenticateEndUser(ctx, username, r.PostForm.Get("password"))
-	if err != nil {
-		// The only error is registry.ErrBusy: too many logins and token
-		// requests at once on this replica (RFC 9110 §15.6.4).
+	switch {
+	case errors.Is(err, registry.ErrBusy):
+		// Too many logins and token requests at once on this replica
+		// (RFC 9110 §15.6.4).
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
-	}
-	if !ok {
+	case err != nil:
+		h.fail(w, r, err)
+		return
+	case !ok:
 		h.render(w, r, http.StatusOK, page{Username: username, Error: failedLogin})
 		return
 	}
-	if err := h.attempts.Succeeded(ctx, account); err != nil {
+	if err := h.limiter.Succeeded(ctx, target); err != nil {
 		h.fail(w, r, err)
 		return
 	}
@@ -335,14 +339,15 @@ func (h *handler) continueAfterLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next is a fixed path on this origin; the query cannot change it.
 }
 
-// account returns the account a login as username is counted against: the
-// End-User's, if one has the username, and the username's otherwise.
-// Both take as long, so neither tells which usernames exist.
-func (h *handler) account(username string) guessing.Account {
+// target returns what a login as username is counted against: the
+// End-User who has the username, if one does, and the username otherwise.
+// Each is one map lookup and one HMAC, so neither tells which usernames
+// exist by its time.
+func (h *handler) target(username string) guessing.Target {
 	if u, ok := h.sessions.registry.EndUserNamed(username); ok {
-		return h.attempts.EndUser(u.Subject)
+		return h.limiter.EndUser(u.Subject)
 	}
-	return h.attempts.Username(username)
+	return h.limiter.Username(username)
 }
 
 // tooManyAttempts is what a login refused for coming too soon says: how
