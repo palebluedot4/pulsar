@@ -66,11 +66,6 @@ func (p *Provider) authenticateAssertion(ctx context.Context, params url.Values)
 		// authenticated before and not yet expired.
 		return nil, unauthorized()
 	}
-	// Recording an assertion is when expired ones are deleted. A failure
-	// leaves them for the next and does not fail this one.
-	if err := p.queries.DeleteExpiredClientAssertions(ctx, now); err != nil {
-		p.logger.ErrorContext(ctx, "delete expired client assertions", "error", err)
-	}
 	return client, nil
 }
 

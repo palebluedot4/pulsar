@@ -764,14 +764,14 @@ func TestRefreshTokenRegistryRemovals(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-29, REQ-BCP-9: a redeemed code is kept, and deleted once
-// tokens are next issued after its tokens can no longer be revoked: once
-// the access token issued from it has expired, or, if it started a Refresh
-// Token Family, once the family has ended, whatever the code's own expiry;
-// or once the family has been revoked, by a refresh token presented again
-// or by the code redeemed again. A family is kept until it ends, revoked or
-// not, and then deleted, with its refresh tokens, the first of which the
-// test looks for.
+// REQ-OAUTH-29, REQ-BCP-9: a redeemed code is kept, and deleted when the
+// records due are next deleted after its tokens can no longer be revoked:
+// once the access token issued from it has expired, or, if it started a
+// Refresh Token Family, once the family has ended, whatever the code's own
+// expiry; or once the family has been revoked, by a refresh token
+// presented again or by the code redeemed again. A family is kept until it
+// ends, revoked or not, and then deleted, with its refresh tokens, the
+// first of which the test looks for. Issuing tokens deletes neither.
 func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -811,28 +811,34 @@ func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 					tt.revoke(t, handler, c, first)
 				}
 				time.Sleep(tt.wait)
-				// Issuing a code deletes the codes due, and issuing tokens the
-				// families ended.
-				issuedTokens(t, handler, withScope("openid"))
 
 				codeHash := sha256.Sum256([]byte(c))
 				tokenHash := sha256.Sum256([]byte(first.RefreshToken))
-				var gotCode, gotFamily, gotRefreshToken bool
-				err := pool.QueryRow(t.Context(), `
-					SELECT EXISTS (SELECT FROM authorization_codes WHERE code_hash = $1),
-						EXISTS (SELECT FROM refresh_token_families WHERE code_hash = $1),
-						EXISTS (SELECT FROM refresh_tokens WHERE token_hash = $2)`,
-					codeHash[:], tokenHash[:],
-				).Scan(&gotCode, &gotFamily, &gotRefreshToken)
-				if err != nil {
-					t.Fatalf("looking for the code's, family's and refresh token's records: %v", err)
+				// wantKept reports whether the code's record is kept, and
+				// the family's with its refresh token's, when.
+				wantKept := func(when string, wantCode, wantFamily bool) {
+					t.Helper()
+					var gotCode, gotFamily, gotRefreshToken bool
+					err := pool.QueryRow(t.Context(), `
+						SELECT EXISTS (SELECT FROM authorization_codes WHERE code_hash = $1),
+							EXISTS (SELECT FROM refresh_token_families WHERE code_hash = $1),
+							EXISTS (SELECT FROM refresh_tokens WHERE token_hash = $2)`,
+						codeHash[:], tokenHash[:],
+					).Scan(&gotCode, &gotFamily, &gotRefreshToken)
+					if err != nil {
+						t.Fatalf("looking for the code's, family's and refresh token's records %s: %v", when, err)
+					}
+					if gotCode != wantCode {
+						t.Errorf("code's record kept %s = %t, want %t", when, gotCode, wantCode)
+					}
+					if gotFamily != wantFamily || gotRefreshToken != wantFamily {
+						t.Errorf("family's record kept %s = %t, its refresh token's %t; want %t", when, gotFamily, gotRefreshToken, wantFamily)
+					}
 				}
-				if gotCode != tt.wantCode {
-					t.Errorf("code's record kept = %t, want %t", gotCode, tt.wantCode)
-				}
-				if gotFamily != tt.wantFamily || gotRefreshToken != tt.wantFamily {
-					t.Errorf("family's record kept = %t, its refresh token's %t; want %t", gotFamily, gotRefreshToken, tt.wantFamily)
-				}
+				issuedTokens(t, handler, withScope("openid"))
+				wantKept("after tokens were issued", true, tt.offline)
+				deleteDue(t, pool)
+				wantKept("after the records due were deleted", tt.wantCode, tt.wantFamily)
 			})
 		})
 	}

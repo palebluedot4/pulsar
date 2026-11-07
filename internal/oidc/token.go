@@ -395,7 +395,6 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	if refused {
 		return nil, errCodeNotRedeemable
 	}
-	p.deleteExpired(ctx, now)
 	return p.signTokens(client, issuance{
 		subject:       row.Subject,
 		scopes:        row.Scopes,
@@ -555,7 +554,6 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		p.stopKeepingCode(ctx, row.CodeHash, now)
 		return nil, errRefreshTokenNotRedeemable
 	}
-	p.deleteExpired(ctx, now)
 	// The ID token has no nonce, which §12.2 allows only with the value
 	// of the original, and recommends against.
 	return p.signTokens(client, issuance{
@@ -624,19 +622,6 @@ func isSubset(sub, set []string) bool {
 func (p *Provider) stopKeepingCode(ctx context.Context, codeHash []byte, now time.Time) {
 	if err := p.queries.StopKeepingAuthorizationCode(ctx, queries.StopKeepingAuthorizationCodeParams{CodeHash: codeHash, Now: now}); err != nil {
 		p.logger.ErrorContext(ctx, "stop keeping authorization code", "error", err)
-	}
-}
-
-// deleteExpired deletes the records of access tokens expired at now, and
-// the Refresh Token Families ended at now with their refresh tokens.
-// Issuing a token is when they are deleted. A failure leaves them for the
-// next and does not fail this one.
-func (p *Provider) deleteExpired(ctx context.Context, now time.Time) {
-	if err := p.queries.DeleteExpiredAccessTokens(ctx, now); err != nil {
-		p.logger.ErrorContext(ctx, "delete expired access tokens", "error", err)
-	}
-	if err := p.queries.DeleteEndedRefreshTokenFamilies(ctx, now); err != nil {
-		p.logger.ErrorContext(ctx, "delete ended refresh token families", "error", err)
 	}
 }
 

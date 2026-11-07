@@ -24,8 +24,8 @@ import (
 // challenge, the matching code_verifier, fails with invalid_grant, and
 // UserInfo then refuses the access token issued from the code with 401 and
 // invalid_token: at once, 30 seconds later, and after the code has
-// expired, while the token has not, even once another code has been
-// issued, which deletes expired codes.
+// expired, while the token has not, even once the records due have been
+// deleted.
 func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 	t.Parallel()
 
@@ -34,14 +34,13 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 		wait     time.Duration // between the two redemptions
 		client   pkceClient
 		verifier string // the code_verifier of both redemptions, if any
-		// issueAnother is whether another code is issued after the wait,
-		// which deletes the codes whose records are no longer kept.
-		issueAnother bool
+		// deleteDue is whether the records due are deleted after the wait.
+		deleteDue bool
 	}{
 		{name: "at once", client: rpNoPKCE},
 		{name: "30 seconds later", wait: 30 * time.Second, client: rpNoPKCE},
 		{name: "after the code expired", wait: 5 * time.Minute, client: rpNoPKCE},
-		{name: "after the code expired and another was issued", wait: 5 * time.Minute, client: rpNoPKCE, issueAnother: true},
+		{name: "after the code expired and the records due were deleted", wait: 5 * time.Minute, client: rpNoPKCE, deleteDue: true},
 		{name: "with PKCE", client: rpPKCE, verifier: pkceVerifier},
 		{name: "by a public Client", client: publicPKCE, verifier: pkceVerifier},
 	}
@@ -50,12 +49,13 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 			t.Parallel()
 			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 			synctest.Test(t, func(t *testing.T) {
-				handler := newBubbleFlowHandler(t, databaseURL)
+				pool := newBubblePool(t, databaseURL)
+				handler := newFlowHandler(t, pool)
 				form := tt.client.form(tt.client.code(t, handler), tt.verifier)
 				accessToken, _ := tokensOf(t, tt.client.redeem(t, handler, form))
 				time.Sleep(tt.wait)
-				if tt.issueAnother {
-					tt.client.code(t, handler)
+				if tt.deleteDue {
+					deleteDue(t, pool)
 				}
 				if diff := cmp.Diff(claimsOf(aliceProfile), userInfoClaims(t, userInfo(t, handler, getHeader, accessToken))); diff != "" {
 					t.Errorf("UserInfo before the second redemption claims mismatch (-want +got):\n%s", diff)
@@ -79,9 +79,8 @@ func TestTokenCodeReuseRevokesTokens(t *testing.T) {
 // with invalid_grant too, and UserInfo refuses with 401 the access tokens
 // issued in the family not yet expired: the one from a refresh, and the
 // one from the code unless it has expired in the wait. It does so at
-// once, after the code has expired, and a day later, after another code
-// has been issued, which deletes the expired codes no longer kept: a code
-// is kept while its family lives.
+// once, after the code has expired, and a day later, each time after the
+// records due have been deleted: a code is kept while its family lives.
 func TestTokenCodeReuseRevokesFamily(t *testing.T) {
 	t.Parallel()
 
@@ -101,12 +100,13 @@ func TestTokenCodeReuseRevokesFamily(t *testing.T) {
 			t.Parallel()
 			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
 			synctest.Test(t, func(t *testing.T) {
-				handler := newBubbleFlowHandler(t, databaseURL)
+				pool := newBubblePool(t, databaseURL)
+				handler := newFlowHandler(t, pool)
 				form := tt.client.form(tt.client.offlineCode(t, handler, nil), tt.verifier)
 				first := tokenResponseOf(t, tt.client.redeem(t, handler, form))
 				time.Sleep(tt.wait)
 				refreshed := tokenResponseOf(t, tt.client.refresh(t, handler, first.RefreshToken, ""))
-				tt.client.code(t, handler)
+				deleteDue(t, pool)
 				// The access tokens of the family not yet expired: the
 				// refresh's, and the code's unless the wait outlasted it.
 				accessTokens := []string{refreshed.AccessToken}
