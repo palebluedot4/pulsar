@@ -530,13 +530,13 @@ func (req authorizationRequest) prompts(value string) bool {
 // End-User of auth.
 func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth login.Authentication) (string, error) {
 	now := time.Now()
-	// Issuing a code is when expired ones are deleted. A failure leaves
-	// them for the next and does not fail this one. A redeemed code is
-	// kept while the tokens issued from it may still be revoked, so that a
-	// second redemption still revokes them (RFC 6749 §4.1.2); its row
-	// records until when.
-	if err := p.queries.DeleteExpiredAuthorizationCodes(ctx, now); err != nil {
-		p.logger.ErrorContext(ctx, "delete expired authorization codes", "error", err)
+	// Issuing a code is when the codes due are deleted. A failure leaves
+	// them for the next and does not fail this one. Each row records when
+	// it is due: at the code's expiry, unless the code is redeemed and the
+	// tokens issued from it may still be revoked, so that a second
+	// redemption still revokes them (RFC 6749 §4.1.2).
+	if err := p.queries.DeleteDueAuthorizationCodes(ctx, now); err != nil {
+		p.logger.ErrorContext(ctx, "delete due authorization codes", "error", err)
 	}
 	claims, err := req.claims.encode()
 	if err != nil {

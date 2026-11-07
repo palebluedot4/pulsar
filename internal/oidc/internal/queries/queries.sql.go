@@ -22,6 +22,16 @@ func (q *Queries) DeleteAccessTokensOfCode(ctx context.Context, codeHash []byte)
 	return err
 }
 
+const deleteDueAuthorizationCodes = `-- name: DeleteDueAuthorizationCodes :exec
+DELETE FROM authorization_codes
+WHERE delete_after <= $1
+`
+
+func (q *Queries) DeleteDueAuthorizationCodes(ctx context.Context, now time.Time) error {
+	_, err := q.db.Exec(ctx, deleteDueAuthorizationCodes, now)
+	return err
+}
+
 const deleteEndedRefreshTokenFamilies = `-- name: DeleteEndedRefreshTokenFamilies :exec
 DELETE FROM refresh_token_families
 WHERE expiry <= $1
@@ -29,7 +39,7 @@ WHERE expiry <= $1
 
 // Deletes the Refresh Token Families that have ended, revoked or not, and
 // their refresh tokens with them. Their codes are deleted by
-// DeleteExpiredAuthorizationCodes, being kept no longer than the family.
+// DeleteDueAuthorizationCodes, being kept no longer than the family.
 func (q *Queries) DeleteEndedRefreshTokenFamilies(ctx context.Context, now time.Time) error {
 	_, err := q.db.Exec(ctx, deleteEndedRefreshTokenFamilies, now)
 	return err
@@ -42,16 +52,6 @@ WHERE expiry <= $1
 
 func (q *Queries) DeleteExpiredAccessTokens(ctx context.Context, now time.Time) error {
 	_, err := q.db.Exec(ctx, deleteExpiredAccessTokens, now)
-	return err
-}
-
-const deleteExpiredAuthorizationCodes = `-- name: DeleteExpiredAuthorizationCodes :exec
-DELETE FROM authorization_codes
-WHERE delete_after <= $1
-`
-
-func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, now time.Time) error {
-	_, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, now)
 	return err
 }
 

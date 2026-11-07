@@ -66,7 +66,7 @@ UPDATE authorization_codes
 SET delete_after = @delete_after
 WHERE code_hash = @code_hash;
 
--- name: DeleteExpiredAuthorizationCodes :exec
+-- name: DeleteDueAuthorizationCodes :exec
 DELETE FROM authorization_codes
 WHERE delete_after <= @now;
 
@@ -114,7 +114,7 @@ WHERE expiry <= @now;
 -- name: DeleteEndedRefreshTokenFamilies :exec
 -- Deletes the Refresh Token Families that have ended, revoked or not, and
 -- their refresh tokens with them. Their codes are deleted by
--- DeleteExpiredAuthorizationCodes, being kept no longer than the family.
+-- DeleteDueAuthorizationCodes, being kept no longer than the family.
 DELETE FROM refresh_token_families
 WHERE expiry <= @now;
 
