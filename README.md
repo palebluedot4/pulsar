@@ -28,9 +28,12 @@ refuses its access tokens. A second redemption
 of a code that is otherwise valid, by its own Client, with its redirect
 URI, and with a matching `code_verifier` exactly when the code has a
 challenge, revokes the access tokens issued from it and, for as long as
-the family lives, the Refresh Token Family it started. Removing a Client
-or an End-User from the registry ends the offline access granted to or
-for them, and the records of ended families are deleted. `pulsar keys
+the family lives, the Refresh Token Family it started. While an End-User
+is out of the registry, no code or refresh token issued for them is
+redeemed, and UserInfo refuses their access tokens; a Client out of the
+registry cannot authenticate, so it redeems neither. Removal revokes
+nothing, so one added back has the tokens not yet expired again. The
+records of ended Refresh Token Families are deleted. `pulsar keys
 rotate` rotates the signing key. The OpenID conformance
 suite's Config OP and Basic OP plans run against it in CI; on 2026-11-06,
 at commit `8d6ab47`, they finished with no failures, as [Checking

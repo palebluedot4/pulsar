@@ -159,7 +159,7 @@ func (p *Provider) exchangeCode(r *http.Request, params url.Values) (*tokenRespo
 	resp, err := p.issueTokens(r.Context(), client, code, redirectURI, challenge)
 	switch {
 	case errors.Is(err, errCodeNotRedeemable):
-		return nil, badRequest(errInvalidGrant, "The code is invalid, expired or already used, was issued to another client or redirect_uri, or does not match the code_verifier.")
+		return nil, badRequest(errInvalidGrant, "The code is invalid, expired or already used, was issued to another client or redirect_uri, does not match the code_verifier, or is for an End-User who no longer exists.")
 	case err != nil:
 		return nil, p.serverError(r.Context(), err)
 	}
@@ -259,7 +259,8 @@ func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*regis
 
 // errCodeNotRedeemable is returned by issueTokens for a code that is
 // unknown, expired, already redeemed, or issued to another Client or
-// redirect URI or with another code challenge.
+// redirect URI or with another code challenge, or for an End-User no
+// longer in the registry.
 var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed")
 
 // issueTokens redeems code, for client and redirectURI, and returns the
@@ -304,8 +305,8 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	var row queries.RedeemAuthorizationCodeRow
 	var claims claimsRequest
 	// Whether the code is refused, after the transaction commits what the
-	// refusal changed, and whether its tokens were revoked.
-	var refused, revoked bool
+	// refusal changed.
+	var refused bool
 	// Read committed whatever the database's default, so that a second
 	// redemption waits for the first and then finds the code redeemed,
 	// rather than failing to serialize.
@@ -313,10 +314,11 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		q := p.queries.WithTx(tx)
 		var err error
 		row, err = q.RedeemAuthorizationCode(ctx, queries.RedeemAuthorizationCodeParams{
-			CodeHash:    hash,
-			ClientID:    client.ID,
-			RedirectUri: redirectURI,
-			Now:         now,
+			CodeHash:          hash,
+			ClientID:          client.ID,
+			RedirectUri:       redirectURI,
+			Now:               now,
+			AccessTokenExpiry: exp,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			refused = true
@@ -341,8 +343,12 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if !stored.Redeemed || stored.ClientID != client.ID || stored.RedirectUri != redirectURI || stored.CodeChallenge != challenge {
 				return nil
 			}
-			revoked = true
-			return revokeCode(ctx, q, hash)
+			if err := revokeCode(ctx, q, hash); err != nil {
+				return err
+			}
+			// The transaction holds the code's row already, so it need not
+			// wait as a refresh would (stopKeepingCode).
+			return q.StopKeepingAuthorizationCode(ctx, queries.StopKeepingAuthorizationCodeParams{CodeHash: hash, Now: now})
 		}
 		if err != nil {
 			return err
@@ -353,16 +359,18 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			refused = true
 			return nil
 		}
+		// A code whose End-User has been removed from the registry is
+		// refused, as a refresh token is, and is not used up: refusing rolls
+		// back marking it redeemed, so it is redeemed if they are back
+		// within its lifetime.
+		if _, ok := p.registry.EndUser(row.Subject); !ok {
+			return errCodeNotRedeemable
+		}
 		var userInfoClaims []byte
 		if claims, userInfoClaims, err = decodeStoredClaims(row.Claims); err != nil {
 			return err
 		}
-		// The code is kept while its tokens may be revoked: until its access
-		// token expires, or until its family ends.
-		keepUntil := exp
 		if slices.Contains(row.Scopes, login.OfflineAccess) {
-			familyExpiry := now.Add(familyLifetime)
-			keepUntil = familyExpiry
 			id, err := q.InsertRefreshTokenFamily(ctx, queries.InsertRefreshTokenFamilyParams{
 				CodeHash: hash,
 				ClientID: client.ID,
@@ -370,7 +378,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 				Scopes:   row.Scopes,
 				Claims:   row.Claims,
 				AuthTime: row.AuthTime,
-				Expiry:   familyExpiry,
+				Expiry:   now.Add(familyLifetime),
 			})
 			if err != nil {
 				return err
@@ -379,16 +387,10 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 				return err
 			}
 		}
-		if err := q.KeepAuthorizationCodeUntil(ctx, queries.KeepAuthorizationCodeUntilParams{CodeHash: hash, DeleteAfter: keepUntil}); err != nil {
-			return err
-		}
 		return q.InsertAccessToken(ctx, queries.InsertAccessTokenParams{Jti: jti, CodeHash: hash, UserinfoClaims: userInfoClaims, Expiry: exp})
 	})
 	if err != nil {
 		return nil, err
-	}
-	if revoked {
-		p.stopKeepingCode(ctx, hash, now)
 	}
 	if refused {
 		return nil, errCodeNotRedeemable
@@ -430,7 +432,7 @@ func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*to
 	resp, err := p.refresh(r.Context(), client, refreshToken, scopes)
 	switch {
 	case errors.Is(err, errRefreshTokenNotRedeemable):
-		return nil, badRequest(errInvalidGrant, "The refresh token is invalid, expired, revoked or already used, or was issued to another client.")
+		return nil, badRequest(errInvalidGrant, "The refresh token is invalid, expired, revoked or already used, was issued to another client, or is for an End-User who no longer exists.")
 	case errors.Is(err, errScopeNotGranted):
 		return nil, badRequest(errInvalidScope, "The scope must not include any scope not originally granted.")
 	case err != nil:
@@ -441,7 +443,8 @@ func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*to
 
 // errRefreshTokenNotRedeemable is returned by refresh for a refresh token
 // that is unknown or already used, or whose Refresh Token Family belongs to
-// another Client, has ended or has been revoked.
+// another Client, has ended or has been revoked, or is for an End-User no
+// longer in the registry.
 var errRefreshTokenNotRedeemable = errors.New("the refresh token cannot be redeemed")
 
 // errScopeNotGranted is returned by refresh for a scope that includes a
@@ -611,15 +614,16 @@ func isSubset(sub, set []string) bool {
 }
 
 // stopKeepingCode lets the code whose hash is codeHash be deleted from now on,
-// its tokens having been revoked, so that it is no longer kept for its
-// Refresh Token Family. It runs after the revocation commits, so that a
-// refresh never waits for a code's row while it holds its family's, which
-// a replay of the code locks in the other order. A failure leaves the code
+// its Refresh Token Family having been revoked by a refresh token presented
+// again, so that it is no longer kept for the family. It runs after the
+// revocation commits, so that a refresh never waits for a code's row while
+// it holds its family's, which a replay of the code locks in the other
+// order. A failure leaves the code
 // until its family ends, when it would be deleted anyway, and does not
 // fail the request.
 func (p *Provider) stopKeepingCode(ctx context.Context, codeHash []byte, now time.Time) {
-	if err := p.queries.KeepAuthorizationCodeUntil(ctx, queries.KeepAuthorizationCodeUntilParams{CodeHash: codeHash, DeleteAfter: now}); err != nil {
-		p.logger.ErrorContext(ctx, "release authorization code", "error", err)
+	if err := p.queries.StopKeepingAuthorizationCode(ctx, queries.StopKeepingAuthorizationCodeParams{CodeHash: codeHash, Now: now}); err != nil {
+		p.logger.ErrorContext(ctx, "stop keeping authorization code", "error", err)
 	}
 }
 
@@ -693,8 +697,9 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 	if t.nonce != "" {
 		idClaims["nonce"] = t.nonce
 	}
-	// An End-User removed from the registry since the code was issued has
-	// no claims to release, and no error follows from that (§5.5.1).
+	// issueTokens and refresh refuse an End-User no longer in the registry,
+	// so one is found here; were one not, it would have no claims to
+	// release, and no error follows from that (§5.5.1).
 	if u, ok := p.registry.EndUser(t.subject); ok && len(t.idTokenClaims) > 0 {
 		all, err := endUserClaims(u)
 		if err != nil {
