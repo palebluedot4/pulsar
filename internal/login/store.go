@@ -48,12 +48,12 @@ func (s *store) DeleteCtx(ctx context.Context, token string) error {
 	return s.queries.DeleteLoginSession(ctx, token)
 }
 
-// DeleteEndedSessions deletes from the database behind db the Login
+// DeleteEndedSessions deletes from the database behind pool the Login
 // Sessions ended at now. Finding a Login Session checks its end itself, so
 // one kept past it is never used; deleting it only bounds how long it
 // stays.
-func DeleteEndedSessions(ctx context.Context, db *pgxpool.Pool, now time.Time) error {
-	return queries.New(db).DeleteEndedLoginSessions(ctx, now)
+func DeleteEndedSessions(ctx context.Context, pool *pgxpool.Pool, now time.Time) error {
+	return queries.New(pool).DeleteEndedLoginSessions(ctx, now)
 }
 
 // Find, Commit and Delete complete scs.Store, which scs.CtxStore embeds.

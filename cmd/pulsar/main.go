@@ -190,7 +190,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 		startErr <- err
 		if err == nil {
 			close(ready)
-			background.Go(func() { deleteDue(keysCtx, pool, logger) })
+			background.Go(func() { runDeletion(keysCtx, pool, logger) })
 			active, _ := keys.Active() // prepare has loaded the keys, so Active cannot fail.
 			logger.InfoContext(keysCtx, "signing keys loaded", "kid", active.KID)
 			keys.Run(keysCtx, logger)
@@ -274,12 +274,13 @@ func rotateKeys(ctx context.Context, cfg config.Config, logger *slog.Logger) err
 // accepts.
 const deletionInterval = 15 * time.Minute
 
-// deleteDue deletes the records due, every deletionInterval until ctx is
-// done: internal/oidc's codes, tokens and client assertions, and
-// internal/login's Login Sessions. Every replica runs it: each deletion is
-// idempotent, so replicas deleting at once only wait for each other's row
-// locks. A failed deletion is logged and left for the next run.
-func deleteDue(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
+// runDeletion deletes the records due, every [deletionInterval] until ctx
+// is done: internal/oidc's codes, tokens and client assertions, and
+// internal/login's Login Sessions. Every replica runs it, with no lock
+// between them, since each deletion is idempotent: one that fails because
+// another replica's conflicts with it, or for any other reason, is logged
+// and left for the next run.
+func runDeletion(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
 	ticker := time.NewTicker(deletionInterval)
 	defer ticker.Stop()
 	for {
