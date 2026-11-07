@@ -10,7 +10,10 @@ the same day, in review of #51: what other providers do with a refresh whose
 and #53: what other providers do when a refresh token already used is
 presented again; how they decide when used codes, used refresh tokens and
 grants may be deleted; and how they find every token issued under one
-authorization, to revoke them together.
+authorization, to revoke them together. A seventh was added the same day,
+for #53: what other providers do with a code, a refresh token or an access
+token whose End-User has since been removed from the user store, and
+whether adding the End-User back restores them.
 
 The OpenID conformance suite was read at `release-v5.3.4`, with paths under
 `src/main/java/net/openid/conformance/`. Open-source providers were read from
@@ -308,3 +311,91 @@ written and indexed, but no query reads it.
 - Option C: keep both identifiers. None of the four keeps two to revoke.
 - The majority practice points to one identifier, which A and B both are;
   A is the smaller change.
+
+## An End-User removed after a grant
+
+None of the specifications read says what becomes of a code, a refresh
+token or an access token whose End-User is removed while it is
+outstanding. The nearest clauses:
+
+- RFC 6749 §6 asks the authorization server to "validate the refresh
+  token". OAuth 2.1 draft -17 §4.3.1 adds that it MUST "validate that the
+  grant corresponding to this refresh token is still active", without
+  saying what ends a grant.
+- RFC 9700 §4.14.2 and OAuth 2.1 §4.3.3: authorization servers "MAY revoke
+  refresh tokens automatically in case of a security event", with password
+  change and logout at the authorization server as the examples. OAuth 2.1
+  §9.3.2 asks that a browser-based application's refresh token be linked
+  "to the user's authenticated session with the authorization server, so
+  that when the user logs out, previously issued refresh tokens become
+  invalid."
+- OAuth 2.1 §7.9: authorization servers "SHOULD allow administrators and
+  resource owners to view the set of clients that have been granted access
+  to their resources and to revoke those grants".
+- OpenID Connect Core §1.2 and §5.7: the Subject Identifier is "locally
+  unique and never reassigned within the Issuer" for the End-User. An End-User
+  added back with the same `sub` can only be the same End-User; whether their
+  earlier grants come back with them is not said.
+
+| Provider           | A code issued before removal, redeemed after                                                                                                                                                                                                                                                                                                            | A refresh token, after removal                                                                                                                                                                                                                   | An access token, after removal                                                                                                                 | What removal does, and an End-User added back                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spring AS          | Tokens are issued. The authorization record holds the principal authenticated at authorization, and the tokens are built from it; no class in the authorization server's main source refers to `UserDetailsService`. A deployer's `OAuth2TokenCustomizer` could look the user up.                                                                       | Tokens are issued, from the stored principal; no user is reloaded.                                                                                                                                                                               | UserInfo answers with the claims of the ID token stored in the record. Introspection answers `active: true` from the record.                   | Nothing: the authorization server is not told. `OAuth2AuthorizationService` has `save`, `remove`, `findById` and `findByToken`, and no lookup by principal. Nothing stopped working, so adding the user back changes nothing.                                                                                                                                                                                                                                                                                                                                                  | `authentication/OAuth2AuthorizationCodeAuthenticationProvider.java`, `authentication/OAuth2RefreshTokenAuthenticationProvider.java`, `oidc/authentication/OidcUserInfoAuthenticationProvider.java` (`DefaultOidcUserInfoMapper`), `authentication/OAuth2TokenIntrospectionAuthenticationProvider.java`, `OAuth2AuthorizationService.java`                                                                                                                                                                                                                                                                                                                                                                                                     |
+| fosite and Hydra   | Tokens are issued. Hydra has no user store, and its token endpoint asks the login and consent app nothing. A deployer may set `oauth2.token_hook`, unset by default, which Hydra calls on every token request before the code or refresh token is consumed; a 403 from it refuses the request with `access_denied`.                                     | Tokens are issued, from the session stored at consent. The same hook, or `oauth2.refresh_token_hook`, may refuse.                                                                                                                                | UserInfo answers with the ID token claims stored in the token's session. Introspection reads the token's row.                                  | Nothing, unless the deployer calls `DELETE /admin/oauth2/auth/sessions/consent` with the subject and `all=true`. That deletes the subject's access token and refresh token rows and its handled consent flows; on PostgreSQL, code rows that name a deleted flow are deleted with it (`ON DELETE CASCADE`). What it deletes does not come back when the End-User is added again; without it, nothing stopped working.                                                                                                                                                          | `hydra/oauth2/handler.go` (`oauth2TokenExchange`, `getOidcUserInfo`), `hydra/oauth2/token_hook.go`, `hydra/oauth2/refresh_hook.go`, `hydra/driver/config/provider.go` (`getHookConfig`), `hydra/consent/handler.go`, `hydra/persistence/sql/persister_consent.go` (`revokeConsentSession`), `hydra/persistence/sql/migrations/20211019000001000002_merge_authentication_request_tables.postgres.up.sql`, `fosite/handler/oauth2/flow_authorize_code_token.go`, `fosite/handler/oauth2/flow_refresh.go`                                                                                                                                                                                                                                        |
+| node-oidc-provider | `invalid_grant`, "authorization code invalid (referenced account not found)", when the deployer's `findAccount` returns `undefined`; the default `findAccount`, a placeholder, returns an account for any `sub`. The code is consumed before the account is looked up, so a second attempt within its lifetime finds it consumed and revokes the grant. | `invalid_grant`, "refresh token invalid (referenced account not found)". The account is looked up before the reuse check and before rotation, so nothing is consumed or revoked, and a used refresh token for a removed account revokes nothing. | UserInfo refuses with `invalid_token`, "associated account not found". Introspection does not look the account up, and answers `active: true`. | Nothing: accounts are the deployer's, looked up at each use. Added back, the account's refresh tokens and access tokens work again, until they or the grant expire; the code does not, since it was consumed.                                                                                                                                                                                                                                                                                                                                                                  | `lib/actions/grants/authorization_code.js`, `lib/actions/grants/refresh_token.js`, `lib/helpers/grant_common.js` (`validateAccount`), `lib/helpers/grant_source.js`, `lib/helpers/configuration_result.js`, `lib/shared/access_token.js` (`loadAccessTokenAccount`), `lib/actions/userinfo.js`, `lib/actions/introspection.js`, `lib/helpers/defaults.js` (`findAccount`)                                                                                                                                                                                                                                                                                                                                                                     |
+| Keycloak           | `invalid_grant`, "Code not valid": the code names its user session, which no longer exists, and there is no client session left to detach.                                                                                                                                                                                                              | `invalid_grant`: "Session not active" for a refresh token, "Offline user session not found" for an offline token.                                                                                                                                | UserInfo refuses with `invalid_token`, and introspection answers `active: false`: both look up the token's user session first.                 | Deleting a user publishes `UserRemovedEvent`, on which the session provider deletes the user's online and offline user sessions and their client sessions, in the database and the cache; the user's consents are deleted with the user. A user that a federation provider no longer validates is deleted the same way, by default (`removeInvalidUsersEnabled`). A user added back has none of the deleted sessions. `JpaUserProvider.addUser(realm, username)` generates a new ID, which is the user's `sub`; that the admin API's create goes through it is **UNVERIFIED**. | `models/UserManager.java`, `models/sessions/infinispan/InfinispanUserSessionProviderFactory.java`, `models/sessions/infinispan/PersistentUserSessionProvider.java`, `models/sessions/infinispan/InfinispanUserSessionProvider.java`, `models/jpa/session/JpaUserSessionPersisterProvider.java` (`onUserRemoved`), `models/jpa/JpaUserProvider.java`, `storage/UserStorageManager.java` (`deleteFederatedUser`), `storage/UserStorageProviderModel.java`, `protocol/oidc/utils/OAuth2CodeParser.java`, `protocol/oidc/grants/AuthorizationCodeGrantType.java`, `protocol/oidc/TokenManager.java`, `protocol/oidc/endpoints/UserInfoEndpoint.java`, `protocol/oidc/AccessTokenIntrospectionProvider.java`, `services/util/UserSessionUtil.java` |
+
+The four split evenly on codes, refresh tokens and UserInfo. For a code and for a refresh
+token presented after the End-User's removal, 2 of 4 refuse with
+`invalid_grant`: node-oidc-provider, which looks the account up at each
+use, and Keycloak, which deleted the user's sessions when the user was
+deleted. Spring and Hydra issue tokens, since neither consults a user
+store at the token endpoint; Hydra can be made to refuse by a token hook,
+or to delete the tokens by its revocation API. UserInfo splits the same
+way, 2 and 2. Introspection answers `active: true` in 3 of 4; Keycloak
+alone answers `false`. 3 of 4 do nothing of their own when a user is
+removed: Spring and Hydra are not told, and node-oidc-provider checks at
+each use instead. Keycloak alone deletes, at removal, the sessions that
+every code and refresh token of the user depends on. So of the two that
+refuse, node-oidc-provider alone gives an End-User added back their
+refresh tokens and access tokens again; in Spring and Hydra they never
+stopped working.
+
+### What pulsar takes from this: removal
+
+pulsar's registry is a file read at start (ADR 0001), so it learns of a
+removal only when it next looks an End-User up, and nothing can run when
+the removal happens. Today a refresh token whose End-User is not in the
+registry gets `invalid_grant`, checked after the reuse check, so a used one
+still revokes its family; node-oidc-provider checks before it. UserInfo
+answers `invalid_token` for an access token whose End-User is not in the
+registry. Nothing is revoked, so an End-User added back has their unexpired
+refresh tokens and access tokens again. A code issued before the removal is
+still redeemed within its 60 seconds: the ID token carries `sub` and none of
+the End-User's other claims, the refresh token issued with it is refused at
+its first use, and UserInfo refuses the access token.
+
+- (a) Option A: keep redeeming such a code, as Spring and Hydra do. Option
+  B: refuse it with `invalid_grant`, as node-oidc-provider and Keycloak do,
+  checking the registry as a refresh does, and rolling back so that the
+  refusal consumes nothing. The four split 2 and 2, so no majority decides
+  it; B makes the code agree with what pulsar already does for refresh
+  tokens and UserInfo, and with node-oidc-provider, the one provider that
+  also checks at use.
+- (c) pulsar's UserInfo already refuses, as node-oidc-provider and Keycloak
+  do. The option of answering from claims stored at issuance, as Spring and
+  Hydra do, does not fit pulsar, which stores which claims were requested,
+  not their values. pulsar has no introspection endpoint (#47).
+- (d) Option A: keep revoking nothing, so that an End-User added back has
+  their unexpired Refresh Token Families and access tokens again. Option B:
+  at start, revoke the families and access tokens of every Subject not in
+  the registry, the nearest pulsar can come to Keycloak's deletion at
+  removal. It reads every family at each start, and replicas sharing
+  PostgreSQL (ADR 0004) can run with different files during a rollout, so
+  one could revoke for an End-User the others still accept. Option C:
+  revoke a family when its refresh is refused for a missing End-User, which
+  none of the four does.
+- The majority practice points to A on (d): 3 of 4 do nothing when a user is
+  removed, and node-oidc-provider, the one of those that refuses at use,
+  gives the tokens back when the account returns. Since a `sub` is never
+  reassigned (OpenID Connect Core §5.7) and ADR 0001 writes it in the file,
+  an End-User added back with the same Subject is the same End-User.
