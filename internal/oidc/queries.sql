@@ -16,8 +16,14 @@ VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_
 -- it redeemed. One for another Client or redirect URI, or after the code
 -- has expired, does not wait: the row it reads does not match, so it is
 -- not locked (see LockAuthorizationCode).
+--
+-- A redeemed code is kept while the tokens issued from it may still be
+-- revoked, so that a second redemption can still show its parameters are
+-- the code's: until @access_token_expiry, when the access token issued from
+-- it expires, or, if it starts a Refresh Token Family, until the family
+-- ends (InsertRefreshTokenFamily).
 UPDATE authorization_codes
-SET redeemed = true
+SET redeemed = true, delete_after = @access_token_expiry
 WHERE code_hash = @code_hash
     AND client_id = @client_id
     AND redirect_uri = @redirect_uri
@@ -55,15 +61,11 @@ WHERE code_hash = @code_hash;
 DELETE FROM access_tokens
 WHERE code_hash = @code_hash;
 
--- name: KeepAuthorizationCodeUntil :exec
--- Sets when the code's row may be deleted. A redeemed code is kept while
--- the tokens issued from it may still be revoked, so that a second
--- redemption can still show its parameters are the code's: until the
--- access token issued from it expires, or, if it started a Refresh Token
--- Family, until the family ends. Once they are revoked, it need not be
--- kept.
+-- name: StopKeepingAuthorizationCode :exec
+-- Lets the code's row be deleted from @now, its tokens having been
+-- revoked, so that nothing is left for a second redemption to revoke.
 UPDATE authorization_codes
-SET delete_after = @delete_after
+SET delete_after = @now
 WHERE code_hash = @code_hash;
 
 -- name: DeleteDueAuthorizationCodes :exec
@@ -75,8 +77,13 @@ INSERT INTO access_tokens (jti, code_hash, userinfo_claims, expiry)
 VALUES (@jti, @code_hash, @userinfo_claims, @expiry);
 
 -- name: InsertRefreshTokenFamily :one
--- Starts the Refresh Token Family of the code whose hash is code_hash, and
--- returns its id.
+-- Starts the Refresh Token Family of the code whose hash is code_hash,
+-- keeps the code until the family ends, and returns the family's id.
+WITH kept AS (
+    UPDATE authorization_codes
+    SET delete_after = @expiry
+    WHERE code_hash = @code_hash
+)
 INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, auth_time, expiry)
 VALUES (@code_hash, @client_id, @subject, @scopes, @claims, @auth_time, @expiry)
 RETURNING id;

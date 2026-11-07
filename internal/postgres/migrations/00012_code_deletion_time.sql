@@ -18,6 +18,12 @@
 --
 -- The indexes are built in the migration's transaction, as in 00009:
 -- authorization_codes holds codes for at most the 30 days of a family.
+--
+-- Unlike 00007, 00008 and 00010, this migration does not keep a replica of
+-- the previous release working during a rolling deploy: such a replica
+-- writes no delete_after, which is NOT NULL, and writes family_id, which
+-- is gone. pulsar has not been deployed, so no such replica exists, and
+-- the schema is changed in one step rather than over two releases.
 
 -- +goose Up
 -- When the code's row may be deleted, by pulsar's clock: at its expiry if

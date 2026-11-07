@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/url"
@@ -874,4 +875,31 @@ func TestRefreshTokenReuseWhileEndUserRemovedRevokesFamily(t *testing.T) {
 		t.Errorf("POST %s with a refresh token already redeemed, without alice in the registry error = %q, want %q", tokenPath, got, "invalid_grant")
 	}
 	rpNoPKCE.wantRevoked(t, handler, refreshed.RefreshToken, []string{first.AccessToken, refreshed.AccessToken})
+}
+
+// REQ-OAUTH-43, REQ-OAUTH-19: a code whose End-User has been removed from
+// the registry since it was issued fails with invalid_grant, with or
+// without offline access, and is not used up: started again with the
+// End-User back, against the same database, pulsar redeems it.
+func TestCodeOfRemovedEndUser(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	removed := newFlowHandlerFor(t, pool, flowRegistryWithout(t, aliceSubject))
+	for _, offline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("offline access %t", offline), func(t *testing.T) {
+			t.Parallel()
+			var c string
+			if offline {
+				c = rpNoPKCE.offlineCode(t, handler, nil)
+			} else {
+				c = rpNoPKCE.code(t, handler)
+			}
+			if got := tokenErrorCode(t, rpNoPKCE.redeem(t, removed, codeForm(c)), http.StatusBadRequest); got != "invalid_grant" {
+				t.Errorf("POST %s without alice in the registry error = %q, want %q", tokenPath, got, "invalid_grant")
+			}
+			tokenResponseOf(t, rpNoPKCE.redeem(t, handler, codeForm(c)))
+		})
+	}
 }

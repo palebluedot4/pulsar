@@ -195,6 +195,11 @@ func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshToken
 }
 
 const insertRefreshTokenFamily = `-- name: InsertRefreshTokenFamily :one
+WITH kept AS (
+    UPDATE authorization_codes
+    SET delete_after = $7
+    WHERE code_hash = $1
+)
 INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, auth_time, expiry)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id
@@ -210,8 +215,8 @@ type InsertRefreshTokenFamilyParams struct {
 	Expiry   time.Time
 }
 
-// Starts the Refresh Token Family of the code whose hash is code_hash, and
-// returns its id.
+// Starts the Refresh Token Family of the code whose hash is code_hash,
+// keeps the code until the family ends, and returns the family's id.
 func (q *Queries) InsertRefreshTokenFamily(ctx context.Context, arg InsertRefreshTokenFamilyParams) (int64, error) {
 	row := q.db.QueryRow(ctx, insertRefreshTokenFamily,
 		arg.CodeHash,
@@ -225,28 +230,6 @@ func (q *Queries) InsertRefreshTokenFamily(ctx context.Context, arg InsertRefres
 	var id int64
 	err := row.Scan(&id)
 	return id, err
-}
-
-const keepAuthorizationCodeUntil = `-- name: KeepAuthorizationCodeUntil :exec
-UPDATE authorization_codes
-SET delete_after = $1
-WHERE code_hash = $2
-`
-
-type KeepAuthorizationCodeUntilParams struct {
-	DeleteAfter time.Time
-	CodeHash    []byte
-}
-
-// Sets when the code's row may be deleted. A redeemed code is kept while
-// the tokens issued from it may still be revoked, so that a second
-// redemption can still show its parameters are the code's: until the
-// access token issued from it expires, or, if it started a Refresh Token
-// Family, until the family ends. Once they are revoked, it need not be
-// kept.
-func (q *Queries) KeepAuthorizationCodeUntil(ctx context.Context, arg KeepAuthorizationCodeUntilParams) error {
-	_, err := q.db.Exec(ctx, keepAuthorizationCodeUntil, arg.DeleteAfter, arg.CodeHash)
-	return err
 }
 
 const lockAuthorizationCode = `-- name: LockAuthorizationCode :one
@@ -346,20 +329,21 @@ func (q *Queries) MarkRefreshTokenUsed(ctx context.Context, tokenHash []byte) (i
 
 const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :one
 UPDATE authorization_codes
-SET redeemed = true
-WHERE code_hash = $1
-    AND client_id = $2
-    AND redirect_uri = $3
-    AND expiry > $4
+SET redeemed = true, delete_after = $1
+WHERE code_hash = $2
+    AND client_id = $3
+    AND redirect_uri = $4
+    AND expiry > $5
     AND NOT redeemed
 RETURNING subject, scopes, nonce, code_challenge, claims, auth_time
 `
 
 type RedeemAuthorizationCodeParams struct {
-	CodeHash    []byte
-	ClientID    string
-	RedirectUri string
-	Now         time.Time
+	AccessTokenExpiry time.Time
+	CodeHash          []byte
+	ClientID          string
+	RedirectUri       string
+	Now               time.Time
 }
 
 type RedeemAuthorizationCodeRow struct {
@@ -380,8 +364,15 @@ type RedeemAuthorizationCodeRow struct {
 // it redeemed. One for another Client or redirect URI, or after the code
 // has expired, does not wait: the row it reads does not match, so it is
 // not locked (see LockAuthorizationCode).
+//
+// A redeemed code is kept while the tokens issued from it may still be
+// revoked, so that a second redemption can still show its parameters are
+// the code's: until @access_token_expiry, when the access token issued from
+// it expires, or, if it starts a Refresh Token Family, until the family
+// ends (InsertRefreshTokenFamily).
 func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthorizationCodeParams) (RedeemAuthorizationCodeRow, error) {
 	row := q.db.QueryRow(ctx, redeemAuthorizationCode,
+		arg.AccessTokenExpiry,
 		arg.CodeHash,
 		arg.ClientID,
 		arg.RedirectUri,
@@ -412,5 +403,23 @@ WHERE code_hash = $1
 // statement, which sees the one that refresh recorded.
 func (q *Queries) RevokeRefreshTokenFamilyOfCode(ctx context.Context, codeHash []byte) error {
 	_, err := q.db.Exec(ctx, revokeRefreshTokenFamilyOfCode, codeHash)
+	return err
+}
+
+const stopKeepingAuthorizationCode = `-- name: StopKeepingAuthorizationCode :exec
+UPDATE authorization_codes
+SET delete_after = $1
+WHERE code_hash = $2
+`
+
+type StopKeepingAuthorizationCodeParams struct {
+	Now      time.Time
+	CodeHash []byte
+}
+
+// Lets the code's row be deleted from @now, its tokens having been
+// revoked, so that nothing is left for a second redemption to revoke.
+func (q *Queries) StopKeepingAuthorizationCode(ctx context.Context, arg StopKeepingAuthorizationCodeParams) error {
+	_, err := q.db.Exec(ctx, stopKeepingAuthorizationCode, arg.Now, arg.CodeHash)
 	return err
 }
