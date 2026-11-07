@@ -24,7 +24,8 @@
 -- it is not redeemed; once redeemed, when the access token issued from it
 -- expires, or, if it started a Refresh Token Family, when the family
 -- ends; and once its tokens are revoked, at once. Rows written before
--- this column are given what those rules give them.
+-- this column are kept as long as the deletion this replaces kept them,
+-- which is at least as long as those rules keep them.
 ALTER TABLE authorization_codes
 ADD COLUMN delete_after timestamptz;
 

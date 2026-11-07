@@ -361,7 +361,8 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		// token expires, or until its family ends.
 		keepUntil := exp
 		if slices.Contains(row.Scopes, login.OfflineAccess) {
-			keepUntil = now.Add(familyLifetime)
+			familyExpiry := now.Add(familyLifetime)
+			keepUntil = familyExpiry
 			id, err := q.InsertRefreshTokenFamily(ctx, queries.InsertRefreshTokenFamilyParams{
 				CodeHash: hash,
 				ClientID: client.ID,
@@ -369,7 +370,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 				Scopes:   row.Scopes,
 				Claims:   row.Claims,
 				AuthTime: row.AuthTime,
-				Expiry:   keepUntil,
+				Expiry:   familyExpiry,
 			})
 			if err != nil {
 				return err
@@ -387,7 +388,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		return nil, err
 	}
 	if revoked {
-		p.releaseCode(ctx, hash, now)
+		p.stopKeepingCode(ctx, hash, now)
 	}
 	if refused {
 		return nil, errCodeNotRedeemable
@@ -466,9 +467,11 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // the code included, are deleted, so that UserInfo refuses them (RFC 9700
 // §4.14.2). There is no grace period, not even for a Client retrying a
 // refresh whose response it never received. A refresh token presented by
-// another Client revokes nothing, as most providers surveyed have it
-// (docs/research/refresh-tokens.md), so that one who has only seen a
-// refresh token cannot end the End-User's offline access.
+// another Client revokes nothing, as a code replayed by another Client
+// does not (OAuth 2.1 draft -17 §7.5.3), and as most providers surveyed
+// have it, since no specification says (docs/research/refresh-tokens.md),
+// so that one who has only seen a refresh token cannot end the End-User's
+// offline access.
 //
 // The refresh token is redeemed, and its replacement and the access token
 // recorded, in one transaction, which first locks the family's row, as
@@ -507,9 +510,6 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		if row.ClientID != client.ID || row.Revoked || !row.Expiry.After(now) {
 			return errRefreshTokenNotRedeemable
 		}
-		if _, ok := p.registry.EndUser(row.Subject); !ok {
-			return errRefreshTokenNotRedeemable
-		}
 		n, err := q.MarkRefreshTokenUsed(ctx, hash)
 		if err != nil {
 			return err
@@ -519,6 +519,12 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 			// Every token of the family descends from its code, so the
 			// family is revoked as a valid replay of the code revokes it.
 			return revokeCode(ctx, q, row.CodeHash)
+		}
+		// After the reuse check, so that a refresh token presented again
+		// revokes its family even while its End-User is out of the
+		// registry; refusing rolls back marking it used.
+		if _, ok := p.registry.EndUser(row.Subject); !ok {
+			return errRefreshTokenNotRedeemable
 		}
 		if len(scopes) == 0 {
 			scopes = row.Scopes
@@ -543,7 +549,7 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		return nil, err
 	}
 	if reused {
-		p.releaseCode(ctx, row.CodeHash, now)
+		p.stopKeepingCode(ctx, row.CodeHash, now)
 		return nil, errRefreshTokenNotRedeemable
 	}
 	p.deleteExpired(ctx, now)
@@ -604,14 +610,14 @@ func isSubset(sub, set []string) bool {
 	return true
 }
 
-// releaseCode lets the code whose hash is codeHash be deleted from now on,
+// stopKeepingCode lets the code whose hash is codeHash be deleted from now on,
 // its tokens having been revoked, so that it is no longer kept for its
 // Refresh Token Family. It runs after the revocation commits, so that a
 // refresh never waits for a code's row while it holds its family's, which
 // a replay of the code locks in the other order. A failure leaves the code
 // until its family ends, when it would be deleted anyway, and does not
 // fail the request.
-func (p *Provider) releaseCode(ctx context.Context, codeHash []byte, now time.Time) {
+func (p *Provider) stopKeepingCode(ctx context.Context, codeHash []byte, now time.Time) {
 	if err := p.queries.KeepAuthorizationCodeUntil(ctx, queries.KeepAuthorizationCodeUntilParams{CodeHash: codeHash, DeleteAfter: now}); err != nil {
 		p.logger.ErrorContext(ctx, "release authorization code", "error", err)
 	}

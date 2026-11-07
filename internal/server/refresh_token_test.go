@@ -756,7 +756,7 @@ func TestRefreshTokenRegistryRemovals(t *testing.T) {
 			first := tt.client.offlineTokens(t, handler, tt.verifier, nil)
 			removed := newFlowHandlerFor(t, pool, flowRegistryWithout(t, tt.removed))
 			if got := tokenErrorCode(t, tt.client.refresh(t, removed, first.RefreshToken, ""), tt.wantStatus); got != tt.wantError {
-				t.Errorf("POST %s with %s from the registry error = %q, want %q", tokenPath, tt.removed, got, tt.wantError)
+				t.Errorf("POST %s without %s in the registry error = %q, want %q", tokenPath, tt.removed, got, tt.wantError)
 			}
 			tokenResponseOf(t, tt.client.refresh(t, handler, first.RefreshToken, ""))
 		})
@@ -768,8 +768,9 @@ func TestRefreshTokenRegistryRemovals(t *testing.T) {
 // the access token issued from it has expired, or, if it started a Refresh
 // Token Family, once the family has ended, whatever the code's own expiry;
 // or once the family has been revoked, by a refresh token presented again
-// or by the code redeemed again. A family and its refresh tokens are kept
-// until it ends, revoked or not, and then deleted.
+// or by the code redeemed again. A family is kept until it ends, revoked or
+// not, and then deleted, with its refresh tokens, the first of which the
+// test looks for.
 func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -777,9 +778,8 @@ func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 	tests := []struct {
 		name    string
 		offline bool
-		// revoke is how the family is revoked, if at all: by "refresh", a
-		// refresh token presented again, or by "code", a second redemption.
-		revoke string
+		// revoke revokes the family the code started, if not nil.
+		revoke func(t *testing.T, handler http.Handler, code string, first tokenResponse)
 		wait   time.Duration // between the code's redemption and the cleanup
 		// Whether the code's record is kept, and the family's with its
 		// refresh tokens.
@@ -789,8 +789,8 @@ func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 		{name: "without offline access, once its access token expired", wait: oidc.TokenLifetime},
 		{name: "a second before the family ends", offline: true, wait: 30*day - time.Second, wantCode: true, wantFamily: true},
 		{name: "once the family ended", offline: true, wait: 30 * day},
-		{name: "once a refresh token is presented again", offline: true, revoke: "refresh", wantFamily: true},
-		{name: "once the code is redeemed again", offline: true, revoke: "code", wantFamily: true},
+		{name: "once a refresh token is presented again", offline: true, revoke: presentRefreshTokenAgain, wantFamily: true},
+		{name: "once the code is redeemed again", offline: true, revoke: redeemCodeAgain, wantFamily: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -806,12 +806,8 @@ func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 					c = rpNoPKCE.code(t, handler)
 				}
 				first := tokenResponseOf(t, rpNoPKCE.redeem(t, handler, codeForm(c)))
-				switch tt.revoke {
-				case "refresh":
-					tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
-					tokenErrorCode(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""), http.StatusBadRequest)
-				case "code":
-					tokenErrorCode(t, rpNoPKCE.redeem(t, handler, codeForm(c)), http.StatusBadRequest)
+				if tt.revoke != nil {
+					tt.revoke(t, handler, c, first)
 				}
 				time.Sleep(tt.wait)
 				// Issuing a code deletes the codes due, and issuing tokens the
@@ -839,4 +835,43 @@ func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 			})
 		})
 	}
+}
+
+// presentRefreshTokenAgain revokes the Refresh Token Family of first, rp's
+// token response for code, by redeeming its refresh token twice.
+func presentRefreshTokenAgain(t *testing.T, handler http.Handler, _ string, first tokenResponse) {
+	t.Helper()
+	tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
+	if got := tokenErrorCode(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""), http.StatusBadRequest); got != "invalid_grant" {
+		t.Fatalf("POST %s with a refresh token already redeemed error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+}
+
+// redeemCodeAgain revokes the Refresh Token Family that code, redeemed by
+// rp, started, by redeeming it again.
+func redeemCodeAgain(t *testing.T, handler http.Handler, code string, _ tokenResponse) {
+	t.Helper()
+	if got := tokenErrorCode(t, rpNoPKCE.redeem(t, handler, codeForm(code)), http.StatusBadRequest); got != "invalid_grant" {
+		t.Fatalf("second POST %s error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+}
+
+// REQ-BCP-11, REQ-OAUTH-35: a refresh token already redeemed, presented
+// again while its End-User is out of the registry, fails with
+// invalid_grant and revokes its family, as it does otherwise: once the
+// End-User is back, the family's newest refresh token is refused, and
+// UserInfo refuses its access tokens.
+func TestRefreshTokenReuseWhileEndUserRemovedRevokesFamily(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	first := rpNoPKCE.offlineTokens(t, handler, "", nil)
+	refreshed := tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
+
+	removed := newFlowHandlerFor(t, pool, flowRegistryWithout(t, aliceSubject))
+	if got := tokenErrorCode(t, rpNoPKCE.refresh(t, removed, first.RefreshToken, ""), http.StatusBadRequest); got != "invalid_grant" {
+		t.Errorf("POST %s with a refresh token already redeemed, without alice in the registry error = %q, want %q", tokenPath, got, "invalid_grant")
+	}
+	rpNoPKCE.wantRevoked(t, handler, refreshed.RefreshToken, []string{first.AccessToken, refreshed.AccessToken})
 }
