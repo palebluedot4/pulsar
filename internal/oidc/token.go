@@ -341,14 +341,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			if !stored.Redeemed || stored.ClientID != client.ID || stored.RedirectUri != redirectURI || stored.CodeChallenge != challenge {
 				return nil
 			}
-			// The family is revoked first, which waits for a refresh in
-			// progress in it, so that the deletion then sees the access
-			// token that refresh recorded, and a later refresh finds the
-			// family revoked.
-			if err := q.RevokeRefreshTokenFamilyOfCode(ctx, hash); err != nil {
-				return err
-			}
-			return q.DeleteAccessTokensOfCode(ctx, hash)
+			return revokeCode(ctx, q, hash)
 		}
 		if err != nil {
 			return err
@@ -476,10 +469,12 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // transaction back, so that the refresh token can still be redeemed. The
 // tokens are signed after it commits, as issueTokens signs them.
 func (p *Provider) refresh(ctx context.Context, client *registry.Client, refreshToken string, scopes []string) (*tokenResponse, error) {
-	now := time.Now()
-	exp := now.Add(TokenLifetime)
 	hash := hashCode(refreshToken)
 	jti := rand.Text()
+	// When the refresh is, read once the family's row is locked, so that a
+	// refresh that waited for another as the family ended is not dated
+	// before the wait.
+	var now, exp time.Time
 	var row queries.LockRefreshTokenFamilyRow
 	var claims claimsRequest
 	var replacement string
@@ -496,6 +491,8 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		if err != nil {
 			return err
 		}
+		now = time.Now()
+		exp = now.Add(TokenLifetime)
 		if row.ClientID != client.ID || row.Revoked || !row.Expiry.After(now) {
 			return errRefreshTokenNotRedeemable
 		}
@@ -505,10 +502,9 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		}
 		if n == 0 {
 			reused = true
-			if err := q.RevokeRefreshTokenFamily(ctx, row.ID); err != nil {
-				return err
-			}
-			return q.DeleteAccessTokensOfFamily(ctx, row.ID)
+			// Every token of the family descends from its code, so the
+			// family is revoked as a valid replay of the code revokes it.
+			return revokeCode(ctx, q, row.CodeHash)
 		}
 		if len(scopes) == 0 {
 			scopes = row.Scopes
@@ -548,6 +544,20 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		jti:           jti,
 		refreshToken:  replacement,
 	}, now)
+}
+
+// revokeCode revokes the tokens issued from the code whose hash is
+// codeHash: the Refresh Token Family it started, if any, and the access
+// tokens issued from it, directly or in the family, whose records are
+// deleted, so that UserInfo refuses them. The family is revoked first,
+// which waits for a refresh in progress in it, so that the deletion then
+// sees the access token that refresh recorded, and a later refresh finds
+// the family revoked.
+func revokeCode(ctx context.Context, q *queries.Queries, codeHash []byte) error {
+	if err := q.RevokeRefreshTokenFamilyOfCode(ctx, codeHash); err != nil {
+		return err
+	}
+	return q.DeleteAccessTokensOfCode(ctx, codeHash)
 }
 
 // decodeStoredClaims returns the claims request stored with a code or a

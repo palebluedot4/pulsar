@@ -40,9 +40,10 @@ FOR UPDATE;
 
 -- name: RevokeRefreshTokenFamilyOfCode :exec
 -- Revokes the Refresh Token Family the code started, if any. It locks the
--- family's row, so that a refresh in progress in the family commits first;
--- the caller then deletes the records of the access tokens issued from the
--- code in a later statement, which sees the one that refresh recorded.
+-- family's row, unless the transaction holds the lock already, so that a
+-- refresh in progress in the family commits first; the caller then
+-- deletes the records of the access tokens issued from the code in a later
+-- statement, which sees the one that refresh recorded.
 UPDATE refresh_token_families
 SET revoked = true
 WHERE code_hash = @code_hash;
@@ -57,8 +58,12 @@ WHERE code_hash = @code_hash;
 -- Deletes the codes that have expired, except a redeemed one whose tokens
 -- may still be revoked: it is kept until @redeemed_expiry, when its access
 -- tokens have expired, and while the Refresh Token Family it started has
--- not ended, so that a second redemption can still show its parameters are
--- the code's and revoke them.
+-- neither ended nor been revoked, so that a second redemption can still
+-- show its parameters are the code's and revoke them.
+--
+-- TODO(#53): a code kept for its family is read and checked here on every
+-- run, for up to the family's 30 days; record when each code may be
+-- deleted, so that this reads only those due.
 DELETE FROM authorization_codes c
 WHERE c.expiry <= @now
     AND (NOT c.redeemed OR c.expiry <= @redeemed_expiry)
@@ -66,6 +71,7 @@ WHERE c.expiry <= @now
         SELECT FROM refresh_token_families f
         WHERE f.code_hash = c.code_hash
             AND f.expiry > @now
+            AND NOT f.revoked
     );
 
 -- name: InsertAccessToken :exec
@@ -105,19 +111,6 @@ UPDATE refresh_tokens
 SET used = true
 WHERE token_hash = @token_hash
     AND NOT used;
-
--- name: RevokeRefreshTokenFamily :exec
--- Revokes the Refresh Token Family, whose row the caller has locked. The
--- caller then deletes the records of its access tokens.
-UPDATE refresh_token_families
-SET revoked = true
-WHERE id = @id;
-
--- name: DeleteAccessTokensOfFamily :exec
--- Revokes the access tokens issued in the Refresh Token Family, including
--- the one issued from its code, by deleting their records.
-DELETE FROM access_tokens
-WHERE family_id = sqlc.arg(family_id)::bigint;
 
 -- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
