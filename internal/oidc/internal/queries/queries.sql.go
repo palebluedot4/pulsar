@@ -24,18 +24,6 @@ func (q *Queries) DeleteAccessTokensOfCode(ctx context.Context, codeHash []byte)
 	return err
 }
 
-const deleteAccessTokensOfFamily = `-- name: DeleteAccessTokensOfFamily :exec
-DELETE FROM access_tokens
-WHERE family_id = $1::bigint
-`
-
-// Revokes the access tokens issued in the Refresh Token Family, including
-// the one issued from its code, by deleting their records.
-func (q *Queries) DeleteAccessTokensOfFamily(ctx context.Context, familyID int64) error {
-	_, err := q.db.Exec(ctx, deleteAccessTokensOfFamily, familyID)
-	return err
-}
-
 const deleteExpiredAccessTokens = `-- name: DeleteExpiredAccessTokens :exec
 DELETE FROM access_tokens
 WHERE expiry <= $1
@@ -54,6 +42,7 @@ WHERE c.expiry <= $1
         SELECT FROM refresh_token_families f
         WHERE f.code_hash = c.code_hash
             AND f.expiry > $1
+            AND NOT f.revoked
     )
 `
 
@@ -65,8 +54,12 @@ type DeleteExpiredAuthorizationCodesParams struct {
 // Deletes the codes that have expired, except a redeemed one whose tokens
 // may still be revoked: it is kept until @redeemed_expiry, when its access
 // tokens have expired, and while the Refresh Token Family it started has
-// not ended, so that a second redemption can still show its parameters are
-// the code's and revoke them.
+// neither ended nor been revoked, so that a second redemption can still
+// show its parameters are the code's and revoke them.
+//
+// TODO(#53): a code kept for its family is read and checked here on every
+// run, for up to the family's 30 days; record when each code may be
+// deleted, so that this reads only those due.
 func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, arg DeleteExpiredAuthorizationCodesParams) error {
 	_, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, arg.Now, arg.RedeemedExpiry)
 	return err
@@ -396,19 +389,6 @@ func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthori
 	return i, err
 }
 
-const revokeRefreshTokenFamily = `-- name: RevokeRefreshTokenFamily :exec
-UPDATE refresh_token_families
-SET revoked = true
-WHERE id = $1
-`
-
-// Revokes the Refresh Token Family, whose row the caller has locked. The
-// caller then deletes the records of its access tokens.
-func (q *Queries) RevokeRefreshTokenFamily(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, revokeRefreshTokenFamily, id)
-	return err
-}
-
 const revokeRefreshTokenFamilyOfCode = `-- name: RevokeRefreshTokenFamilyOfCode :exec
 UPDATE refresh_token_families
 SET revoked = true
@@ -416,9 +396,10 @@ WHERE code_hash = $1
 `
 
 // Revokes the Refresh Token Family the code started, if any. It locks the
-// family's row, so that a refresh in progress in the family commits first;
-// the caller then deletes the records of the access tokens issued from the
-// code in a later statement, which sees the one that refresh recorded.
+// family's row, unless the transaction holds the lock already, so that a
+// refresh in progress in the family commits first; the caller then
+// deletes the records of the access tokens issued from the code in a later
+// statement, which sees the one that refresh recorded.
 func (q *Queries) RevokeRefreshTokenFamilyOfCode(ctx context.Context, codeHash []byte) error {
 	_, err := q.db.Exec(ctx, revokeRefreshTokenFamilyOfCode, codeHash)
 	return err

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
@@ -109,7 +110,7 @@ func TestTokenCodeReuseRevokesFamily(t *testing.T) {
 				// The access tokens of the family not yet expired: the
 				// refresh's, and the code's unless the wait outlasted it.
 				accessTokens := []string{refreshed.AccessToken}
-				if tt.wait < 10*time.Minute {
+				if tt.wait < oidc.TokenLifetime {
 					accessTokens = append(accessTokens, first.AccessToken)
 				}
 				wantAccepted(t, handler, "before the second redemption", claimsOf(), accessTokens)
