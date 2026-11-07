@@ -3,7 +3,7 @@
 -- Core 1.0 §9). A row is written when an assertion is accepted. Once the
 -- assertion has expired, the assertion is refused for its expiry alone, and
 -- the row no longer refuses its jti: the next assertion with that jti
--- replaces it, and the next one recorded with any jti deletes it.
+-- replaces it, and pulsar's periodic deletion deletes it (cmd/pulsar).
 
 -- +goose Up
 CREATE TABLE client_assertions (

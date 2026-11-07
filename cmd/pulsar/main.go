@@ -181,19 +181,19 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 	// replica is ready, so that whoever reads the log line, a test
 	// included, finds /readyz past its start-up 503, answering as a ping
 	// of the database does.
-	keysCtx, stopKeys := context.WithCancel(ctx)
-	defer stopKeys()
+	backgroundCtx, stopBackground := context.WithCancel(ctx)
+	defer stopBackground()
 	startErr := make(chan error, 1)
 	var background sync.WaitGroup
 	background.Go(func() {
-		err := prepare(keysCtx, pool, keys, logger)
+		err := prepare(backgroundCtx, pool, keys, logger)
 		startErr <- err
 		if err == nil {
 			close(ready)
-			background.Go(func() { runDeletion(keysCtx, pool, logger) })
+			background.Go(func() { runDeletion(backgroundCtx, pool, logger) })
 			active, _ := keys.Active() // prepare has loaded the keys, so Active cannot fail.
-			logger.InfoContext(keysCtx, "signing keys loaded", "kid", active.KID)
-			keys.Run(keysCtx, logger)
+			logger.InfoContext(backgroundCtx, "signing keys loaded", "kid", active.KID)
+			keys.Run(backgroundCtx, logger)
 		}
 	})
 
@@ -219,7 +219,7 @@ wait:
 			break wait
 		}
 	}
-	stopKeys()
+	stopBackground()
 	if startErr != nil {
 		// The run is already ending for another reason; only a failure
 		// that is not the cancellation itself is worth reporting with it.
