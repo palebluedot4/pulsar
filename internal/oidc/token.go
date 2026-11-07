@@ -255,11 +255,11 @@ func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*regis
 }
 
 // authenticateSecret authenticates the Client whose client_id and secret
-// these are, if it registered method. A Client secret must be at least
-// 256 random bits (RFC 6749 §10.10, RFC 6819 §5.1.4.2.2), so its attempts
-// are not counted, as an End-User's are: guessing cannot find one, and a
-// count would let anyone who knows a client_id, which is public, hold up
-// that Client's token requests (docs/adr/0005-guessing-throttled-per-account-by-delay.md).
+// these are, if it registered method. The README requires a Client
+// secret of at least 256 random bits, so that guessing cannot find one, as
+// RFC 6749 §10.10 and RFC 6819 §5.1.4.2.2 have it, and its attempts are
+// not counted, as an End-User's are: a count would let anyone who knows a
+// client_id, which is public, hold up that Client's token requests (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
 //
 // No error code of RFC 6749 §5.2 is for a request refused for want of
 // capacity to check its secret, so it gets temporarily_unavailable, which
@@ -267,15 +267,17 @@ func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*regis
 func (p *Provider) authenticateSecret(ctx context.Context, method registry.AuthMethod, id, secret string) (*registry.Client, *tokenError) {
 	client, ok, err := p.registry.AuthenticateClientSecret(ctx, method, id, secret)
 	switch {
-	case err != nil:
-		// The only error is registry.ErrBusy: too many logins and token
-		// requests at once on this replica (RFC 9110 §15.6.4).
+	case errors.Is(err, registry.ErrBusy):
+		// Too many logins and token requests at once on this replica
+		// (RFC 9110 §15.6.4).
 		return nil, &tokenError{
 			status:      http.StatusServiceUnavailable,
 			retryAfter:  time.Second,
 			Code:        errTemporarilyUnavailable,
 			Description: "The server is too busy to authenticate the client.",
 		}
+	case err != nil:
+		return nil, p.serverError(ctx, err)
 	case !ok:
 		return nil, unauthorized()
 	}

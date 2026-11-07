@@ -24,4 +24,4 @@ an OP, so the reasons are recorded here; the evidence is in
 - Redis is reconsidered when measurement shows PostgreSQL to be a latency or
   connection bottleneck, or when a need cannot be met with PostgreSQL.
   Login throttling across replicas is met with it
-  ([ADR 0005](0005-guessing-throttled-per-account-by-delay.md)).
+  ([ADR 0005](0005-logins-throttled-per-end-user-by-delay.md)).

@@ -94,10 +94,11 @@ read -rs password && printf %s "$password" | argon2 "$(openssl rand -hex 16)" -i
 ```
 
 A client secret must be at least 256 bits from a cryptographically strong
-random source, such as `openssl rand -base64 32` prints. Logins are
-throttled per End-User, but client secrets are not, so their length alone
-keeps them from being guessed
-([ADR 0005](docs/adr/0005-guessing-throttled-per-account-by-delay.md)).
+random source, such as `openssl rand -base64 32` prints, so that guessing
+cannot find it (RFC 6749 §10.10, RFC 6819 §5.1.4.2.2). Logins are
+throttled per End-User; client secrets are not, since anyone could hold
+up a Client whose failed attempts were counted
+([ADR 0005](docs/adr/0005-logins-throttled-per-end-user-by-delay.md)).
 
 ```sh
 # Once per database; every later start needs the same value.

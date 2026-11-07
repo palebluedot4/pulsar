@@ -10,40 +10,40 @@ import (
 	"time"
 )
 
-const deleteForgottenAccounts = `-- name: DeleteForgottenAccounts :exec
+const deleteForgottenTargets = `-- name: DeleteForgottenTargets :exec
 DELETE FROM login_attempts
 WHERE delete_after <= $1
 `
 
-func (q *Queries) DeleteForgottenAccounts(ctx context.Context, now time.Time) error {
-	_, err := q.db.Exec(ctx, deleteForgottenAccounts, now)
+func (q *Queries) DeleteForgottenTargets(ctx context.Context, now time.Time) error {
+	_, err := q.db.Exec(ctx, deleteForgottenTargets, now)
 	return err
 }
 
-const forgetAccount = `-- name: ForgetAccount :exec
+const forgetTarget = `-- name: ForgetTarget :exec
 DELETE FROM login_attempts
-WHERE account = $1
+WHERE target = $1
 `
 
-func (q *Queries) ForgetAccount(ctx context.Context, account []byte) error {
-	_, err := q.db.Exec(ctx, forgetAccount, account)
+func (q *Queries) ForgetTarget(ctx context.Context, target []byte) error {
+	_, err := q.db.Exec(ctx, forgetTarget, target)
 	return err
 }
 
-const lockAccount = `-- name: LockAccount :one
+const lockTarget = `-- name: LockTarget :one
 
-INSERT INTO login_attempts AS a (account, attempts, next_attempt, delete_after)
+INSERT INTO login_attempts AS a (target, attempts, next_attempt, delete_after)
 VALUES ($1, 0, $2, $2)
-ON CONFLICT (account) DO UPDATE SET attempts = a.attempts
+ON CONFLICT (target) DO UPDATE SET attempts = a.attempts
 RETURNING attempts, next_attempt, delete_after
 `
 
-type LockAccountParams struct {
-	Account []byte
-	Now     time.Time
+type LockTargetParams struct {
+	Target []byte
+	Now    time.Time
 }
 
-type LockAccountRow struct {
+type LockTargetRow struct {
 	Attempts    int32
 	NextAttempt time.Time
 	DeleteAfter time.Time
@@ -51,14 +51,14 @@ type LockAccountRow struct {
 
 // Every time is pulsar's, passed in: no query reads the database's clock,
 // so that tests control it.
-// Returns the account's count, adding one already forgotten if it has
+// Returns the Target's count, adding one already forgotten if it has
 // none, and locks its row until the transaction ends. The update changes
 // nothing; it is there because ON CONFLICT DO UPDATE, unlike a SELECT
 // after an INSERT, cannot find the row gone when a success or the periodic
 // deletion deletes it between the two.
-func (q *Queries) LockAccount(ctx context.Context, arg LockAccountParams) (LockAccountRow, error) {
-	row := q.db.QueryRow(ctx, lockAccount, arg.Account, arg.Now)
-	var i LockAccountRow
+func (q *Queries) LockTarget(ctx context.Context, arg LockTargetParams) (LockTargetRow, error) {
+	row := q.db.QueryRow(ctx, lockTarget, arg.Target, arg.Now)
+	var i LockTargetRow
 	err := row.Scan(&i.Attempts, &i.NextAttempt, &i.DeleteAfter)
 	return i, err
 }
@@ -66,14 +66,14 @@ func (q *Queries) LockAccount(ctx context.Context, arg LockAccountParams) (LockA
 const recordAttempt = `-- name: RecordAttempt :exec
 UPDATE login_attempts
 SET attempts = $1, next_attempt = $2, delete_after = $3
-WHERE account = $4
+WHERE target = $4
 `
 
 type RecordAttemptParams struct {
 	Attempts    int32
 	NextAttempt time.Time
 	DeleteAfter time.Time
-	Account     []byte
+	Target      []byte
 }
 
 func (q *Queries) RecordAttempt(ctx context.Context, arg RecordAttemptParams) error {
@@ -81,7 +81,7 @@ func (q *Queries) RecordAttempt(ctx context.Context, arg RecordAttemptParams) er
 		arg.Attempts,
 		arg.NextAttempt,
 		arg.DeleteAfter,
-		arg.Account,
+		arg.Target,
 	)
 	return err
 }
