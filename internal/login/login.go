@@ -17,8 +17,7 @@
 // whose username is given, or against the username if no End-User has it,
 // and one that comes too soon after too many without a success gets 429
 // before its password is checked (RFC 6749 §10.10). One that finds no room
-// to check its password gets 503, and still counts, so that keeping the
-// replica busy earns no attempts back.
+// to check its password gets 503 before it is counted.
 package login
 
 import (
@@ -65,6 +64,14 @@ const maxFormSize = 64 << 10
 // failedLogin is all a failed login says, whatever the reason, so that the
 // page does not tell which usernames exist.
 const failedLogin = "The username or password is incorrect."
+
+// busy is what a login refused for want of room to check its password
+// says.
+const busy = "Too many sign-ins are being checked. Try again in a moment."
+
+// errTooSoon ends a login that comes before the next may be made, before
+// its password is checked.
+var errTooSoon = errors.New("login: too soon after the last")
 
 // Headers of every page this package serves. The page is personal and
 // must not be cached. It runs no script and loads nothing, and no other
@@ -270,24 +277,41 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	username := r.PostForm.Get("username")
-	target := h.target(username)
-	wait, err := h.limiter.Attempt(ctx, target)
-	if err != nil {
-		h.fail(w, r, err)
-		return
+	// The login is counted once there is room to check its password, and
+	// before it is checked: against the End-User who has the username, if
+	// one does, and against the username otherwise. Each is one HMAC, so
+	// neither tells which usernames exist by its time.
+	var (
+		target guessing.Target
+		wait   time.Duration
+	)
+	admit := func(u *registry.EndUser) error {
+		if u != nil {
+			target = h.limiter.EndUser(u.Subject)
+		} else {
+			target = h.limiter.Username(username)
+		}
+		var err error
+		if wait, err = h.limiter.Attempt(ctx, target); err != nil {
+			return err
+		}
+		if wait > 0 {
+			return errTooSoon
+		}
+		return nil
 	}
-	if wait > 0 {
+	u, ok, err := h.sessions.registry.AuthenticateEndUser(ctx, username, r.PostForm.Get("password"), admit)
+	switch {
+	case errors.Is(err, errTooSoon):
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait/time.Second)))
 		h.render(w, r, http.StatusTooManyRequests, page{Username: username, Error: tooManyAttempts(wait)})
 		return
-	}
-	u, ok, err := h.sessions.registry.AuthenticateEndUser(ctx, username, r.PostForm.Get("password"))
-	switch {
 	case errors.Is(err, registry.ErrBusy):
 		// Too many logins and token requests at once on this replica
-		// (RFC 9110 §15.6.4).
+		// (RFC 9110 §15.6.4). The login is not counted, so it may be made
+		// again at once.
 		w.Header().Set("Retry-After", "1")
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		h.render(w, r, http.StatusServiceUnavailable, page{Username: username, Error: busy})
 		return
 	case err != nil:
 		h.fail(w, r, err)
@@ -337,17 +361,6 @@ func (h *handler) continueAfterLogin(w http.ResponseWriter, r *http.Request) {
 		next = h.continuePath + "?" + r.URL.RawQuery
 	}
 	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next is a fixed path on this origin; the query cannot change it.
-}
-
-// target returns what a login as username is counted against: the
-// End-User who has the username, if one does, and the username otherwise.
-// Each is one map lookup and one HMAC, so neither tells which usernames
-// exist by its time.
-func (h *handler) target(username string) guessing.Target {
-	if u, ok := h.sessions.registry.EndUserNamed(username); ok {
-		return h.limiter.EndUser(u.Subject)
-	}
-	return h.limiter.Username(username)
 }
 
 // tooManyAttempts is what a login refused for coming too soon says: how

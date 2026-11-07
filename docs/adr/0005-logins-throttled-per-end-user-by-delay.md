@@ -37,9 +37,13 @@ instead, and are not counted. The evidence is in
   password spraying waits for a deployment that needs it.
 - An attempt is counted before its password is checked, so that a burst
   of attempts at once cannot slip past the count. More than five logins
-  at once as one End-User therefore wait, even if each would succeed, and
-  a login refused with 503 for want of capacity to check its password
-  still counts, so that keeping a replica busy earns no attempts back.
+  at once as one End-User therefore wait, even if each would succeed.
+- An attempt is counted only once there is room to check its password,
+  so that one refused with 503 for want of room is not counted. Otherwise
+  anyone could fill the room, with Client authentications, which are not
+  counted, and End-Users retrying would use up their own attempts; and
+  logins with made-up usernames could add counts faster than passwords
+  can be checked.
 - A username no End-User has is counted like one that exists, so a 429
   does not reveal which usernames exist.
 - What a count is kept against is stored as an HMAC under a key derived
