@@ -284,9 +284,13 @@ func (b *browser) signInAs(resp response, username, password string) response {
 	if loginURL.Path != loginPath {
 		b.t.Fatalf("authorization request redirected to %q, want the login page %q", loginURL, loginPath)
 	}
-	signInMu.Lock()
-	resp = b.send(http.MethodPost, loginURL.RequestURI(), url.Values{"username": {username}, "password": {password}})
-	signInMu.Unlock()
+	resp = func() response {
+		// Unlocked by defer, so that a test that fails in send does not
+		// leave every other test that signs in waiting.
+		signInMu.Lock()
+		defer signInMu.Unlock()
+		return b.send(http.MethodPost, loginURL.RequestURI(), url.Values{"username": {username}, "password": {password}})
+	}()
 	return b.send(http.MethodGet, location(b.t, resp).RequestURI(), nil)
 }
 

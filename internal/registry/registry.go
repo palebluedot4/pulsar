@@ -33,10 +33,11 @@
 // Each Argon2id verification takes the memory its hash's m parameter asks
 // for, and a registry runs at most as many at once as fill GOMAXPROCS, as
 // it is when the registry is parsed, times the memory of its largest hash:
-// as many of the largest as there are CPUs to run them, as libsodium
-// advises and Keycloak does, and more of smaller ones. A verification that finds no room waits for it, for up to
-// two seconds, and is then refused with [ErrBusy], so that logins and
-// token requests cannot together take more memory than that
+// GOMAXPROCS of the largest, as libsodium advises one per CPU core and
+// Keycloak caps its own at the number of cores, and more of smaller ones.
+// A verification that finds no room waits for it, for up to two seconds,
+// and is then refused with [ErrBusy], so that logins and token requests
+// cannot together take more memory than that
 // (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
 package registry
 
@@ -259,14 +260,20 @@ func (r *Registry) largestHash() int64 {
 
 // verify reports whether password hashes to h, once there is room to
 // verify it, and returns ErrBusy if there is none within hashWait or ctx
-// ends first.
-func (r *Registry) verify(ctx context.Context, h passwordHash, password string) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, hashWait)
+// ends first. With room, and before verifying, it calls admit, if not nil,
+// and returns its error, if any, without verifying.
+func (r *Registry) verify(ctx context.Context, h passwordHash, password string, admit func() error) (bool, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, hashWait)
 	defer cancel()
-	if err := r.hashing.Acquire(ctx, int64(h.memory)); err != nil {
+	if err := r.hashing.Acquire(waitCtx, int64(h.memory)); err != nil {
 		return false, ErrBusy
 	}
 	defer r.hashing.Release(int64(h.memory))
+	if admit != nil {
+		if err := admit(); err != nil {
+			return false, err
+		}
+	}
 	return h.verify(password), nil
 }
 
@@ -494,7 +501,7 @@ func (r *Registry) AuthenticateClientSecret(ctx context.Context, method AuthMeth
 	if !ok || c.AuthMethod != method || c.secretHash == nil {
 		return nil, false, nil
 	}
-	if match, err := r.verify(ctx, *c.secretHash, secret); !match {
+	if match, err := r.verify(ctx, *c.secretHash, secret, nil); !match {
 		return nil, false, err
 	}
 	return c, true, nil
@@ -506,28 +513,33 @@ func (r *Registry) EndUser(subject string) (*EndUser, bool) {
 	return u, ok
 }
 
-// EndUserNamed returns the End-User whose username is username.
-func (r *Registry) EndUserNamed(username string) (*EndUser, bool) {
-	u, ok := r.usernames[username]
-	return u, ok
-}
-
 // AuthenticateEndUser returns the End-User whose username and password
 // these are. It takes as long whether or not the username exists: a
 // username no End-User has is checked against a decoy hash, and never
 // matches. The error is ErrBusy if there was no room to check the
 // password.
-func (r *Registry) AuthenticateEndUser(ctx context.Context, username, password string) (*EndUser, bool, error) {
+//
+// Once there is room, and before checking the password, it calls admit,
+// if not nil, with the End-User who has the username, or nil if none does;
+// if admit returns an error, it returns that error without checking the
+// password. A login is counted there, so that one refused for want of
+// room is not counted, and logins cannot be counted faster than they can
+// be checked. admit runs while the room is held.
+func (r *Registry) AuthenticateEndUser(ctx context.Context, username, password string, admit func(*EndUser) error) (*EndUser, bool, error) {
 	u, ok := r.usernames[username]
+	var admitHash func() error
+	if admit != nil {
+		admitHash = func() error { return admit(u) }
+	}
 	if !ok {
 		if len(r.usernames) > 0 {
-			if _, err := r.verify(ctx, r.decoy, password); err != nil {
+			if _, err := r.verify(ctx, r.decoy, password, admitHash); err != nil {
 				return nil, false, err
 			}
 		}
 		return nil, false, nil
 	}
-	if match, err := r.verify(ctx, u.passwordHash, password); !match {
+	if match, err := r.verify(ctx, u.passwordHash, password, admitHash); !match {
 		return nil, false, err
 	}
 	return u, true, nil

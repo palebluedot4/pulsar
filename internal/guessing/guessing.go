@@ -111,16 +111,18 @@ func (l *Limiter) target(kind, name string) Target {
 // returns how long until it may be, rounded up to a whole second, as
 // Retry-After states it.
 func (l *Limiter) Attempt(ctx context.Context, target Target) (time.Duration, error) {
-	now := time.Now()
 	var wait time.Duration
 	err := pgx.BeginFunc(ctx, l.db, func(tx pgx.Tx) error {
 		q := queries.New(tx)
 		// The row stays locked until the transaction ends, so that
 		// attempts at one Target are counted one at a time.
-		row, err := q.LockTarget(ctx, queries.LockTargetParams{Target: target.mac, Now: now})
+		row, err := q.LockTarget(ctx, queries.LockTargetParams{Target: target.mac, Now: time.Now()})
 		if err != nil {
 			return err
 		}
+		// The attempt is made once the row is locked, which may follow
+		// others' attempts at the Target, and so is timed then.
+		now := time.Now()
 		attempts := row.Attempts
 		switch {
 		case !now.Before(row.DeleteAfter):

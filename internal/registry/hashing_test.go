@@ -57,7 +57,7 @@ func TestVerificationCap(t *testing.T) {
 			t.Fatal(err)
 		}
 		start := time.Now()
-		if _, ok, err := reg.AuthenticateEndUser(ctx, "alice", password); !ok || err != nil {
+		if _, ok, err := reg.AuthenticateEndUser(ctx, "alice", password, nil); !ok || err != nil {
 			t.Fatalf("AuthenticateEndUser(alice) with room for it = %v, %v; want true, nil", ok, err)
 		}
 		if waited := time.Since(start); waited != 0 {
@@ -70,11 +70,11 @@ func TestVerificationCap(t *testing.T) {
 		}
 		attempts := map[string]func() error{
 			"AuthenticateEndUser(alice)": func() error {
-				_, _, err := reg.AuthenticateEndUser(ctx, "alice", password)
+				_, _, err := reg.AuthenticateEndUser(ctx, "alice", password, nil)
 				return err
 			},
 			"AuthenticateEndUser(carol)": func() error {
-				_, _, err := reg.AuthenticateEndUser(ctx, "carol", password)
+				_, _, err := reg.AuthenticateEndUser(ctx, "carol", password, nil)
 				return err
 			},
 			"AuthenticateClientSecret(rp)": func() error {
@@ -91,6 +91,14 @@ func TestVerificationCap(t *testing.T) {
 				t.Errorf("%s without room waited %v, want %v", name, waited, 2*time.Second)
 			}
 		}
+		// A login refused for want of room is not admitted, and so not
+		// counted.
+		if _, _, err := reg.AuthenticateEndUser(ctx, "alice", password, func(*EndUser) error {
+			t.Error("AuthenticateEndUser(alice) without room called admit")
+			return nil
+		}); !errors.Is(err, ErrBusy) {
+			t.Errorf("AuthenticateEndUser(alice) without room, with admit = %v, want %v", err, ErrBusy)
+		}
 
 		// Room made while it waits lets it through then.
 		go func() {
@@ -98,11 +106,59 @@ func TestVerificationCap(t *testing.T) {
 			reg.hashing.Release(1)
 		}()
 		start = time.Now()
-		if _, ok, err := reg.AuthenticateEndUser(ctx, "alice", password); !ok || err != nil {
+		if _, ok, err := reg.AuthenticateEndUser(ctx, "alice", password, nil); !ok || err != nil {
 			t.Fatalf("AuthenticateEndUser(alice) with room made a second later = %v, %v; want true, nil", ok, err)
 		}
 		if waited := time.Since(start); waited != time.Second {
 			t.Errorf("AuthenticateEndUser(alice) with room made a second later waited %v, want %v", waited, time.Second)
 		}
 	})
+}
+
+// AuthenticateEndUser calls admit once there is room to check the
+// password, with the End-User who has the username, or nil for a username
+// no End-User has, and returns admit's error without checking the
+// password, so that even the right one does not sign in.
+func TestAuthenticateEndUserAdmit(t *testing.T) {
+	t.Parallel()
+
+	const password = "correct horse battery staple"
+	reg, err := Parse([]byte(`{"end_users": [{"sub": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "username": "alice",
+		"password_hash": "` + hashOf(t, password, 64) + `"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("refused")
+	tests := []struct {
+		username    string
+		admitErr    error
+		wantSubject string // of the End-User admit is called with, or "" for nil
+		wantOK      bool
+		wantErr     error
+	}{
+		{username: "alice", wantSubject: "7c9e6679-7425-40de-944b-e07fc1f90ae7", wantOK: true},
+		{username: "alice", admitErr: refused, wantSubject: "7c9e6679-7425-40de-944b-e07fc1f90ae7", wantErr: refused},
+		{username: "carol"},
+		{username: "carol", admitErr: refused, wantErr: refused},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s/%v", tt.username, tt.admitErr), func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			var gotSubject string
+			_, ok, err := reg.AuthenticateEndUser(t.Context(), tt.username, password, func(u *EndUser) error {
+				calls++
+				if u != nil {
+					gotSubject = u.Subject
+				}
+				return tt.admitErr
+			})
+			if ok != tt.wantOK || !errors.Is(err, tt.wantErr) {
+				t.Errorf("AuthenticateEndUser(%s) with admit returning %v = %v, %v; want %v, %v", tt.username, tt.admitErr, ok, err, tt.wantOK, tt.wantErr)
+			}
+			if calls != 1 || gotSubject != tt.wantSubject {
+				t.Errorf("AuthenticateEndUser(%s) called admit %d times with Subject %q, want once with %q", tt.username, calls, gotSubject, tt.wantSubject)
+			}
+		})
+	}
 }
