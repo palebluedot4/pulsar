@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,8 +55,9 @@ type tokenResponse struct {
 // tokenError is a token error response (RFC 6749 §5.2).
 type tokenError struct {
 	status      int
-	Code        string `json:"error"`
-	Description string `json:"error_description,omitempty"`
+	retryAfter  time.Duration // sent as Retry-After, if not 0
+	Code        string        `json:"error"`
+	Description string        `json:"error_description,omitempty"`
 }
 
 // HandleToken serves the token endpoint, by POST (RFC 6749 §3.2). It
@@ -84,6 +86,9 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 			// RFC 6749 §5.2: the scheme the Client used, or, if it used
 			// none, the one pulsar supports.
 			h.Set("WWW-Authenticate", `Basic realm="`+p.issuer.String()+`"`)
+		}
+		if tokErr.retryAfter > 0 {
+			h.Set("Retry-After", strconv.Itoa(int(tokErr.retryAfter/time.Second)))
 		}
 		writeJSON(w, tokErr.status, tokErr)
 		return
@@ -188,7 +193,7 @@ func (p *Provider) authenticateClient(r *http.Request, params url.Values) (*regi
 	case usesHeader:
 		return p.authenticateBasic(r, params)
 	case usesBody:
-		return p.authenticatePost(params)
+		return p.authenticatePost(r.Context(), params)
 	case usesAssertion:
 		return p.authenticateAssertion(r.Context(), params)
 	default:
@@ -226,12 +231,8 @@ func unauthorized() *tokenError {
 // client_secret_post by the client_id and client_secret in the request
 // body (RFC 6749 §2.3.1). The body is the only place parameters are read
 // from, so the two are never taken from the request URI.
-func (p *Provider) authenticatePost(params url.Values) (*registry.Client, *tokenError) {
-	client, ok := p.registry.AuthenticateClientSecret(registry.ClientSecretPost, params.Get("client_id"), params.Get("client_secret"))
-	if !ok {
-		return nil, unauthorized()
-	}
-	return client, nil
+func (p *Provider) authenticatePost(ctx context.Context, params url.Values) (*registry.Client, *tokenError) {
+	return p.authenticateSecret(ctx, registry.ClientSecretPost, params.Get("client_id"), params.Get("client_secret"))
 }
 
 // authenticateBasic authenticates a Client registered for
@@ -250,8 +251,32 @@ func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*regis
 	if bodyID := params.Get("client_id"); bodyID != "" && bodyID != id {
 		return nil, badRequest(errInvalidRequest, "The client_id does not match the authenticated client.")
 	}
-	client, ok := p.registry.AuthenticateClientSecret(registry.ClientSecretBasic, id, secret)
-	if !ok {
+	return p.authenticateSecret(r.Context(), registry.ClientSecretBasic, id, secret)
+}
+
+// authenticateSecret authenticates the Client whose client_id and secret
+// these are, if it registered method. A Client secret must be at least
+// 256 random bits (RFC 6749 §10.10, RFC 6819 §5.1.4.2.2), so its attempts
+// are not counted, as an End-User's are: guessing cannot find one, and a
+// count would let anyone who knows a client_id, which is public, hold up
+// that Client's token requests (docs/adr/0005-guessing-throttled-per-account-by-delay.md).
+//
+// No error code of RFC 6749 §5.2 is for a request refused for want of
+// capacity to check its secret, so it gets temporarily_unavailable, which
+// §4.1.2.1 defines for the authorization endpoint.
+func (p *Provider) authenticateSecret(ctx context.Context, method registry.AuthMethod, id, secret string) (*registry.Client, *tokenError) {
+	client, ok, err := p.registry.AuthenticateClientSecret(ctx, method, id, secret)
+	switch {
+	case err != nil:
+		// The only error is registry.ErrBusy: too many logins and token
+		// requests at once on this replica (RFC 9110 §15.6.4).
+		return nil, &tokenError{
+			status:      http.StatusServiceUnavailable,
+			retryAfter:  time.Second,
+			Code:        errTemporarilyUnavailable,
+			Description: "The server is too busy to authenticate the client.",
+		}
+	case !ok:
 		return nil, unauthorized()
 	}
 	return client, nil

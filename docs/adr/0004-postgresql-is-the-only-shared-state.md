@@ -22,5 +22,6 @@ an OP, so the reasons are recorded here; the evidence is in
 - Discovery and JWKS responses carry `Cache-Control`, so Clients and
   resource servers do the caching.
 - Redis is reconsidered when measurement shows PostgreSQL to be a latency or
-  connection bottleneck, or when a need such as login throttling across
-  replicas cannot be met with PostgreSQL.
+  connection bottleneck, or when a need cannot be met with PostgreSQL.
+  Login throttling across replicas is met with it
+  ([ADR 0005](0005-guessing-throttled-per-account-by-delay.md)).

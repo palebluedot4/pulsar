@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/login"
 	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/registry"
@@ -21,7 +22,7 @@ const readyTimeout = 2 * time.Second
 // addRoutes maps pulsar's entire HTTP surface. The protocol endpoints and
 // the login page sit under the issuer's path; the operational ones at the
 // root.
-func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, pool *pgxpool.Pool, keys *signing.KeySet, reg *registry.Registry, ready <-chan struct{}) {
+func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, pool *pgxpool.Pool, keys *signing.KeySet, reg *registry.Registry, attempts *guessing.Limiter, ready <-chan struct{}) {
 	mux.Handle("GET /livez", handleLive())
 	mux.Handle("GET /readyz", handleReady(pool, ready))
 	mux.Handle("GET "+oidc.DiscoveryPath(issuer), oidc.HandleDiscovery(issuer))
@@ -33,7 +34,7 @@ func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, poo
 	loginPath := issuer.Route(login.Path)
 	authorizationPath := oidc.AuthorizationPath(issuer)
 	sessions := login.NewSessions(pool, reg)
-	loginPage := whenReady(ready, sessions.Handler(loginPath, authorizationPath, logger))
+	loginPage := whenReady(ready, sessions.Handler(loginPath, authorizationPath, attempts, logger))
 	mux.Handle("GET "+loginPath, loginPage)
 	mux.Handle("POST "+loginPath, loginPage)
 	consentPath := issuer.Route(login.ConsentPath)

@@ -80,6 +80,7 @@ const (
 	errUnsupportedResponseType = "unsupported_response_type"
 	errInvalidScope            = "invalid_scope"
 	errServerError             = "server_error"
+	errTemporarilyUnavailable  = "temporarily_unavailable"
 	errRequestNotSupported     = "request_not_supported"
 	errRequestURINotSupported  = "request_uri_not_supported"
 )

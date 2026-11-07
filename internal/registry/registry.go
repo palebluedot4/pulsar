@@ -29,9 +29,19 @@
 // The file is decoded strictly: a member pulsar does not know, a member
 // given twice, or one in another case is an error, so that a misspelled
 // setting is refused rather than ignored.
+//
+// Each Argon2id verification takes the memory its hash's m parameter asks
+// for, and a registry runs at most as many at once as fill GOMAXPROCS, as
+// it is when the registry is parsed, times the memory of its largest hash: as many of the largest as there
+// are CPUs to run them, as libsodium advises and Keycloak does, and more of
+// smaller ones. A verification that finds no room waits for it, for up to
+// two seconds, and is then refused with [ErrBusy], so that logins and
+// token requests cannot together take more memory than that
+// (docs/adr/0005-guessing-throttled-per-account-by-delay.md).
 package registry
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -41,10 +51,22 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	"golang.org/x/sync/semaphore"
 )
+
+// hashWait is how long a verification waits for room before it is
+// refused: long enough to ride out a burst of logins, short enough that a
+// replica overloaded for longer refuses requests rather than pile them up.
+const hashWait = 2 * time.Second
+
+// ErrBusy is the error of an authentication that found no room to verify
+// its password or secret within two seconds, or whose context ended first.
+var ErrBusy = errors.New("registry: too many passwords and secrets are being verified")
 
 // AuthMethod is a Client's token_endpoint_auth_method.
 type AuthMethod string
@@ -57,8 +79,8 @@ const (
 	None              AuthMethod = "none"
 )
 
-// Registry is the set of Clients and End-Users. It never changes once
-// loaded, so it is safe for concurrent use.
+// Registry is the set of Clients and End-Users. They never change once
+// loaded, and it is safe for concurrent use.
 type Registry struct {
 	clients   map[string]*Client  // by client_id
 	endUsers  map[string]*EndUser // by Subject
@@ -70,6 +92,10 @@ type Registry struct {
 	// hash has the same parameters does, as hashes made by one command
 	// have.
 	decoy passwordHash
+
+	// hashing holds, in KiB, the memory the verifications running take,
+	// and is nil if the registry has no hash to verify.
+	hashing *semaphore.Weighted
 }
 
 // Client is a registered Client.
@@ -210,7 +236,38 @@ func Parse(data []byte) (*Registry, error) {
 	if len(f.EndUsers) > 0 {
 		r.decoy = decoyFor(r.usernames[f.EndUsers[0].Username].passwordHash)
 	}
+	if largest := r.largestHash(); largest > 0 {
+		r.hashing = semaphore.NewWeighted(int64(runtime.GOMAXPROCS(0)) * largest)
+	}
 	return r, nil
+}
+
+// largestHash returns the memory, in KiB, of the largest hash in r, or 0
+// if it has none.
+func (r *Registry) largestHash() int64 {
+	var largest uint32
+	for _, c := range r.clients {
+		if c.secretHash != nil {
+			largest = max(largest, c.secretHash.memory)
+		}
+	}
+	for _, u := range r.endUsers {
+		largest = max(largest, u.passwordHash.memory)
+	}
+	return int64(largest)
+}
+
+// verify reports whether password hashes to h, once there is room to
+// verify it, and returns ErrBusy if there is none within hashWait or ctx
+// ends first.
+func (r *Registry) verify(ctx context.Context, h passwordHash, password string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, hashWait)
+	defer cancel()
+	if err := r.hashing.Acquire(ctx, int64(h.memory)); err != nil {
+		return false, ErrBusy
+	}
+	defer r.hashing.Release(int64(h.memory))
+	return h.verify(password), nil
 }
 
 // decoyFor returns a password hash that no password is known to match,
@@ -431,16 +488,16 @@ func (r *Registry) Client(id string) (*Client, bool) {
 // these are, if it registered method, which must be client_secret_basic
 // or client_secret_post, so that a Client cannot authenticate by a method
 // other than its own. The secret is checked against its Argon2id hash in
-// constant time.
-func (r *Registry) AuthenticateClientSecret(method AuthMethod, id, secret string) (*Client, bool) {
+// constant time. The error is ErrBusy if there was no room to check it.
+func (r *Registry) AuthenticateClientSecret(ctx context.Context, method AuthMethod, id, secret string) (*Client, bool, error) {
 	c, ok := r.clients[id]
 	if !ok || c.AuthMethod != method || c.secretHash == nil {
-		return nil, false
+		return nil, false, nil
 	}
-	if !c.secretHash.verify(secret) {
-		return nil, false
+	if ok, err := r.verify(ctx, *c.secretHash, secret); !ok {
+		return nil, false, err
 	}
-	return c, true
+	return c, true, nil
 }
 
 // EndUser returns the End-User whose Subject is subject.
@@ -449,20 +506,29 @@ func (r *Registry) EndUser(subject string) (*EndUser, bool) {
 	return u, ok
 }
 
+// EndUserNamed returns the End-User whose username is username.
+func (r *Registry) EndUserNamed(username string) (*EndUser, bool) {
+	u, ok := r.usernames[username]
+	return u, ok
+}
+
 // AuthenticateEndUser returns the End-User whose username and password
 // these are. It takes as long whether or not the username exists: a
 // username no End-User has is checked against a decoy hash, and never
-// matches.
-func (r *Registry) AuthenticateEndUser(username, password string) (*EndUser, bool) {
+// matches. The error is ErrBusy if there was no room to check the
+// password.
+func (r *Registry) AuthenticateEndUser(ctx context.Context, username, password string) (*EndUser, bool, error) {
 	u, ok := r.usernames[username]
 	if !ok {
 		if len(r.usernames) > 0 {
-			r.decoy.verify(password)
+			if _, err := r.verify(ctx, r.decoy, password); err != nil {
+				return nil, false, err
+			}
 		}
-		return nil, false
+		return nil, false, nil
 	}
-	if !u.passwordHash.verify(password) {
-		return nil, false
+	if ok, err := r.verify(ctx, u.passwordHash, password); !ok {
+		return nil, false, err
 	}
-	return u, true
+	return u, true, nil
 }

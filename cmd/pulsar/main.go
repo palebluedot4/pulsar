@@ -58,6 +58,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/login"
 	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres"
@@ -155,7 +156,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 	// until ready is closed, once the signing keys are loaded too.
 	ready := make(chan struct{})
 	srv := &http.Server{
-		Handler:           server.New(logger, cfg.Issuer, pool, keys, reg, ready),
+		Handler:           server.New(logger, cfg.Issuer, pool, keys, reg, guessing.New(pool, cfg.Secret[:]), ready),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
@@ -275,8 +276,9 @@ func rotateKeys(ctx context.Context, cfg config.Config, logger *slog.Logger) err
 const deletionInterval = 15 * time.Minute
 
 // runDeletion deletes the records due, every [deletionInterval] until ctx
-// is done: internal/oidc's codes, tokens and client assertions, and
-// internal/login's Login Sessions. Every replica runs it, with no lock
+// is done: internal/oidc's codes, tokens and client assertions,
+// internal/login's Login Sessions, and internal/guessing's forgotten
+// counts of login attempts. Every replica runs it, with no lock
 // between them, since each deletion is idempotent: one that fails because
 // another replica's conflicts with it, or for any other reason, is logged
 // and left for the next run.
@@ -294,6 +296,9 @@ func runDeletion(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
 			}
 			if err := login.DeleteEndedSessions(ctx, pool, now); err != nil && ctx.Err() == nil {
 				logger.ErrorContext(ctx, "delete ended login sessions", "error", err)
+			}
+			if err := guessing.DeleteDue(ctx, pool, now); err != nil && ctx.Err() == nil {
+				logger.ErrorContext(ctx, "delete forgotten login attempts", "error", err)
 			}
 		}
 	}

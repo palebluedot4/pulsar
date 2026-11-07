@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 	"github.com/palebluedot4/pulsar/internal/registry"
@@ -37,7 +38,7 @@ func ready() <-chan struct{} {
 // a key set that is never loaded.
 func newHandler(t *testing.T, issuer *oidc.Issuer, pool *pgxpool.Pool, ready <-chan struct{}) http.Handler {
 	t.Helper()
-	return New(slog.New(slog.NewTextHandler(t.Output(), nil)), issuer, pool, signing.New(pool, config.Secret{}), &registry.Registry{}, ready)
+	return New(slog.New(slog.NewTextHandler(t.Output(), nil)), issuer, pool, signing.New(pool, config.Secret{}), &registry.Registry{}, guessing.New(pool, nil), ready)
 }
 
 // newHandlerWithoutDatabase returns the handler for the OP at issuer, with
