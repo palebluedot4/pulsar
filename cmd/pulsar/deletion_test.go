@@ -17,7 +17,7 @@ import (
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
-// startDeleting runs deleteDue against pool, logging to logger, until the
+// startDeleting runs runDeletion against pool, logging to logger, until the
 // test ends, and waits for it to return then.
 func startDeleting(t *testing.T, pool *pgxpool.Pool, logger *slog.Logger) {
 	t.Helper()
@@ -25,7 +25,7 @@ func startDeleting(t *testing.T, pool *pgxpool.Pool, logger *slog.Logger) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		deleteDue(ctx, pool, logger)
+		runDeletion(ctx, pool, logger)
 	}()
 	t.Cleanup(func() {
 		cancel()

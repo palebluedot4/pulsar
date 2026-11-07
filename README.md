@@ -33,9 +33,10 @@ is out of the registry, no code or refresh token issued for them is
 redeemed, and UserInfo refuses their access tokens; a Client out of the
 registry cannot authenticate, so it redeems neither. Removal revokes
 nothing, so one added back has the tokens not yet expired again. Every
-15 minutes, each replica deletes the records no longer needed: expired
-codes, access tokens, client assertions and Login Sessions, and ended
-Refresh Token Families with their refresh tokens. `pulsar keys
+15 minutes, each replica deletes the codes no longer kept for a second
+redemption to revoke, the expired access tokens, client assertions and
+Login Sessions, and the ended Refresh Token Families with their refresh
+tokens. `pulsar keys
 rotate` rotates the signing key. The OpenID conformance
 suite's Config OP and Basic OP plans run against it in CI; on 2026-11-06,
 at commit `8d6ab47`, they finished with no failures, as [Checking
