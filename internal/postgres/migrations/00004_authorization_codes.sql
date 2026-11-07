@@ -23,11 +23,11 @@ CREATE TABLE authorization_codes (
     -- When the code expires, by pulsar's clock: 60 seconds after issue.
     expiry timestamptz NOT NULL,
     -- Whether a token request has redeemed the code. A redeemed code is
-    -- kept until the access tokens issued from it have expired too, and
-    -- while the Refresh Token Family it started lives. A valid second
-    -- redemption revokes them, found by its code_hash; it needs this row
-    -- to show that its parameters are the code's (#49, #52, migrations
-    -- 00009 and 00011).
+    -- kept while the tokens issued from it may still be revoked, until
+    -- the time migration 00012 records. A valid second redemption revokes
+    -- them, found by its code_hash; it needs this row to show that its
+    -- parameters are the code's (#49, #52, #53, migrations 00009 and
+    -- 00011).
     redeemed boolean NOT NULL DEFAULT false
 );
 

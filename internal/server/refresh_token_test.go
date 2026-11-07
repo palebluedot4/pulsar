@@ -17,6 +17,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
 
@@ -706,7 +707,7 @@ func TestRevocationWaitsForRefreshInProgress(t *testing.T) {
 				{"marking the newest refresh token used", "UPDATE refresh_tokens SET used = true WHERE token_hash = $1", []any{newestHash[:]}},
 				{
 					"moving the access token's record to the family",
-					"UPDATE access_tokens a SET family_id = f.id, code_hash = f.code_hash FROM refresh_token_families f WHERE f.code_hash = $1 AND a.jti = $2",
+					"UPDATE access_tokens SET code_hash = $1 WHERE jti = $2",
 					[]any{codeHash[:], verify(t, handler, accessToken).claims["jti"]},
 				},
 			} {
@@ -722,6 +723,120 @@ func TestRevocationWaitsForRefreshInProgress(t *testing.T) {
 			if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
 				t.Errorf("UserInfo with the access token of the refresh in progress error = %q, want %q", got, "invalid_token")
 			}
+		})
+	}
+}
+
+// REQ-OAUTH-42, REQ-OAUTH-14, REQ-OAUTH-35: once a Client is removed from
+// the registry, a refresh from it fails with 401 and invalid_client, since
+// it cannot authenticate; once an End-User is removed, a refresh token
+// issued for them fails with 400 and invalid_grant. Neither revokes
+// anything: started again with the Client or End-User back in the
+// registry, against the same database, pulsar redeems the refresh token.
+func TestRefreshTokenRegistryRemovals(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	tests := []struct {
+		name       string
+		client     pkceClient
+		verifier   string
+		removed    string // the client_id or sub removed from the registry
+		wantStatus int
+		wantError  string
+	}{
+		{name: "confidential Client removed", client: rpNoPKCE, removed: "rp", wantStatus: http.StatusUnauthorized, wantError: "invalid_client"},
+		{name: "public Client removed", client: publicPKCE, verifier: pkceVerifier, removed: "public", wantStatus: http.StatusUnauthorized, wantError: "invalid_client"},
+		{name: "End-User removed", client: rpNoPKCE, removed: aliceSubject, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			first := tt.client.offlineTokens(t, handler, tt.verifier, nil)
+			removed := newFlowHandlerFor(t, pool, flowRegistryWithout(t, tt.removed))
+			if got := tokenErrorCode(t, tt.client.refresh(t, removed, first.RefreshToken, ""), tt.wantStatus); got != tt.wantError {
+				t.Errorf("POST %s with %s from the registry error = %q, want %q", tokenPath, tt.removed, got, tt.wantError)
+			}
+			tokenResponseOf(t, tt.client.refresh(t, handler, first.RefreshToken, ""))
+		})
+	}
+}
+
+// REQ-OAUTH-29, REQ-BCP-9: a redeemed code is kept, and deleted once
+// tokens are next issued after its tokens can no longer be revoked: once
+// the access token issued from it has expired, or, if it started a Refresh
+// Token Family, once the family has ended, whatever the code's own expiry;
+// or once the family has been revoked, by a refresh token presented again
+// or by the code redeemed again. A family and its refresh tokens are kept
+// until it ends, revoked or not, and then deleted.
+func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
+	t.Parallel()
+
+	const day = 24 * time.Hour
+	tests := []struct {
+		name    string
+		offline bool
+		// revoke is how the family is revoked, if at all: by "refresh", a
+		// refresh token presented again, or by "code", a second redemption.
+		revoke string
+		wait   time.Duration // between the code's redemption and the cleanup
+		// Whether the code's record is kept, and the family's with its
+		// refresh tokens.
+		wantCode, wantFamily bool
+	}{
+		{name: "without offline access, a second before its access token expires", wait: oidc.TokenLifetime - time.Second, wantCode: true},
+		{name: "without offline access, once its access token expired", wait: oidc.TokenLifetime},
+		{name: "a second before the family ends", offline: true, wait: 30*day - time.Second, wantCode: true, wantFamily: true},
+		{name: "once the family ended", offline: true, wait: 30 * day},
+		{name: "once a refresh token is presented again", offline: true, revoke: "refresh", wantFamily: true},
+		{name: "once the code is redeemed again", offline: true, revoke: "code", wantFamily: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+			synctest.Test(t, func(t *testing.T) {
+				pool := newBubblePool(t, databaseURL)
+				handler := newFlowHandler(t, pool)
+				var c string
+				if tt.offline {
+					c = rpNoPKCE.offlineCode(t, handler, nil)
+				} else {
+					c = rpNoPKCE.code(t, handler)
+				}
+				first := tokenResponseOf(t, rpNoPKCE.redeem(t, handler, codeForm(c)))
+				switch tt.revoke {
+				case "refresh":
+					tokenResponseOf(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""))
+					tokenErrorCode(t, rpNoPKCE.refresh(t, handler, first.RefreshToken, ""), http.StatusBadRequest)
+				case "code":
+					tokenErrorCode(t, rpNoPKCE.redeem(t, handler, codeForm(c)), http.StatusBadRequest)
+				}
+				time.Sleep(tt.wait)
+				// Issuing a code deletes the codes due, and issuing tokens the
+				// families ended.
+				issuedTokens(t, handler, withScope("openid"))
+
+				codeHash := sha256.Sum256([]byte(c))
+				tokenHash := sha256.Sum256([]byte(first.RefreshToken))
+				var gotCode, gotFamily, gotRefreshToken bool
+				err := pool.QueryRow(t.Context(), `
+					SELECT EXISTS (SELECT FROM authorization_codes WHERE code_hash = $1),
+						EXISTS (SELECT FROM refresh_token_families WHERE code_hash = $1),
+						EXISTS (SELECT FROM refresh_tokens WHERE token_hash = $2)`,
+					codeHash[:], tokenHash[:],
+				).Scan(&gotCode, &gotFamily, &gotRefreshToken)
+				if err != nil {
+					t.Fatalf("looking for the code's, family's and refresh token's records: %v", err)
+				}
+				if gotCode != tt.wantCode {
+					t.Errorf("code's record kept = %t, want %t", gotCode, tt.wantCode)
+				}
+				if gotFamily != tt.wantFamily || gotRefreshToken != tt.wantFamily {
+					t.Errorf("family's record kept = %t, its refresh token's %t; want %t", gotFamily, gotRefreshToken, tt.wantFamily)
+				}
+			})
 		})
 	}
 }
