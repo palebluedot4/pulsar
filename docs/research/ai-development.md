@@ -3,6 +3,8 @@
 Surveyed 2026-11-04. Sources are weighted Anthropic and OpenAI first, then
 Google, then AWS, with IETF/OpenID specifications governing the product itself.
 Anything not confirmed against a primary source is marked **UNVERIFIED**.
+Five claims were corrected on 2026-11-09, after `docs/research/evals.md`
+rechecked them against their sources.
 
 ## The one-line consensus
 
@@ -51,8 +53,10 @@ read as "harness theater" — Canva's interview guide calls the pattern an
    - OpenAI: AGENTS.md of ~100 lines as a table of contents.
    - Thoughtworks Radar Vol. 34 (2026-04-15): context engineering _Adopt_;
      agent instruction bloat _Caution_. <https://www.thoughtworks.com/radar>
-   - Gloaguen et al., arXiv 2602.11988 (2026-02-12): LLM-generated context
-     files slightly lowered task success and raised cost by more than 20%.
+   - Gloaguen et al., arXiv 2602.11988 (v1 2026-02-12, v3 2026-09-29):
+     providing context files, LLM-generated or written by developers,
+     "does not generally improve task success rates" (v3) and raises
+     inference cost by over 20%.
 5. **The agent that wrote the code should not judge it.**
    - Prithvi Rajasekaran, "Harness design for long-running application
      development", 2026-03-24: agents praise their own mediocre work; a
@@ -139,7 +143,7 @@ Three distinct products, easily confused:
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
 | `/code-review`                        | Skill bundled in the Claude Code binary; runs as a forked subagent with its own context; effort `low`…`max`, plus `ultra`; `--fix`, `--comment`, `--max-findings` | Claude Code version                       |
 | `code-review@claude-plugins-official` | Open-source multi-agent PR review plugin                                                                                                                          | Marketplace repo commits (no version pin) |
-| Managed Code Review                   | GitHub app for Team/Enterprise plans, ~$15–25 and ~20 min per review                                                                                              | Anthropic-hosted                          |
+| Code Review (a managed service)       | GitHub app for Team/Enterprise plans, ~$15–25 and ~20 min per review                                                                                              | Anthropic-hosted                          |
 
 **The plugin's current command** (`plugins/code-review/commands/code-review.md`,
 revised 2026-01 to 2026-03, synced into the official marketplace 2026-10-26):
@@ -160,7 +164,7 @@ Principle: "We only want HIGH SIGNAL issues … False positives erode trust."
 The plugin's README still describes the earlier design (five Sonnet agents,
 then a Haiku scorer per issue with a 0–100 rubric, dropping anything below 80).
 
-**Managed Code Review** (launched 2026-03-09): find → verify (separate
+**Code Review**, "a managed service" (launched 2026-03-09): find → verify (separate
 verifier agents filter false positives) → rank by severity (Important, Nit,
 Pre-existing) → post. It reads `REVIEW.md` from the base branch. Reported
 internal results: substantive review comments rose from 16% to 54% of PRs;
@@ -270,9 +274,11 @@ returns 403). <https://openai.com/index/harness-engineering/>
 
 **Codex documentation** (read 2026-11-04):
 
-- AGENTS.md: one file per directory, nearest wins; 32 KiB default cap;
-  "add rules only after repeated mistakes".
+- AGENTS.md: one file per directory, nearest wins; 32 KiB default cap.
   <https://learn.chatgpt.com/docs/agent-configuration/agents-md>
+- When to add a rule, from the best-practices guide rather than the AGENTS.md
+  page: "When Codex makes the same mistake twice, ask it for a retrospective
+  and update `AGENTS.md`." <https://learn.chatgpt.com/guides/best-practices>
 - Code review flags only P0/P1 issues; review rules live in AGENTS.md.
   <https://learn.chatgpt.com/docs/third-party/github.md>
 - "A Practical Approach to Verifying Code at Scale" (2025-12-01): accepted
@@ -320,8 +326,10 @@ lightest) and team rituals versus a single developer orchestrating agents.
   OpenSpec are only _Assess_ on the Radar.
 - Ralph loops (_Assess_; its author recommends greenfield only), agent swarms
   and "dark factory" autonomy (_Caution_).
-- Throughput as a productivity measure (_Caution_). METR (2026-02-24) now
-  calls its own earlier slowdown data "an unreliable signal".
+- Throughput as a productivity measure (_Caution_). METR (2026-02-24) calls
+  the data from its new experiment, started in August 2025, "an unreliable
+  signal" of AI tools' current productivity effect, because of selection
+  effects.
   <https://metr.org/blog/2026-02-24-uplift-update/>
 - LLM-as-judge without calibration; MCP by default (_Caution_).
 
@@ -384,7 +392,9 @@ author's), then checked against primary sources.
   <https://martinfowler.com/articles/are-harnesses-worth-the-cost.html>
 - **Birgitta Böckeler, "TDD inside the agent loop - theater or actual
   value?"** (2026-08-10): "no clearly discernable difference based on TDD
-  workflow versus no TDD workflow", at 3–8.5× the tokens. She recommends
+  workflow versus no TDD workflow", at 2.96–8.50× the tokens (her heading
+  says "At least 3x"; the page prints no date, the series index gives
+  2026-08-10). She recommends
   outcome-based checks instead: mutation testing, automated outcome feedback,
   static analysis, structure reviews.
   <https://martinfowler.com/articles/exploring-gen-ai/tdd-in-the-agent-loop.html>

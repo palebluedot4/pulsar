@@ -1,20 +1,20 @@
 # Evals
 
-Evidence that a skill or harness control helps, rather than merely exists.
+Evidence that a skill helps, rather than merely exists.
 The method follows Anthropic's guidance
 (<https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents>,
 <https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices>):
 
 1. **Scenarios first.** Write at least three scenarios, drawn from real
-   tasks or failures, before writing the skill or control they test.
-2. **Baseline.** Run the scenarios without the skill or control. A result
+   tasks or failures, before writing the skill they test.
+2. **Baseline.** Run the scenarios without the skill. A result
    only means something next to its baseline.
 3. **Grade outcomes, not paths.** Each scenario states what a good result
    contains, checkably.
 4. **Repeat.** Agents are not deterministic; run each scenario several times
    and report how many of the runs passed, from which pass@k (any run
    passed) and pass^k (every run passed) can be read.
-5. **Ablate.** For a control already in place, remove it and rerun; a control
+5. **Ablate.** For a skill already in place, remove it and rerun; a skill
    that changes nothing is a candidate for removal.
 6. **Read the transcripts.** A pass for the wrong reason is a failure.
 
@@ -31,5 +31,6 @@ auto-updates off for the run (`docs/harness.md`).
   Raw runs land in the plugin's gitignored `evals/results/`; a short
   `results.md` beside the cases records what each run showed.
 - **Repository controls** (`AGENTS.md`, hooks, gates) cannot be evaluated
-  that way, since the plugin evaluator loads no project configuration. Their
-  ablation runner is #3.
+  that way, since the plugin evaluator loads no project configuration. They
+  are not evaluated at all: each names other evidence in `docs/harness.md`,
+  as the maintainer decided after `docs/research/evals.md`.

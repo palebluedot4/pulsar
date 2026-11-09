@@ -1,16 +1,16 @@
 # pulsar
 
-An OpenID Connect Provider in Go, built by AI agents under a harness that has
-to prove it helps. The provider is the artifact; the method is the subject.
-It is a reference implementation, not for production use. So far it serves
-liveness and readiness checks, its discovery document, its JWK Set, a login
-page that starts a Login Session, a consent page that remembers the scopes
-an End-User allows each Client, and the authorization code flow, with
-`prompt` and `max_age`, to an ID token and access token for Clients that
-authenticate with `client_secret_basic`, `client_secret_post` or
-`private_key_jwt`, and for public Clients, which must use PKCE with `S256`.
-A `private_key_jwt` assertion must name pulsar's issuer as its sole audience,
-as RFC 10070 requires, so one naming the token endpoint is refused. A public
+An OpenID Connect Provider in Go, built by AI agents under a harness in which
+every control names the evidence behind it. The provider is the artifact; the
+method is the subject. It is a reference implementation, not for production
+use. So far it serves liveness and readiness checks, its discovery document,
+its JWK Set, a login page that starts a Login Session, a consent page that
+remembers the scopes an End-User allows each Client, and the authorization
+code flow, with `prompt` and `max_age`, to an ID token and access token for
+Clients that authenticate with `client_secret_basic`, `client_secret_post` or
+`private_key_jwt`, and for public Clients, which must use PKCE with `S256`. A
+`private_key_jwt` assertion must name pulsar's issuer as its sole audience, as
+RFC 10070 requires, so one naming the token endpoint is refused. A public
 Client cannot prove its identity, so the consent page asks for it every time
 rather than remembering. A public Client running in a browser on another
 origin can redeem its code and refresh tokens, and call UserInfo, from the
