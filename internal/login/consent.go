@@ -1,7 +1,6 @@
 package login
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -132,14 +131,7 @@ func WriteConsentPage(w http.ResponseWriter, p ConsentPage) error {
 		Allow:        decisionValues[Allowed],
 		Deny:         decisionValues[Denied],
 	}
-	var buf bytes.Buffer
-	if err := consentTemplate.Execute(&buf, data); err != nil {
-		return fmt.Errorf("render the consent page: %w", err)
-	}
-	SetPageHeaders(w.Header())
-	w.WriteHeader(http.StatusOK)
-	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.
-	return nil
+	return writePage(w, consentTemplate, data)
 }
 
 // ConsentHandler serves the consent form's submission, by POST. The

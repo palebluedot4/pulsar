@@ -127,6 +127,19 @@ func (p ScriptPage) SetHeaders(h http.Header) {
 	h.Set("Content-Security-Policy", p.policy)
 }
 
+// writePage writes the page that t renders from data, with the headers of
+// every page pulsar serves.
+func writePage(w http.ResponseWriter, t *template.Template, data any) error {
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return fmt.Errorf("render the %s page: %w", t.Name(), err)
+	}
+	SetPageHeaders(w.Header())
+	w.WriteHeader(http.StatusOK)
+	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.
+	return nil
+}
+
 // page is the login page's content.
 type page struct {
 	SignedInAs string // the username of the End-User signed in, if any

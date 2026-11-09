@@ -81,7 +81,7 @@ func (p *Provider) HandleLogout() http.Handler {
 			http.Redirect(w, r, LogoutPath(p.issuer)+"?"+req.query, http.StatusSeeOther)
 			return
 		}
-		session, err := p.sessions.Logout(r)
+		session, err := p.sessions.LogoutSession(r)
 		if err != nil {
 			p.logoutFailed(w, r, err)
 			return
@@ -136,7 +136,7 @@ func (p *Provider) HandleLogoutConfirmation() http.Handler {
 			p.errorPage(w, msg)
 			return
 		}
-		session, err := p.sessions.Logout(r)
+		session, err := p.sessions.LogoutSession(r)
 		if err != nil {
 			p.logoutFailed(w, r, err)
 			return
@@ -157,7 +157,7 @@ func (p *Provider) HandleLogoutConfirmation() http.Handler {
 			http.Redirect(w, r, LogoutPath(p.issuer)+"?"+req.query, http.StatusSeeOther)
 			return
 		case form.Confirmed:
-			err = session.End(w) //nolint:contextcheck // End uses the context of r, which Logout keeps.
+			err = session.End(w) //nolint:contextcheck // End uses the context of r, which LogoutSession keeps.
 		default:
 			err = session.Save(w)
 		}
