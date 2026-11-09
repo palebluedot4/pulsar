@@ -17,11 +17,15 @@ conformance configuration can also refer to.
   type, not pairwise.
 - Startup fails on a duplicate `client_id`, Subject or username.
 - Client secrets and End-User passwords appear in the file only as Argon2id
-  hashes. Operators choose client secrets, so pulsar cannot check that they
-  are high-entropy, and one hashing scheme serves both. The cost is one
-  Argon2id verification per confidential Client authentication, as for a
-  login; Ory Hydra likewise offers bcrypt for client secrets. The README
-  requires client secrets of at least 256 random bits, which guards them
-  against guessing in place of the count that guards logins
-  ([ADR 0005](0005-logins-throttled-per-end-user-by-delay.md)).
+  hashes, so one hashing scheme serves both. The cost is one Argon2id
+  verification per confidential Client authentication, as for a login;
+  Ory Hydra likewise hashes client secrets, with PBKDF2 by default.
+  `pulsar client-secret` generates a client secret of 256 random bits and
+  prints it with its hash, at OWASP's minimum work factor, since the
+  secret's entropy, not the work factor, guards it against guessing in
+  place of the count that guards logins
+  ([ADR 0005](0005-logins-throttled-per-end-user-by-delay.md)). pulsar
+  cannot tell how a hash was made, so it also accepts one made elsewhere,
+  and cannot check that the secret behind it is as strong
+  ([survey](../research/client-secrets.md)).
 - Changing a Client or End-User means editing the file and restarting.

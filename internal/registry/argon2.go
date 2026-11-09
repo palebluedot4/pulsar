@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
@@ -102,6 +103,54 @@ func param(s, name string, bits int) (uint64, error) {
 		return 0, fmt.Errorf("%s is not a decimal number below 2^%d without leading zeros", name, bits)
 	}
 	return n, nil
+}
+
+// encode returns h in the PHC string format that parsePasswordHash parses.
+// It is not a String method, so that formatting a hash for a log or an
+// error cannot print it by accident.
+func (h passwordHash) encode() string {
+	enc := base64.RawStdEncoding.EncodeToString
+	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", h.memory, h.time, h.threads, enc(h.salt), enc(h.key))
+}
+
+// clientSecretSize is the size of a Client secret NewClientSecret
+// generates: 256 bits, as the README requires, so that guessing one is as
+// unlikely as guessing a code (RFC 6749 §10.10).
+const clientSecretSize = 32 // bytes
+
+// The Argon2id parameters of the hash NewClientSecret prints: OWASP's
+// minimum of 19 MiB over two passes in one lane, and the salt and tag
+// sizes RFC 9106 §4 recommends. A Client secret's 256 random bits guard
+// it, not the work factor, so the cheapest setting OWASP accepts is
+// chosen: it keeps down the memory that each token request authenticated
+// by the secret takes (docs/research/client-secrets.md).
+const (
+	clientSecretMemory  = 19456 // KiB
+	clientSecretTime    = 2     // passes
+	clientSecretThreads = 1
+	clientSecretSalt    = 16 // bytes
+	clientSecretKey     = 32 // bytes
+)
+
+// NewClientSecret returns a new Client secret and its Argon2id hash in
+// the PHC string format, for a registry file's client_secret_hash. The
+// secret is clientSecretSize bytes from crypto/rand in unpadded base64url,
+// which form-encoding leaves as it is, so that a Client that skips that
+// step for client_secret_basic still authenticates.
+func NewClientSecret() (secret, hash string) {
+	b := make([]byte, clientSecretSize)
+	salt := make([]byte, clientSecretSalt)
+	_, _ = rand.Read(b) // crypto/rand.Read never returns an error.
+	_, _ = rand.Read(salt)
+	secret = base64.RawURLEncoding.EncodeToString(b)
+	h := passwordHash{
+		memory:  clientSecretMemory,
+		time:    clientSecretTime,
+		threads: clientSecretThreads,
+		salt:    salt,
+		key:     argon2.IDKey([]byte(secret), salt, clientSecretTime, clientSecretMemory, clientSecretThreads, clientSecretKey),
+	}
+	return secret, h.encode()
 }
 
 // verify reports whether password hashes to h. The comparison takes the

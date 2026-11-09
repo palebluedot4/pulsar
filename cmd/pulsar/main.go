@@ -14,6 +14,7 @@
 //
 //	pulsar
 //	pulsar keys rotate
+//	pulsar client-secret
 //
 // `pulsar keys rotate` stores a new signing key and exits. Every replica
 // publishes the key in its JWK Set at its next reload, and signs with it
@@ -25,6 +26,13 @@
 // Run it only once every replica runs a release that has it, since an
 // earlier release signs with a new key at once, and on a host whose clock
 // agrees with the replicas', since it dates the key by its own clock.
+//
+// `pulsar client-secret` prints a new Client secret, 256 bits from
+// crypto/rand in unpadded base64url, and its Argon2id hash, as a JSON
+// object whose members are named as in the registry file:
+// client_secret, for the Client to authenticate with, and
+// client_secret_hash, for the registry file. It reads no configuration,
+// and nothing but its output holds the secret.
 //
 // Configuration is read from the environment:
 //
@@ -42,6 +50,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -89,7 +98,7 @@ func main() {
 }
 
 // usage is the command line pulsar accepts.
-const usage = "usage: pulsar [keys rotate]"
+const usage = "usage: pulsar [keys rotate | client-secret]"
 
 // run runs the command that args name: with none, it starts the server
 // and blocks until ctx is canceled or a signal arrives. Its parameters
@@ -100,6 +109,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 	defer stop()
 
 	command := strings.Join(args[min(1, len(args)):], " ")
+	if command == "client-secret" {
+		// Before the configuration is loaded, since it needs none.
+		return printClientSecret(stdout)
+	}
 	rotating := command == "keys rotate"
 	if command != "" && !rotating {
 		return fmt.Errorf("unknown command %q; %s", command, usage)
@@ -265,6 +278,22 @@ func rotateKeys(ctx context.Context, cfg config.Config, logger *slog.Logger) err
 	}
 	logger.InfoContext(ctx, "signing key stored", "kid", rotated.KID, "signs_from", rotated.SignsFrom)
 	return nil
+}
+
+// printClientSecret writes a new Client secret and its hash to w, as a
+// JSON object whose client_secret_hash member can be copied into the
+// registry file.
+func printClientSecret(w io.Writer) error {
+	secret, hash := registry.NewClientSecret()
+	b, err := json.Marshal(struct {
+		Secret string `json:"client_secret"`
+		Hash   string `json:"client_secret_hash"`
+	}{secret, hash})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(b, '\n'))
+	return err
 }
 
 // deletionInterval is how often a replica deletes the records due:
