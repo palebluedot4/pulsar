@@ -22,6 +22,8 @@ package login
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"html/template"
@@ -91,6 +93,17 @@ func SetPageHeaders(h http.Header) {
 	for k, v := range pageHeaders {
 		h.Set(k, v)
 	}
+}
+
+// SetScriptPageHeaders sets on h the headers of [SetPageHeaders] for a
+// page that runs one inline script, whose text is script. Its
+// Content-Security-Policy is the same but for allowing that script, by its
+// SHA-256 hash (CSP Level 3 §2.3.1); no other script runs, nor any event
+// handler or javascript: URL, which a hash does not allow.
+func SetScriptPageHeaders(h http.Header, script string) {
+	SetPageHeaders(h)
+	sum := sha256.Sum256([]byte(script))
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'; frame-ancestors 'none'")
 }
 
 // page is the login page's content.

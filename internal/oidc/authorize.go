@@ -154,13 +154,21 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	// redirected to.
 	redirectURI := client.RedirectURIs[i]
 
-	resp := authorizationResponse{redirectURI: redirectURI, issuer: p.issuer.String()}
+	// The Response Mode is read before any other parameter, so that every
+	// error from here on goes by the one requested (OpenID Connect Core 1.0
+	// §3.1.2.6). A response_mode repeated, or of a value pulsar does not
+	// support, is refused below, by query.
+	resp := authorizationResponse{
+		redirectURI: redirectURI,
+		issuer:      p.issuer.String(),
+		formPost:    slices.Equal(params["response_mode"], []string{"form_post"}),
+	}
 	if state := params["state"]; len(state) > 0 {
 		resp.state = state[0]
 	}
 	req, errCode, errDesc := parseAuthorizationRequest(client, redirectURI, p.issuer.String(), params)
 	if errCode != "" {
-		resp.redirectError(w, r, errCode, errDesc)
+		resp.sendError(w, r, errCode, errDesc)
 		return
 	}
 
@@ -184,7 +192,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	inter, err := p.sessions.Interaction(r, query) //nolint:contextcheck // r carries the request's context, which Interaction uses.
 	if err != nil {
 		p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
-		resp.redirectError(w, r, errServerError, "")
+		resp.sendError(w, r, errServerError, "")
 		return
 	}
 	// respond saves the Login Session, which must precede any part of the
@@ -192,7 +200,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	respond := func(answer func()) { //nolint:contextcheck // Save uses the context of r, which Interaction keeps.
 		if err := inter.Save(w); err != nil {
 			p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
-			resp.redirectError(w, r, errServerError, "")
+			resp.sendError(w, r, errServerError, "")
 			return
 		}
 		answer()
@@ -204,7 +212,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	fail := func(err error) {
 		p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
 		inter.Finish()
-		respond(func() { resp.redirectError(w, r, errServerError, "") })
+		respond(func() { resp.sendError(w, r, errServerError, "") })
 	}
 	// ask shows the End-User a page, with show; but with prompt=none, no
 	// page is shown, and what the page would ask for is answered with the
@@ -213,7 +221,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	// never needs interaction_required.
 	ask := func(errCode, desc string, show func()) {
 		if req.prompts("none") {
-			respond(func() { resp.redirectError(w, r, errCode, desc) })
+			respond(func() { resp.sendError(w, r, errCode, desc) })
 			return
 		}
 		respond(show)
@@ -247,7 +255,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	if otherEndUser {
 		inter.Finish()
 		respond(func() {
-			resp.redirectError(w, r, errLoginRequired, "The End-User signed in is not one the request names.")
+			resp.sendError(w, r, errLoginRequired, "The End-User signed in is not one the request names.")
 		})
 		return
 	}
@@ -262,7 +270,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	switch inter.Decision() {
 	case login.Denied:
 		inter.Finish()
-		respond(func() { resp.redirectError(w, r, errAccessDenied, "The End-User denied the request.") })
+		respond(func() { resp.sendError(w, r, errAccessDenied, "The End-User denied the request.") })
 		return
 	case login.Allowed:
 		// A public Client's Consent is never consulted (see below), so it
@@ -315,7 +323,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		return
 	}
 	inter.Finish()
-	respond(func() { resp.redirect(w, r, url.Values{"code": {code}}) })
+	respond(func() { resp.send(w, r, url.Values{"code": {code}}) })
 }
 
 // authorizationRequest is an authorization request whose Client and
@@ -370,8 +378,10 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	default:
 		return req, errUnsupportedResponseType, "Only the response_type code is supported."
 	}
-	if mode := params.Get("response_mode"); mode != "" && mode != "query" {
-		return req, errInvalidRequest, "Only the response_mode query is supported."
+	switch params.Get("response_mode") {
+	case "", "query", "form_post":
+	default:
+		return req, errInvalidRequest, "Only the response_modes query and form_post are supported."
 	}
 
 	// PKCE is required of a public Client only (ADR 0002), and S256 is the
@@ -558,22 +568,29 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 }
 
 // authorizationResponse sends the authorization response, success or
-// error, to a Client's redirect URI.
+// error, to a Client's redirect URI, by the Response Mode the request
+// asked for.
 type authorizationResponse struct {
 	redirectURI string
 	state       string
 	issuer      string
+	formPost    bool // whether the Response Mode is form_post rather than query
 }
 
-// redirect sends the browser to the redirect URI with params, and with
-// state and iss (RFC 6749 §4.1.2, RFC 9207 §2) added. The parameters are
-// appended to any query the redirect URI has, which is kept as registered
-// (RFC 6749 §3.1.2).
-func (a authorizationResponse) redirect(w http.ResponseWriter, r *http.Request, params url.Values) {
+// send sends params, with state and iss (RFC 6749 §4.1.2, RFC 9207 §2)
+// added, to the redirect URI. With form_post, the browser posts them there
+// from a form-post page (see writeFormPost). Otherwise it is redirected
+// there with them in the query, appended to any query the redirect URI
+// has, which is kept as registered (RFC 6749 §3.1.2).
+func (a authorizationResponse) send(w http.ResponseWriter, r *http.Request, params url.Values) {
 	if a.state != "" {
 		params.Set("state", a.state)
 	}
 	params.Set("iss", a.issuer)
+	if a.formPost {
+		writeFormPost(w, a.redirectURI, params)
+		return
+	}
 	sep := "?"
 	switch {
 	case strings.HasSuffix(a.redirectURI, "?") || strings.HasSuffix(a.redirectURI, "&"):
@@ -587,15 +604,14 @@ func (a authorizationResponse) redirect(w http.ResponseWriter, r *http.Request, 
 	http.Redirect(w, r, a.redirectURI+sep+params.Encode(), http.StatusSeeOther)
 }
 
-// redirectError sends the browser to the redirect URI with an error
-// response (RFC 6749 §4.1.2.1). desc, if any, is fixed text that never
-// repeats the request.
-func (a authorizationResponse) redirectError(w http.ResponseWriter, r *http.Request, code, desc string) {
+// sendError sends an error response (RFC 6749 §4.1.2.1) to the redirect
+// URI. desc, if any, is fixed text that never repeats the request.
+func (a authorizationResponse) sendError(w http.ResponseWriter, r *http.Request, code, desc string) {
 	params := url.Values{"error": {code}}
 	if desc != "" {
 		params.Set("error_description", desc)
 	}
-	a.redirect(w, r, params)
+	a.send(w, r, params)
 }
 
 // errorPage tells the End-User that the authorization request is invalid,
