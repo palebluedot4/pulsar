@@ -75,6 +75,13 @@ const busy = "Too many sign-ins are being checked. Try again in a moment."
 // its password is checked.
 var errTooSoon = errors.New("login: too soon after the last")
 
+// The directives of every page's Content-Security-Policy: the page loads
+// nothing and runs no script, and no other page may frame it.
+const (
+	loadNothing = "default-src 'none'"
+	noFraming   = "frame-ancestors 'none'"
+)
+
 // Headers of every page this package serves. The page is personal and
 // must not be cached. It runs no script and loads nothing, and no other
 // page may frame it, which is how RFC 9700 §4.16 has an authorization
@@ -83,7 +90,7 @@ var errTooSoon = errors.New("login: too soon after the last")
 var pageHeaders = map[string]string{
 	"Content-Type":            "text/html; charset=utf-8",
 	"Cache-Control":           "no-store",
-	"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+	"Content-Security-Policy": loadNothing + "; " + noFraming,
 	"X-Frame-Options":         "DENY",
 }
 
@@ -103,7 +110,8 @@ func SetPageHeaders(h http.Header) {
 func SetScriptPageHeaders(h http.Header, script string) {
 	SetPageHeaders(h)
 	sum := sha256.Sum256([]byte(script))
-	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'; frame-ancestors 'none'")
+	allowScript := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	h.Set("Content-Security-Policy", loadNothing+"; "+allowScript+"; "+noFraming)
 }
 
 // page is the login page's content.
