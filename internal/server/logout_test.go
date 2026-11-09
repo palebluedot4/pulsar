@@ -34,12 +34,12 @@ const (
 // unchanged.
 var longState = strings.Repeat("a/b+c=d&e~", 12) + "f g%h?i#"
 
-// What the logout pages show, as their templates write them.
+// What the logout pages show, as their templates write them. The
+// confirmation page's Client, form and hidden fields are written as the
+// consent page's are, and read with consentClient, consentAction and
+// consentHidden.
 var (
-	logoutClient   = regexp.MustCompile(`<strong id="client">([^<]*)</strong>`)
 	logoutSignedIn = regexp.MustCompile(`<p id="signed-in">Signed in as ([^<]*)\.</p>`)
-	logoutAction   = regexp.MustCompile(`<form method="post" action="([^"]*)">`)
-	logoutHidden   = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
 	logoutOutcome  = regexp.MustCompile(`<p id="outcome">([^<]*)</p>`)
 )
 
@@ -86,7 +86,7 @@ func parseLogoutPage(t *testing.T, resp response) logoutPage {
 	if resp.status != http.StatusOK {
 		t.Fatalf("status = %d, want %d and the logout confirmation page; Location %q, body %q", resp.status, http.StatusOK, resp.header.Get("Location"), resp.body)
 	}
-	action := logoutAction.FindStringSubmatch(resp.body)
+	action := consentAction.FindStringSubmatch(resp.body)
 	if action == nil {
 		t.Fatalf("body = %q, want the logout confirmation page", resp.body)
 	}
@@ -95,13 +95,13 @@ func parseLogoutPage(t *testing.T, resp response) logoutPage {
 		t.Fatalf("logout form action %q is not a URL: %v", action[1], err)
 	}
 	page := logoutPage{action: u, hidden: url.Values{}}
-	if m := logoutClient.FindStringSubmatch(resp.body); m != nil {
+	if m := consentClient.FindStringSubmatch(resp.body); m != nil {
 		page.client = html.UnescapeString(m[1])
 	}
 	if m := logoutSignedIn.FindStringSubmatch(resp.body); m != nil {
 		page.signedIn = html.UnescapeString(m[1])
 	}
-	for _, m := range logoutHidden.FindAllStringSubmatch(resp.body, -1) {
+	for _, m := range consentHidden.FindAllStringSubmatch(resp.body, -1) {
 		page.hidden.Add(html.UnescapeString(m[1]), html.UnescapeString(m[2]))
 	}
 	return page
@@ -586,8 +586,8 @@ func TestLogoutConfirmationCannotBeForged(t *testing.T) {
 	}
 }
 
-// A logout request that repeats a parameter pulsar reads, or that it
-// cannot read, gets the error page and logs no one out.
+// REQ-LOGOUT-12: a logout request that repeats a parameter pulsar reads,
+// or that it cannot read, gets the error page and logs no one out.
 func TestLogoutMalformedRequest(t *testing.T) {
 	t.Parallel()
 

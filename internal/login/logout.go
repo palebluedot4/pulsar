@@ -1,7 +1,6 @@
 package login
 
 import (
-	"bytes"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -25,8 +24,8 @@ type LogoutPage struct {
 	Action string
 }
 
-// logoutValues are the values the confirmation form submits for the
-// decisions an End-User can make there: to log out, or to stay signed in.
+// The values the confirmation form submits for the decisions an End-User
+// can make there: to log out, or to stay signed in.
 const (
 	logoutValue = "logout"
 	stayValue   = "stay"
@@ -104,19 +103,6 @@ func WriteLogoutOutcomePage(w http.ResponseWriter, signedOut bool) error {
 	return writePage(w, logoutOutcomeTemplate, signedOut)
 }
 
-// writePage writes the page that t renders from data, with the headers of
-// every page pulsar serves.
-func writePage(w http.ResponseWriter, t *template.Template, data any) error {
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		return fmt.Errorf("render the %s page: %w", t.Name(), err)
-	}
-	SetPageHeaders(w.Header())
-	w.WriteHeader(http.StatusOK)
-	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.
-	return nil
-}
-
 // LogoutForm is a submission of the confirmation form.
 type LogoutForm struct {
 	// Confirmed reports whether the End-User chose to log out.
@@ -144,38 +130,39 @@ func ReadLogoutForm(w http.ResponseWriter, r *http.Request) (LogoutForm, bool) {
 	return f, true
 }
 
-// Logout is the Login Session of a request to log out, if it has one.
-type Logout struct {
+// LogoutSession is the Login Session of a request to log out, if it has
+// one.
+type LogoutSession struct {
 	sessions *Sessions
 	r        *http.Request // carries the loaded Login Session
 }
 
-// Logout loads r's Login Session, or a new empty one, for a request to log
-// out.
-func (s *Sessions) Logout(r *http.Request) (*Logout, error) {
+// LogoutSession loads r's Login Session, or a new empty one, for a request
+// to log out.
+func (s *Sessions) LogoutSession(r *http.Request) (*LogoutSession, error) {
 	r, err := s.load(r)
 	if err != nil {
 		return nil, err
 	}
-	return &Logout{sessions: s, r: r}, nil
+	return &LogoutSession{sessions: s, r: r}, nil
 }
 
 // EndUser returns the End-User signed in, if anyone is.
-func (l *Logout) EndUser() (*registry.EndUser, bool) {
+func (l *LogoutSession) EndUser() (*registry.EndUser, bool) {
 	return l.sessions.endUser(l.r)
 }
 
 // Save stores the Login Session, as a request that does not end it does,
 // and writes its cookie to w. It must be called before anything of the
 // response is written.
-func (l *Logout) Save(w http.ResponseWriter) error {
+func (l *LogoutSession) Save(w http.ResponseWriter) error {
 	return l.sessions.save(w, l.r)
 }
 
 // End deletes the Login Session, if there is one, and writes to w a cookie
 // that removes it from the browser. It must be called before anything of
 // the response is written.
-func (l *Logout) End(w http.ResponseWriter) error {
+func (l *LogoutSession) End(w http.ResponseWriter) error {
 	ctx, m := l.r.Context(), l.sessions.manager
 	if err := m.Destroy(ctx); err != nil {
 		return fmt.Errorf("end the Login Session: %w", err)

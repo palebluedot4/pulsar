@@ -628,8 +628,9 @@ func (a authorizationResponse) sendError(w http.ResponseWriter, r *http.Request,
 	a.send(w, r, params)
 }
 
-// errorPage tells the End-User that the authorization request is invalid,
-// without redirecting. msg is fixed text that never repeats the request.
+// errorPage tells the End-User that the authorization or logout request is
+// invalid, without redirecting. msg is fixed text that never repeats the
+// request.
 func (p *Provider) errorPage(w http.ResponseWriter, msg string) {
 	var buf bytes.Buffer
 	if err := errorPageTemplate.Execute(&buf, msg); err != nil {
