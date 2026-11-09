@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*config-formpost.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "CheckCallbackHttpMethodIsPost",
+    "expected-result": "failure",
+    "comment": "Form Post Basic plan only. The module puts response_mode=form_post only inside the request object; the query outside it keeps just response_type, client_id, scope and redirect_uri (REQUIRED_DUPLICATES in the suite's AbstractBuildRequestObjectRedirectToAuthorizationEndpoint at release-v5.3.4). pulsar does not support request objects (REQ-CORE-8), so it cannot read that response_mode, and returns request_not_supported in the query, the default Response Mode for the code flow. The module then skips, as in the Basic OP plan, but only after its form_post checks on the callback have failed."
+  },
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*config-formpost.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "CheckCallbackContentTypeIsFormUrlEncoded",
+    "expected-result": "failure",
+    "comment": "Form Post Basic plan only. The module puts response_mode=form_post only inside the request object; the query outside it keeps just response_type, client_id, scope and redirect_uri (REQUIRED_DUPLICATES in the suite's AbstractBuildRequestObjectRedirectToAuthorizationEndpoint at release-v5.3.4). pulsar does not support request objects (REQ-CORE-8), so it cannot read that response_mode, and returns request_not_supported in the query, the default Response Mode for the code flow. The module then skips, as in the Basic OP plan, but only after its form_post checks on the callback have failed."
+  },
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*config-formpost.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "RejectErrorInUrlQuery",
+    "expected-result": "failure",
+    "comment": "Form Post Basic plan only. The module puts response_mode=form_post only inside the request object; the query outside it keeps just response_type, client_id, scope and redirect_uri (REQUIRED_DUPLICATES in the suite's AbstractBuildRequestObjectRedirectToAuthorizationEndpoint at release-v5.3.4). pulsar does not support request objects (REQ-CORE-8), so it cannot read that response_mode, and returns request_not_supported in the query, the default Response Mode for the code flow. The module then skips, as in the Basic OP plan, but only after its form_post checks on the callback have failed."
+  },
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*config-formpost.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "ValidateIssIfPresentInAuthorizationResponse",
+    "expected-result": "failure",
+    "comment": "Form Post Basic plan only. The module puts response_mode=form_post only inside the request object; the query outside it keeps just response_type, client_id, scope and redirect_uri (REQUIRED_DUPLICATES in the suite's AbstractBuildRequestObjectRedirectToAuthorizationEndpoint at release-v5.3.4). pulsar does not support request objects (REQ-CORE-8), so it cannot read that response_mode, and returns request_not_supported in the query, the default Response Mode for the code flow. The module then skips, as in the Basic OP plan, but only after its form_post checks on the callback have failed."
+  }
+]
