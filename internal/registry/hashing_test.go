@@ -2,7 +2,6 @@ package registry
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"runtime"
@@ -20,8 +19,7 @@ func hashOf(tb testing.TB, password string, memory uint32) string {
 	salt := make([]byte, 16)
 	_, _ = rand.Read(salt) // crypto/rand.Read never returns an error.
 	key := argon2.IDKey([]byte(password), salt, 1, memory, 1, 32)
-	enc := base64.RawStdEncoding.EncodeToString
-	return fmt.Sprintf("$argon2id$v=19$m=%d,t=1,p=1$%s$%s", memory, enc(salt), enc(key))
+	return passwordHash{memory: memory, time: 1, threads: 1, salt: salt, key: key}.encode()
 }
 
 // REQ-OAUTH-44: a registry runs at most as many verifications at once as

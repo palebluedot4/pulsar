@@ -39,7 +39,7 @@ func TestRunClientSecret(t *testing.T) {
 
 	reg, err := registry.Parse([]byte(registryJSON(t, []entry{with(secretClient(), "client_secret_hash", printed.Hash)}, nil)))
 	if err != nil {
-		t.Fatalf("registry.Parse with the printed client_secret_hash = %v, want nil", err)
+		t.Fatalf("registry.Parse(a registry with the printed client_secret_hash) = %v, want nil", err)
 	}
 	if _, ok, err := reg.AuthenticateClientSecret(t.Context(), registry.ClientSecretBasic, "rp", printed.Secret); !ok || err != nil {
 		t.Errorf("AuthenticateClientSecret(rp, printed client_secret) = %v, %v; want true, nil", ok, err)

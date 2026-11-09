@@ -114,11 +114,11 @@ func (h passwordHash) encode() string {
 }
 
 // clientSecretSize is the size of a Client secret NewClientSecret
-// generates: 256 bits, as the README requires, so that guessing one is as
-// unlikely as guessing a code (RFC 6749 §10.10).
+// generates: 256 bits, so that guessing one is as unlikely as guessing a
+// code (RFC 6749 §10.10).
 const clientSecretSize = 32 // bytes
 
-// The Argon2id parameters of the hash NewClientSecret prints: OWASP's
+// The Argon2id parameters of the hash NewClientSecret returns: OWASP's
 // minimum of 19 MiB over two passes in one lane, and the salt and tag
 // sizes RFC 9106 §4 recommends. A Client secret's 256 random bits guard
 // it, not the work factor, so the cheapest setting OWASP accepts is

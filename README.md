@@ -110,7 +110,8 @@ go run ./cmd/pulsar client-secret
 ```
 
 pulsar cannot tell how a hash was made, so it also accepts one made
-elsewhere; the secret it hashes must then be as strong. Logins are
+elsewhere; the operator must then make the secret it hashes as strong.
+Logins are
 throttled per End-User; Client secrets are not, since anyone could hold
 up a Client whose failed attempts were counted
 ([ADR 0005](docs/adr/0005-logins-throttled-per-end-user-by-delay.md)).
