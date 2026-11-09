@@ -32,8 +32,8 @@ services:
       retries: 15
 
   # pulsar's name and port are also in config-op.json, config-basic.json,
-  # config-formpost.json, runner/run.sh and the certificate make
-  # conformance generates; change them together.
+  # config-formpost.json, config-logout.json, runner/run.sh and the
+  # certificate make conformance generates; change them together.
   pulsar:
     build:
       context: ..
@@ -45,8 +45,8 @@ services:
       PULSAR_ISSUER: https://pulsar:9443
       PULSAR_DATABASE_URL: postgres://postgres@postgres:5432/postgres?sslmode=disable
       PULSAR_SECRET: ${PULSAR_SECRET:?run through make conformance}
-      # The Clients and End-User config-basic.json and
-      # config-formpost.json sign in with.
+      # The Clients and End-User config-basic.json, config-formpost.json
+      # and config-logout.json sign in with.
       PULSAR_REGISTRY: /conformance/registry.json
       PULSAR_TLS_CERT: /tls/cert.pem
       PULSAR_TLS_KEY: /tls/key.pem
@@ -63,10 +63,10 @@ services:
   server:
     image: registry.gitlab.com/openid/conformance-suite:release-v5.3.4@sha256:dcc4bd1fb7e9c00f048a67373fe2bec5ecf9feb45a6b5d55e237e5c30e5312c6
     environment:
-      # With the alias config-basic.json and config-formpost.json share,
-      # this makes the redirect URI the Clients in registry.json register,
-      # and the callback URL their browser automation matches; change them
-      # together.
+      # With the alias config-basic.json, config-formpost.json and
+      # config-logout.json share, this makes the redirect URI and the
+      # post-logout redirect URI the Clients in registry.json register, and
+      # the URLs their browser automation matches; change them together.
       BASE_URL: https://localhost.emobix.co.uk:8443
       BASE_MTLS_URL: https://localhost.emobix.co.uk:8444
       MONGODB_HOST: mongodb
@@ -106,6 +106,7 @@ services:
       - ./config-op.json:/conformance/config-op.json:ro
       - ./config-basic.json:/conformance/config-basic.json:ro
       - ./config-formpost.json:/conformance/config-formpost.json:ro
+      - ./config-logout.json:/conformance/config-logout.json:ro
       - ./expected-failures.json:/conformance/expected-failures.json:ro
       - ./expected-warnings.json:/conformance/expected-warnings.json:ro
       - ./expected-skips.json:/conformance/expected-skips.json:ro

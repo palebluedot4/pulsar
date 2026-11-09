@@ -161,7 +161,7 @@ CONFORMANCE_ENTRY := type == "array" and all(.[]; \
 	and if $$result == "skip" then (keys - ["test-name", "variant", "configuration-filename", "comment"]) == [] \
 	else (["current-block", "condition"] - keys) == [] and .["expected-result"] == $$result end)
 
-conformance: ## Run the OpenID conformance suite's Config OP, Basic OP and Form Post Basic plans against pulsar; needs Docker
+conformance: ## Run the OpenID conformance suite's Config OP, Basic OP, Form Post Basic and RP-Initiated Logout plans against pulsar; needs Docker
 	@for e in $(CONFORMANCE_EXPECTED); do \
 		result=$${e%%:*}; f=$${e#*:}; \
 		jq -e --arg result "$$result" '$(CONFORMANCE_ENTRY)' "$$f" >/dev/null \
