@@ -80,6 +80,21 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
   RECOMMENDED as it is redirected to by the client and not directly
   accessed."
 
+## Metadata of RP-Initiated Logout
+
+[OpenID Connect RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html)
+adds one member to the metadata of §3. Its other clauses are in
+[openid-connect-rpinitiated-1.0.md](openid-connect-rpinitiated-1.0.md).
+
+- REQ-DISC-23 (RP-Initiated Logout 1.0 §2.1, `end_session_endpoint`):
+  "This OpenID Provider Metadata parameter MUST be included in the
+  Server's discovery responses when RP-Initiated Logout and Discovery are
+  supported: end_session_endpoint REQUIRED. [...] This URL MUST use the
+  https scheme and MAY contain port, path, and query parameter
+  components."
+
+  It shares REQ-DISC-1's exception for a loopback issuer.
+
 ## RFC 8414 metadata
 
 Members of the discovery document that

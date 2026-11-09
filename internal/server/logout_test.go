@@ -1,0 +1,691 @@
+package server
+
+import (
+	"encoding/base64"
+	"html"
+	"maps"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
+)
+
+// logoutPath is the path of the logout endpoint under loginIssuer.
+const logoutPath = "/tenant/logout"
+
+// The post-logout redirect URIs flowRegistry registers: two for rp, one
+// with a query, and one for other.
+const (
+	rpSignedOutURI      = "https://rp.example/signed-out"
+	rpQuerySignedOutURI = "https://rp.example/bye?tenant=a"
+	otherSignedOutURI   = "https://other.example/signed-out"
+)
+
+// longState is a state of 128 characters, as the conformance suite sends,
+// with characters that a URL must escape, to show that it comes back
+// unchanged.
+var longState = strings.Repeat("a/b+c=d&e~", 12) + "f g%h?i#"
+
+// What the logout pages show, as their templates write them.
+var (
+	logoutClient   = regexp.MustCompile(`<strong id="client">([^<]*)</strong>`)
+	logoutSignedIn = regexp.MustCompile(`<p id="signed-in">Signed in as ([^<]*)\.</p>`)
+	logoutAction   = regexp.MustCompile(`<form method="post" action="([^"]*)">`)
+	logoutHidden   = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
+	logoutOutcome  = regexp.MustCompile(`<p id="outcome">([^<]*)</p>`)
+)
+
+// What the pages that end a logout without a redirect say, and the title
+// of the error page.
+const (
+	signedOut      = "You are signed out."
+	stillSignedIn  = "You are still signed in."
+	errorPageTitle = "Invalid request"
+)
+
+// The answers the confirmation form submits.
+const (
+	confirmLogout = "logout"
+	declineLogout = "stay"
+)
+
+// logoutConfirmationPath is where the confirmation form is submitted,
+// under loginIssuer.
+const logoutConfirmationPath = "/tenant/logout/confirm"
+
+// pageHeaders are the headers of every page pulsar serves.
+var pageHeaders = map[string]string{
+	"Content-Type":            "text/html; charset=utf-8",
+	"Cache-Control":           "no-store",
+	"X-Frame-Options":         "DENY",
+	"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+}
+
+// logoutPage is a logout confirmation page: the Client it names, if any,
+// the End-User it says is signed in, if any, the URL its form is
+// submitted to, and the hidden fields the form submits.
+type logoutPage struct {
+	client   string
+	signedIn string
+	action   *url.URL
+	hidden   url.Values
+}
+
+// parseLogoutPage returns the confirmation page that resp shows, failing
+// the test if it shows none.
+func parseLogoutPage(t *testing.T, resp response) logoutPage {
+	t.Helper()
+	if resp.status != http.StatusOK {
+		t.Fatalf("status = %d, want %d and the logout confirmation page; Location %q, body %q", resp.status, http.StatusOK, resp.header.Get("Location"), resp.body)
+	}
+	action := logoutAction.FindStringSubmatch(resp.body)
+	if action == nil {
+		t.Fatalf("body = %q, want the logout confirmation page", resp.body)
+	}
+	u, err := url.Parse(html.UnescapeString(action[1]))
+	if err != nil {
+		t.Fatalf("logout form action %q is not a URL: %v", action[1], err)
+	}
+	page := logoutPage{action: u, hidden: url.Values{}}
+	if m := logoutClient.FindStringSubmatch(resp.body); m != nil {
+		page.client = html.UnescapeString(m[1])
+	}
+	if m := logoutSignedIn.FindStringSubmatch(resp.body); m != nil {
+		page.signedIn = html.UnescapeString(m[1])
+	}
+	for _, m := range logoutHidden.FindAllStringSubmatch(resp.body, -1) {
+		page.hidden.Add(html.UnescapeString(m[1]), html.UnescapeString(m[2]))
+	}
+	return page
+}
+
+// outcome returns what the page resp shows says of the logout, failing the
+// test if resp is not such a page.
+func outcome(t *testing.T, resp response) string {
+	t.Helper()
+	if resp.status != http.StatusOK {
+		t.Fatalf("status = %d, want %d and a page; Location %q", resp.status, http.StatusOK, resp.header.Get("Location"))
+	}
+	m := logoutOutcome.FindStringSubmatch(resp.body)
+	if m == nil {
+		t.Fatalf("body = %q, want a page that says whether the End-User is signed out", resp.body)
+	}
+	return m[1]
+}
+
+// logout sends the browser to the logout endpoint with params, by method,
+// as a Client does. A POST comes from a form on the Client's site, so the
+// browser leaves out the SameSite=Lax Login Session cookie; pulsar sends
+// it back to the endpoint by GET, with the same parameters, a navigation
+// that carries the cookie, which logout follows.
+func (b *browser) logout(method string, params url.Values) response {
+	b.t.Helper()
+	if method != http.MethodPost {
+		return b.send(method, logoutPath+"?"+params.Encode(), nil)
+	}
+	req := newFormRequest(b.t, logoutPath, params)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Origin", "https://rp.example")
+	resp := (&browser{t: b.t, handler: b.handler}).do(req)
+	if resp.status != http.StatusSeeOther {
+		return resp
+	}
+	next := location(b.t, resp)
+	if next.Path != logoutPath {
+		b.t.Fatalf("POST %s redirected to %q, want %q", logoutPath, next, logoutPath)
+	}
+	if diff := cmp.Diff(params, next.Query()); diff != "" {
+		b.t.Errorf("POST %s redirected with parameters mismatch (-want +got):\n%s", logoutPath, diff)
+	}
+	return b.send(http.MethodGet, next.RequestURI(), nil)
+}
+
+// answerLogout submits the form of the confirmation page resp shows with
+// decision, and returns the response.
+func (b *browser) answerLogout(resp response, decision string) response {
+	b.t.Helper()
+	page := parseLogoutPage(b.t, resp)
+	form := url.Values{"decision": {decision}}
+	maps.Copy(form, page.hidden)
+	return b.do(newFormRequest(b.t, page.action.RequestURI(), form))
+}
+
+// newFormRequest returns a POST of form to target, a path with any query,
+// on the OP's origin.
+func newFormRequest(t *testing.T, target string, form url.Values) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+target, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
+}
+
+// signedInWithHint signs a new browser in as alice through an authorization
+// request from rp, and returns the browser and the ID token rp received.
+func signedInWithHint(t *testing.T, handler http.Handler) (*browser, string) {
+	t.Helper()
+	b := &browser{t: t, handler: handler}
+	resp := b.signIn(b.authorize(http.MethodGet, authorizationParams()))
+	if resp.status == http.StatusOK {
+		resp = b.decide(resp, "allow")
+	}
+	return b, idToken(t, handler, resp)
+}
+
+// wantSignedOut checks that the browser with the Login Session cookie
+// session is signed in no longer: an authorization request with
+// prompt=none gets login_required.
+func wantSignedOut(t *testing.T, handler http.Handler, session *http.Cookie, when string) {
+	t.Helper()
+	b := &browser{t: t, handler: handler, session: session}
+	resp := b.authorize(http.MethodGet, requestWith(url.Values{"prompt": {"none"}}))
+	want := url.Values{"error": {"login_required"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
+	if diff := cmp.Diff(want, errorResponse(t, resp)); diff != "" {
+		t.Errorf("%s: prompt=none response mismatch (-want +got):\n%s", when, diff)
+	}
+}
+
+// wantSignedIn checks that the browser b is still signed in: an
+// authorization request with prompt=none gets a code.
+func wantSignedIn(t *testing.T, b *browser, when string) {
+	t.Helper()
+	wantCode(t, b.authorize(http.MethodGet, requestWith(url.Values{"prompt": {"none"}})), when)
+}
+
+// REQ-LOGOUT-1, REQ-LOGOUT-2, REQ-LOGOUT-5, REQ-LOGOUT-6, REQ-LOGOUT-8,
+// REQ-BCP-2: a Client sends the signed-in End-User to the logout endpoint,
+// by GET or POST, with the ID token it received, a post-logout redirect
+// URI it registered and a state. pulsar asks the End-User to confirm, on a
+// page that names the Client and may not be framed; confirming ends the
+// Login Session and clears its cookie, and returns the End-User to the
+// URI with the state, unchanged, and nothing else. prompt=none then gets
+// login_required, whether the browser sends the cleared cookie or the
+// old one.
+func TestLogout(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		method      string
+		redirectURI string
+		want        string // where confirming sends the browser
+	}{
+		{method: http.MethodGet, redirectURI: rpSignedOutURI, want: rpSignedOutURI + "?" + url.Values{"state": {longState}}.Encode()},
+		{method: http.MethodPost, redirectURI: rpSignedOutURI, want: rpSignedOutURI + "?" + url.Values{"state": {longState}}.Encode()},
+		{method: http.MethodGet, redirectURI: rpQuerySignedOutURI, want: rpQuerySignedOutURI + "&" + url.Values{"state": {longState}}.Encode()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.redirectURI, func(t *testing.T) {
+			t.Parallel()
+			b, hint := signedInWithHint(t, handler)
+			old := b.session
+			resp := b.logout(tt.method, url.Values{
+				"id_token_hint":            {hint},
+				"post_logout_redirect_uri": {tt.redirectURI},
+				"state":                    {longState},
+			})
+			page := parseLogoutPage(t, resp)
+			type shown struct{ Client, SignedIn string }
+			if diff := cmp.Diff(shown{Client: "rp", SignedIn: "alice"}, shown{Client: page.client, SignedIn: page.signedIn}); diff != "" {
+				t.Errorf("logout confirmation page mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(pageHeaders, headers(resp.header, pageHeaders)); diff != "" {
+				t.Errorf("logout confirmation page headers mismatch (-want +got):\n%s", diff)
+			}
+
+			resp = b.answerLogout(resp, confirmLogout)
+			if got := location(t, resp).String(); got != tt.want {
+				t.Errorf("confirmed logout redirects to %q, want %q", got, tt.want)
+			}
+			if got := resp.header.Get("Cache-Control"); got != "no-store" {
+				t.Errorf("confirmed logout Cache-Control = %q, want %q", got, "no-store")
+			}
+			if b.session == nil || b.session.MaxAge >= 0 || b.session.Value != "" {
+				t.Errorf("confirmed logout Login Session cookie = %v, want it cleared", b.session)
+			}
+			wantSignedOut(t, handler, b.session, "with the cleared cookie")
+			wantSignedOut(t, handler, old, "with the old cookie")
+		})
+	}
+}
+
+// wantErrorPage checks that resp is the error page, which redirects
+// nowhere.
+func wantErrorPage(t *testing.T, resp response, when string) {
+	t.Helper()
+	if resp.status != http.StatusBadRequest || !strings.Contains(resp.body, "<h1>"+errorPageTitle+"</h1>") {
+		t.Errorf("%s: status = %d, Location %q, body %q; want %d and the error page", when, resp.status, resp.header.Get("Location"), resp.body, http.StatusBadRequest)
+	}
+	if diff := cmp.Diff(pageHeaders, headers(resp.header, pageHeaders)); diff != "" {
+		t.Errorf("%s: error page headers mismatch (-want +got):\n%s", when, diff)
+	}
+}
+
+// REQ-LOGOUT-2, REQ-LOGOUT-12: an id_token_hint that is not an ID token
+// this OP issued to a registered Client, signed by RS256 with a key its
+// JWK Set publishes, with its own issuer, gets an error page, with no
+// confirmation, no redirect and no logout, whether it is sent to the
+// logout endpoint or with a confirmation submitted directly.
+func TestLogoutInvalidHint(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	keys := forger(t, pool)
+	signedIn, hint := signedInWithHint(t, handler)
+	valid := verify(t, handler, hint)
+	with := func(name string, value any) map[string]any {
+		c := maps.Clone(valid.claims)
+		if value == nil {
+			delete(c, name)
+		} else {
+			c[name] = value
+		}
+		return c
+	}
+	parts := strings.Split(hint, ".")
+	enc := base64.RawURLEncoding.EncodeToString
+	other := jwtKey(jose.RS256)
+	hmacKey := []byte(strings.Repeat(rpSecret, 2)) // rp's secret, long enough for HS256
+	tests := []struct {
+		name string
+		hint string
+	}{
+		{name: "alg none, signature dropped", hint: enc([]byte(`{"alg":"none"}`)) + "." + parts[1] + "."},
+		{name: "HS256 keyed with rp's secret", hint: signAssertion(t, jose.HS256, hmacKey, valid.kid, valid.claims)},
+		{name: "signed by another key under the OP's kid", hint: signAssertion(t, other.alg, other.key, valid.kid, valid.claims)},
+		{name: "claims changed after signing", hint: parts[0] + "." + enc([]byte(`{"iss":"`+loginIssuer+`","aud":"other","sub":"`+aliceSubject+`"}`)) + "." + parts[2]},
+		{name: "another issuer", hint: forge(t, keys, "JWT", with("iss", "https://other.example"))},
+		{name: "no issuer", hint: forge(t, keys, "JWT", with("iss", nil))},
+		{name: "aud of no registered Client", hint: forge(t, keys, "JWT", with("aud", "unknown"))},
+		{name: "two audiences", hint: forge(t, keys, "JWT", with("aud", []string{"rp", "other"}))},
+		{name: "no aud", hint: forge(t, keys, "JWT", with("aud", nil))},
+		{name: "typ of an access token", hint: forge(t, keys, "at+jwt", valid.claims)},
+		{name: "not a JWT", hint: "not-a-jwt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b := &browser{t: t, handler: handler, session: signedIn.session}
+			params := url.Values{"id_token_hint": {tt.hint}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}}
+			wantErrorPage(t, b.logout(http.MethodGet, params), "logout request")
+
+			form := url.Values{"decision": {confirmLogout}, "end_user": {aliceSubject}}
+			wantErrorPage(t, b.do(newFormRequest(t, logoutConfirmationPath+"?"+params.Encode(), form)), "confirmation submitted directly")
+			wantSignedIn(t, b, "after an invalid id_token_hint")
+		})
+	}
+}
+
+// REQ-LOGOUT-4, REQ-LOGOUT-5, REQ-LOGOUT-7, REQ-LOGOUT-9, REQ-LOGOUT-12,
+// REQ-LOGOUT-13: pulsar returns the End-User to a post-logout redirect URI
+// only when the request identifies the Client, by its id_token_hint or its
+// client_id, or both when they agree, and the URI is exactly one that
+// Client registered. Otherwise it asks the End-User to confirm all the
+// same, naming the Client only if it is identified, and then shows that
+// they are signed out. logout_hint and ui_locales change nothing.
+func TestLogoutRedirectOnlyToRegisteredURI(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	withState := func(uri string) string { return uri + "?state=xyz" }
+	tests := []struct {
+		name string
+		// params are the request's parameters; "HINT" stands for the ID
+		// token rp received for the End-User.
+		params     url.Values
+		wantClient string // the Client the page names, if any
+		want       string // where confirming sends the browser; "" for the signed-out page
+	}{
+		{
+			name:       "hint and client_id that agree",
+			params:     url.Values{"id_token_hint": {"HINT"}, "client_id": {"rp"}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}},
+			wantClient: "rp", want: withState(rpSignedOutURI),
+		},
+		{
+			name:       "client_id alone",
+			params:     url.Values{"client_id": {"rp"}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}},
+			wantClient: "rp", want: withState(rpSignedOutURI),
+		},
+		{
+			name:       "no state",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {rpSignedOutURI}},
+			wantClient: "rp", want: rpSignedOutURI,
+		},
+		{
+			name:       "logout_hint and ui_locales",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}, "logout_hint": {"alice"}, "ui_locales": {"tlh fr-CA"}},
+			wantClient: "rp", want: withState(rpSignedOutURI),
+		},
+		{
+			name:       "unregistered URI",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {"https://attacker.example/"}, "state": {"xyz"}},
+			wantClient: "rp",
+		},
+		{
+			name:       "registered URI with a query added",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {rpSignedOutURI + "?foo=bar"}, "state": {"xyz"}},
+			wantClient: "rp",
+		},
+		{
+			name:       "registered URI with a trailing slash",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {rpSignedOutURI + "/"}, "state": {"xyz"}},
+			wantClient: "rp",
+		},
+		{
+			name:       "registered URI in another case",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {"https://RP.example/signed-out"}, "state": {"xyz"}},
+			wantClient: "rp",
+		},
+		{
+			name:       "redirect URI rather than post-logout redirect URI",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {rpRedirectURI}, "state": {"xyz"}},
+			wantClient: "rp",
+		},
+		{
+			name:       "URI another Client registered",
+			params:     url.Values{"id_token_hint": {"HINT"}, "post_logout_redirect_uri": {otherSignedOutURI}, "state": {"xyz"}},
+			wantClient: "rp",
+		},
+		{
+			name:   "no hint and no client_id",
+			params: url.Values{"post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}},
+		},
+		{
+			name:   "client_id that disagrees with the hint",
+			params: url.Values{"id_token_hint": {"HINT"}, "client_id": {"other"}, "post_logout_redirect_uri": {otherSignedOutURI}, "state": {"xyz"}},
+		},
+		{
+			name:   "client_id of no registered Client",
+			params: url.Values{"client_id": {"unknown"}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}},
+		},
+		{
+			name:       "client_id of a Client that registered none",
+			params:     url.Values{"client_id": {"public"}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}},
+			wantClient: "public",
+		},
+		{
+			name:       "hint alone",
+			params:     url.Values{"id_token_hint": {"HINT"}, "state": {"xyz"}},
+			wantClient: "rp",
+		},
+		{name: "state alone", params: url.Values{"state": {"xyz"}}},
+		{name: "no parameters", params: url.Values{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b, hint := signedInWithHint(t, handler)
+			params := url.Values{}
+			for k, vs := range tt.params {
+				for _, v := range vs {
+					params.Add(k, strings.ReplaceAll(v, "HINT", hint))
+				}
+			}
+			resp := b.logout(http.MethodGet, params)
+			if got := parseLogoutPage(t, resp).client; got != tt.wantClient {
+				t.Errorf("logout confirmation page names the client %q, want %q", got, tt.wantClient)
+			}
+			resp = b.answerLogout(resp, confirmLogout)
+			if tt.want != "" {
+				if got := location(t, resp).String(); got != tt.want {
+					t.Errorf("confirmed logout redirects to %q, want %q", got, tt.want)
+				}
+			} else {
+				if got := outcome(t, resp); got != signedOut {
+					t.Errorf("confirmed logout page says %q, want %q", got, signedOut)
+				}
+				if diff := cmp.Diff(pageHeaders, headers(resp.header, pageHeaders)); diff != "" {
+					t.Errorf("signed-out page headers mismatch (-want +got):\n%s", diff)
+				}
+			}
+			wantSignedOut(t, handler, b.session, "after the logout")
+		})
+	}
+}
+
+// REQ-LOGOUT-8: an End-User who declines stays signed in, and is returned
+// to the Client as a confirmed logout would return them, or shown that
+// they are still signed in.
+func TestLogoutDeclined(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name        string
+		redirectURI string
+		want        string // where declining sends the browser; "" for the page
+	}{
+		{name: "registered URI", redirectURI: rpSignedOutURI, want: rpSignedOutURI + "?state=xyz"},
+		{name: "unregistered URI", redirectURI: "https://attacker.example/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b, hint := signedInWithHint(t, handler)
+			resp := b.logout(http.MethodGet, url.Values{"id_token_hint": {hint}, "post_logout_redirect_uri": {tt.redirectURI}, "state": {"xyz"}})
+			resp = b.answerLogout(resp, declineLogout)
+			if tt.want != "" {
+				if got := location(t, resp).String(); got != tt.want {
+					t.Errorf("declined logout redirects to %q, want %q", got, tt.want)
+				}
+			} else if got := outcome(t, resp); got != stillSignedIn {
+				t.Errorf("declined logout page says %q, want %q", got, stillSignedIn)
+			}
+			wantSignedIn(t, b, "after declining")
+		})
+	}
+}
+
+// REQ-LOGOUT-11: a browser without a Login Session can be sent to the
+// logout endpoint, as with one: it is asked to confirm, with no End-User
+// named, and then returned to the Client or shown that it is signed out.
+func TestLogoutWithoutLoginSession(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	_, hint := signedInWithHint(t, handler)
+	tests := []struct {
+		name   string
+		params url.Values
+		want   string // where confirming sends the browser; "" for the signed-out page
+	}{
+		{
+			name:   "hint and registered URI",
+			params: url.Values{"id_token_hint": {hint}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}},
+			want:   rpSignedOutURI + "?state=xyz",
+		},
+		{name: "no parameters", params: url.Values{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b := &browser{t: t, handler: handler}
+			resp := b.logout(http.MethodGet, tt.params)
+			if got := parseLogoutPage(t, resp).signedIn; got != "" {
+				t.Errorf("logout confirmation page says the browser is signed in as %q, want no one", got)
+			}
+			resp = b.answerLogout(resp, confirmLogout)
+			if tt.want != "" {
+				if got := location(t, resp).String(); got != tt.want {
+					t.Errorf("confirmed logout redirects to %q, want %q", got, tt.want)
+				}
+			} else if got := outcome(t, resp); got != signedOut {
+				t.Errorf("confirmed logout page says %q, want %q", got, signedOut)
+			}
+		})
+	}
+}
+
+// REQ-LOGOUT-13, REQ-LOGOUT-8: only the End-User's own confirmation, made
+// in their browser on the page shown for them, ends their Login Session.
+// A cross-origin submission is refused, a submission without an answer is
+// malformed, and one for another End-User, or for none, sends the browser
+// back to be asked again; each leaves the End-User signed in.
+func TestLogoutConfirmationCannotBeForged(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	params := url.Values{"client_id": {"rp"}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}}
+	action := logoutConfirmationPath + "?" + params.Encode()
+	askAgain := logoutPath + "?" + params.Encode()
+	tests := []struct {
+		name       string
+		form       url.Values
+		header     http.Header
+		wantStatus int
+		wantNext   string // where the browser is sent, for a 303
+	}{
+		{
+			name:       "cross-origin submission",
+			form:       url.Values{"decision": {confirmLogout}, "end_user": {aliceSubject}},
+			header:     http.Header{"Sec-Fetch-Site": {"cross-site"}},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "submission from another origin without Sec-Fetch-Site",
+			form:       url.Values{"decision": {confirmLogout}, "end_user": {aliceSubject}},
+			header:     http.Header{"Origin": {"https://attacker.example"}},
+			wantStatus: http.StatusForbidden,
+		},
+		{name: "no answer", form: url.Values{"end_user": {aliceSubject}}, wantStatus: http.StatusBadRequest},
+		{name: "unknown answer", form: url.Values{"decision": {"yes"}, "end_user": {aliceSubject}}, wantStatus: http.StatusBadRequest},
+		{
+			name:       "shown for another End-User",
+			form:       url.Values{"decision": {confirmLogout}, "end_user": {bobSubject}},
+			wantStatus: http.StatusSeeOther, wantNext: askAgain,
+		},
+		{
+			name:       "shown with no one signed in",
+			form:       url.Values{"decision": {confirmLogout}},
+			wantStatus: http.StatusSeeOther, wantNext: askAgain,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b, _ := signedInWithHint(t, handler)
+			req := newFormRequest(t, action, tt.form)
+			maps.Copy(req.Header, tt.header)
+			resp := b.do(req)
+			if resp.status != tt.wantStatus || resp.header.Get("Location") != tt.wantNext {
+				t.Errorf("POST %s status, Location = %d, %q; want %d, %q", action, resp.status, resp.header.Get("Location"), tt.wantStatus, tt.wantNext)
+			}
+			wantSignedIn(t, b, "after "+tt.name)
+		})
+	}
+}
+
+// A logout request that repeats a parameter pulsar reads, or that it
+// cannot read, gets the error page and logs no one out.
+func TestLogoutMalformedRequest(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	signedIn, hint := signedInWithHint(t, handler)
+	for _, name := range []string{"id_token_hint", "client_id", "post_logout_redirect_uri", "state"} {
+		t.Run("repeated "+name, func(t *testing.T) {
+			t.Parallel()
+			b := &browser{t: t, handler: handler, session: signedIn.session}
+			params := url.Values{"id_token_hint": {hint}, "client_id": {"rp"}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}}
+			params.Add(name, params.Get(name))
+			wantErrorPage(t, b.logout(http.MethodGet, params), "logout request")
+			wantSignedIn(t, b, "after a malformed request")
+		})
+	}
+	t.Run("POST not form-encoded", func(t *testing.T) {
+		t.Parallel()
+		b := &browser{t: t, handler: handler, session: signedIn.session}
+		req := newFormRequest(t, logoutPath, url.Values{"id_token_hint": {hint}})
+		req.Header.Set("Content-Type", "application/json")
+		wantErrorPage(t, b.do(req), "logout request")
+		wantSignedIn(t, b, "after a malformed request")
+	})
+}
+
+// REQ-LOGOUT-3: an id_token_hint whose exp has passed is accepted. The
+// End-User returns an hour after signing in, still within their Login
+// Session; the hint still identifies the Client, which gets them back.
+func TestLogoutExpiredHint(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		handler := newBubbleFlowHandler(t, databaseURL)
+		b, hint := signedInWithHint(t, handler)
+		exp, _ := verify(t, handler, hint).claims["exp"].(float64)
+
+		// Within the Login Session's limits: idle for 20 minutes at a time,
+		// under its 30, and an hour in all, under its 10.
+		for range 3 {
+			time.Sleep(20 * time.Minute)
+			wantSignedIn(t, b, "while waiting")
+		}
+		if now := float64(time.Now().Unix()); now < exp {
+			t.Fatalf("now = %v, want past the hint's exp %v", now, exp)
+		}
+
+		resp := b.logout(http.MethodGet, url.Values{"id_token_hint": {hint}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}})
+		resp = b.answerLogout(resp, confirmLogout)
+		if got, want := location(t, resp).String(), rpSignedOutURI+"?state=xyz"; got != want {
+			t.Errorf("confirmed logout with an expired hint redirects to %q, want %q", got, want)
+		}
+		wantSignedOut(t, handler, b.session, "after the logout")
+	})
+}
+
+// REQ-BCP-13: logout ends the Login Session and nothing else. The refresh
+// token a confidential or a public Client holds for offline access still
+// refreshes, and the access token issued with it is still accepted at
+// UserInfo until it expires.
+func TestLogoutKeepsTokens(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		name     string
+		client   pkceClient
+		verifier string
+	}{
+		{name: "confidential Client", client: rpNoPKCE},
+		{name: "public Client", client: publicPKCE, verifier: pkceVerifier},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := tt.client
+			params := clientParams(c.clientID, c.redirectURI)
+			params.Set("scope", "openid email offline_access")
+			params.Set("prompt", "consent")
+			if c.challenge != "" {
+				withChallenge(params, c.challenge)
+			}
+			b := &browser{t: t, handler: handler}
+			code := location(t, b.decide(b.signIn(b.authorize(http.MethodGet, params)), "allow")).Query().Get("code")
+			tokens := tokenResponseOf(t, c.redeem(t, handler, c.form(code, tt.verifier)))
+
+			resp := b.logout(http.MethodGet, url.Values{"id_token_hint": {tokens.IDToken}})
+			if got := outcome(t, b.answerLogout(resp, confirmLogout)); got != signedOut {
+				t.Fatalf("confirmed logout page says %q, want %q", got, signedOut)
+			}
+			wantSignedOut(t, handler, b.session, "after the logout")
+
+			if diff := cmp.Diff(claimsOf(aliceEmail), userInfoClaims(t, userInfo(t, handler, getHeader, tokens.AccessToken))); diff != "" {
+				t.Errorf("UserInfo claims after logout mismatch (-want +got):\n%s", diff)
+			}
+			if r := tokenResponseOf(t, c.refresh(t, handler, tokens.RefreshToken, "")); r.RefreshToken == "" {
+				t.Errorf("refresh after logout issued no refresh_token")
+			}
+		})
+	}
+}
