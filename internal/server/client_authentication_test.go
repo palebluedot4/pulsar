@@ -298,13 +298,7 @@ func signJWS(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid, typ strin
 // serialization: a JWT.
 func signAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, claims map[string]any) string {
 	tb.Helper()
-	return signTypedAssertion(tb, alg, key, kid, "", claims)
-}
-
-// signTypedAssertion returns signJWS's JWS in the compact serialization.
-func signTypedAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid, typ string, claims map[string]any) string {
-	tb.Helper()
-	s, err := signJWS(tb, alg, key, kid, typ, claims).CompactSerialize()
+	s, err := signJWS(tb, alg, key, kid, "", claims).CompactSerialize()
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -362,7 +356,11 @@ func TestTokenPrivateKeyJWT(t *testing.T) {
 				tt.edit(claims, form)
 			}
 			c := code(t, handler, clientParams("jwt", jwtRedirectURI))
-			maps.Copy(form, jwtForm(c, signTypedAssertion(t, tt.key.alg, tt.key.key, tt.kid, tt.typ, claims)))
+			assertion, err := signJWS(t, tt.key.alg, tt.key.key, tt.kid, tt.typ, claims).CompactSerialize()
+			if err != nil {
+				t.Fatal(err)
+			}
+			maps.Copy(form, jwtForm(c, assertion))
 			if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
 				t.Errorf("POST %s ID token aud = %v, want %q", tokenPath, got, "jwt")
 			}
@@ -506,6 +504,8 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 		{name: "aud an array of the issuer and the token endpoint", assertion: sign(with("aud", []string{loginIssuer, tokenEndpoint}))},
 		{name: "aud an array of another server and the issuer", assertion: sign(with("aud", []string{"https://other.example", loginIssuer}))},
 		{name: "aud an empty array", assertion: sign(with("aud", []string{}))},
+		{name: "aud null", assertion: sign(with("aud", json.RawMessage("null")))},
+		{name: "aud an array of the issuer and a number", assertion: sign(with("aud", []any{loginIssuer, 1}))},
 		{name: "aud the issuer with a slash", assertion: sign(with("aud", loginIssuer+"/"))},
 		{name: "aud the issuer in another case", assertion: sign(with("aud", strings.ToUpper(loginIssuer)))},
 		{name: "aud the authorization endpoint", assertion: sign(with("aud", loginIssuer+"/authorize"))},
