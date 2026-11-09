@@ -9,47 +9,43 @@ an End-User allows each Client, and the authorization code flow, with
 `prompt` and `max_age`, to an ID token and access token for Clients that
 authenticate with `client_secret_basic`, `client_secret_post` or
 `private_key_jwt`, and for public Clients, which must use PKCE with `S256`.
-A `private_key_jwt` assertion must name pulsar's issuer as its sole
-audience, as RFC 10070 requires, so one naming the token endpoint is
-refused.
-A public Client cannot prove its identity, so the consent page asks for it
-every time rather than remembering. A public Client running in a browser
-on another origin can redeem its code and refresh tokens, and call
-UserInfo, from the origin of one of its redirect URIs. UserInfo answers
-any Client, confidential or public, from the origins of its own redirect
-URIs, and the JWK Set answers any origin. A
-confidential Client gets no such headers at the token endpoint, since a
-browser cannot keep its secret. RFC 10017 recommends a
-backend-for-frontend, a confidential Client on the server, over a Client
-that runs in the browser. UserInfo returns the End-User's `sub` and the claims of the
-`profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
-with the access token in the `Authorization` header or the body; the
-`claims` parameter requests individual claims in the ID token or from
-UserInfo. A request with `offline_access` and `prompt=consent` asks the
-End-User for offline access, and if they allow it, the token response
-carries a refresh token. The Client redeems it with the `refresh_token`
-grant, for a narrower scope if it asks, for a new access token, ID token
-and refresh token, for up to thirty days; each refresh token is redeemed
-once. A refresh token already redeemed, presented again by its own Client
-while its Refresh Token Family lives, revokes the whole family, with no
-grace period: its refresh tokens are refused from then on, and UserInfo
-refuses its access tokens. A second redemption
-of a code that is otherwise valid, by its own Client, with its redirect
-URI, and with a matching `code_verifier` exactly when the code has a
-challenge, revokes the access tokens issued from it and, for as long as
-the family lives, the Refresh Token Family it started. While an End-User
-is out of the registry, no code or refresh token issued for them is
-redeemed, and UserInfo refuses their access tokens; a Client out of the
-registry cannot authenticate, so it redeems neither. Removal revokes
-nothing, so one added back has the tokens not yet expired again. Every
-15 minutes, each replica deletes the codes no longer kept for a second
-redemption to revoke, the expired access tokens, client assertions and
-Login Sessions, the ended Refresh Token Families with their refresh
-tokens, and the counts of login attempts forgotten a day after the last. `pulsar keys
-rotate` rotates the signing key. The OpenID conformance
-suite's Config OP and Basic OP plans run against it in CI; on 2026-11-06,
-at commit `8d6ab47`, they finished with no failures, as [Checking
-conformance](#checking-conformance) details.
+A `private_key_jwt` assertion must name pulsar's issuer as its sole audience,
+as RFC 10070 requires, so one naming the token endpoint is refused. A public
+Client cannot prove its identity, so the consent page asks for it every time
+rather than remembering. A public Client running in a browser on another
+origin can redeem its code and refresh tokens, and call UserInfo, from the
+origin of one of its redirect URIs. UserInfo answers any Client, confidential
+or public, from the origins of its own redirect URIs, and the JWK Set answers
+any origin. A confidential Client gets no such headers at the token endpoint,
+since a browser cannot keep its secret. RFC 10017 recommends a
+backend-for-frontend, a confidential Client on the server, over a Client that
+runs in the browser. UserInfo returns the End-User's `sub` and the claims of
+the `profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
+with the access token in the `Authorization` header or the body; the `claims`
+parameter requests individual claims in the ID token or from UserInfo. A
+request with `offline_access` and `prompt=consent` asks the End-User for
+offline access, and if they allow it, the token response carries a refresh
+token. The Client redeems it with the `refresh_token` grant, for a narrower
+scope if it asks, for a new access token, ID token and refresh token, for up
+to thirty days; each refresh token is redeemed once. A refresh token already
+redeemed, presented again by its own Client while its Refresh Token Family
+lives, revokes the whole family, with no grace period: its refresh tokens are
+refused from then on, and UserInfo refuses its access tokens. A second
+redemption of a code that is otherwise valid, by its own Client, with its
+redirect URI, and with a matching `code_verifier` exactly when the code has a
+challenge, revokes the access tokens issued from it and, for as long as the
+family lives, the Refresh Token Family it started. While an End-User is out of
+the registry, no code or refresh token issued for them is redeemed, and
+UserInfo refuses their access tokens; a Client out of the registry cannot
+authenticate, so it redeems neither. Removal revokes nothing, so one added
+back has the tokens not yet expired again. Every 15 minutes, each replica
+deletes the codes no longer kept for a second redemption to revoke, the
+expired access tokens, client assertions and Login Sessions, the ended Refresh
+Token Families with their refresh tokens, and the counts of login attempts
+forgotten a day after the last. `pulsar keys rotate` rotates the signing key.
+The OpenID conformance suite's Config OP and Basic OP plans run against it in
+CI; on 2026-11-06, at commit `8d6ab47`, they finished with no failures, as
+[Checking conformance](#checking-conformance) details.
 
 ## Running it
 
