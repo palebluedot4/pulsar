@@ -102,9 +102,9 @@ func with(e entry, key string, value any) entry {
 // with an error that names PULSAR_REGISTRY and the problem.
 //
 // REQ-OAUTH-1: a redirect URI is absolute, without a fragment.
-// REQ-OAUTH-2: every Client registers its redirect URIs.
+// REQ-OAUTH-2: every Client registers its redirect URIs, each once.
 // REQ-LOGOUT-10: a post-logout redirect URI is checked as a redirect URI
-// is, and listed once per Client.
+// is, and listed once per Client too.
 // REQ-CORE-1: a Subject is unique, at most 255 ASCII characters and
 // compared as a case-sensitive string, so it is a UUID in its one
 // lowercase form.
@@ -187,6 +187,7 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "post-logout redirect URI not a URI", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https://rp.example/a b"})}, nil), problem: "post_logout_redirect_uris[0]"},
 		{name: "https post-logout redirect URI without host", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https:///signed-out"})}, nil), problem: "post_logout_redirect_uris[0]"},
 		{name: "duplicate post-logout redirect URI", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https://rp.example/signed-out", "https://rp.example/signed-out"})}, nil), problem: "post_logout_redirect_uris[1]"},
+		{name: "duplicate redirect URI", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example/callback", "https://rp.example/callback"})}, nil), problem: "redirect_uris[1]"},
 		{name: "End-User without Subject", registry: registryJSON(t, nil, []entry{with(alice, "sub", nil)}), problem: "sub"},
 		{name: "Subject not a UUID", registry: registryJSON(t, nil, []entry{with(alice, "sub", "alice")}), problem: "sub"},
 		{name: "Subject in uppercase", registry: registryJSON(t, nil, []entry{with(alice, "sub", "7C9E6679-7425-40DE-944B-E07FC1F90AE7")}), problem: "sub"},

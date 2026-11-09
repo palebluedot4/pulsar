@@ -20,7 +20,8 @@
 //
 // A Client may list post_logout_redirect_uris, to which pulsar returns
 // the End-User after logout (OpenID Connect RP-Initiated Logout 1.0 §3.1).
-// Each is checked as a redirect URI is, and listed once.
+// Each is checked as a redirect URI is, and, as each redirect URI is,
+// listed once.
 //
 // A Client authenticates with the token_endpoint_auth_method it registers:
 // client_secret_basic or client_secret_post with a client_secret_hash,
@@ -358,11 +359,11 @@ func newClient(e clientEntry) (*Client, error) {
 	if len(e.RedirectURIs) == 0 {
 		return nil, errors.New("redirect_uris must list at least one URI")
 	}
-	for i, raw := range e.RedirectURIs {
-		u, err := checkRedirectURI(raw)
-		if err != nil {
-			return nil, fmt.Errorf("redirect_uris[%d]: %w", i, err)
-		}
+	uris, err := checkRedirectURIs("redirect_uris", e.RedirectURIs)
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range uris {
 		if o, ok := webOrigin(u); ok && !slices.Contains(c.Origins, o) {
 			c.Origins = append(c.Origins, o)
 		}
@@ -372,16 +373,29 @@ func newClient(e clientEntry) (*Client, error) {
 	// RP-Initiated Logout 1.0 §3 compares a post-logout redirect URI
 	// exactly with one registered, as RFC 6749 §3.1.2 does a redirect URI,
 	// so each is held to the same form.
-	for i, raw := range e.PostLogoutRedirectURIs {
-		if _, err := checkRedirectURI(raw); err != nil {
-			return nil, fmt.Errorf("post_logout_redirect_uris[%d]: %w", i, err)
-		}
-		if slices.Contains(e.PostLogoutRedirectURIs[:i], raw) {
-			return nil, fmt.Errorf("post_logout_redirect_uris[%d]: %q is listed twice", i, raw)
-		}
+	if _, err := checkRedirectURIs("post_logout_redirect_uris", e.PostLogoutRedirectURIs); err != nil {
+		return nil, err
 	}
 	c.PostLogoutRedirectURIs = e.PostLogoutRedirectURIs
 	return c, nil
+}
+
+// checkRedirectURIs checks each of list, the registry member name, as
+// checkRedirectURI does, and that none is listed twice, and returns them
+// parsed.
+func checkRedirectURIs(name string, list []string) ([]*url.URL, error) {
+	uris := make([]*url.URL, len(list))
+	for i, raw := range list {
+		u, err := checkRedirectURI(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", name, i, err)
+		}
+		if slices.Contains(list[:i], raw) {
+			return nil, fmt.Errorf("%s[%d]: %q is listed twice", name, i, raw)
+		}
+		uris[i] = u
+	}
+	return uris, nil
 }
 
 // defaultPort is the port each scheme a browser-based Client is served
