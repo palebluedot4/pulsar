@@ -76,9 +76,10 @@ func sortedKids(set jwkSet) []string {
 }
 
 // REQ-JWK-1, REQ-JWK-3, REQ-JWK-4, REQ-JWA-1, REQ-JWA-3, REQ-JWA-4,
-// REQ-JWA-5, REQ-DISC-18: the JWK Set holds the RSA public key, of 2048
-// bits, with "kty", "n" and "e" in their minimal form, its "use", "alg"
-// and a "kid" that is its RFC 7638 thumbprint, and no private member.
+// REQ-JWA-5, REQ-DISC-18, REQ-DISC-20, REQ-BROWSER-1: the JWK Set holds
+// the RSA public key, of 2048 bits, with "kty", "n" and "e" in their
+// minimal form, its "use", "alg" and a "kid" that is its RFC 7638
+// thumbprint, and no private member; any origin may read it.
 func TestJWKS(t *testing.T) {
 	t.Parallel()
 
@@ -88,8 +89,8 @@ func TestJWKS(t *testing.T) {
 	wantHeader := map[string]string{
 		"Content-Type":  "application/json",
 		"Cache-Control": "public, max-age=60",
-		// Nothing in #13 asks for CORS on the JWK Set, so none is sent.
-		"Access-Control-Allow-Origin": "",
+		// The JWK Set is public, so any origin may read it.
+		"Access-Control-Allow-Origin": "*",
 	}
 	gotHeader := make(map[string]string, len(wantHeader))
 	for k := range wantHeader {

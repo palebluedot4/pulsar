@@ -68,7 +68,8 @@ type tokenError struct {
 // redeemed only with its code_verifier (RFC 7636 §4.6). A code issued with
 // offline access is redeemed for a refresh token too, and a refresh token
 // for new tokens of each kind (RFC 6749 §6), with the same Client
-// authentication.
+// authentication. A public Client running in a browser may send its
+// requests from the origin of one of its redirect URIs (corsPolicy).
 func (p *Provider) HandleToken() http.Handler {
 	return http.HandlerFunc(p.token)
 }
@@ -79,6 +80,7 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Pragma", "no-cache")
+	h.Add("Vary", "Origin")
 
 	resp, tokErr := p.exchange(w, r)
 	if tokErr != nil {
@@ -107,6 +109,15 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	}
 	if name, ok := repeated(params, tokenParams); ok {
 		return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
+	}
+	// A request from a browser is checked against the public Client its
+	// client_id names before its grant is, since a browser sends a token
+	// request without a preflight: one from an origin not allowed must not
+	// redeem a code or rotate a refresh token whose response the browser
+	// withholds (RFC 10017 §6.3.3.4).
+	client, _ := p.registry.Client(params.Get("client_id"))
+	if !p.tokenCORS.allow(w, r, client) {
+		return nil, badRequest(errInvalidRequest, errOriginNotAllowed)
 	}
 
 	// Each grant checks the request's form before its Client

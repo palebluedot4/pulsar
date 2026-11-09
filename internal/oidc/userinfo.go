@@ -45,7 +45,9 @@ var errBadToken = &bearerError{status: http.StatusUnauthorized, code: errInvalid
 // Connect Core 1.0 §5.3). It accepts an access token pulsar issued, sent
 // as a bearer token in the Authorization header or, by POST, in the
 // form-encoded body (RFC 6750 §2.1, §2.2), and returns the End-User's sub
-// and the claims the token's scopes request (§5.4).
+// and the claims the token's scopes request (§5.4). A Client running in a
+// browser may send its requests from the origin of one of its redirect
+// URIs (corsPolicy).
 func (p *Provider) HandleUserInfo() http.Handler {
 	return http.HandlerFunc(p.userInfo)
 }
@@ -56,6 +58,7 @@ func (p *Provider) userInfo(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Pragma", "no-cache")
+	h.Add("Vary", "Origin")
 
 	claims, bErr := p.userInfoClaims(w, r)
 	if bErr != nil && bErr.status == http.StatusInternalServerError {
@@ -88,7 +91,19 @@ func (p *Provider) userInfoClaims(w http.ResponseWriter, r *http.Request) (map[s
 	if bErr != nil {
 		return nil, bErr
 	}
-	at, err := p.verifyAccessToken(ctx, token)
+	signed, ok := p.parseAccessToken(token)
+	if !ok {
+		return nil, errBadToken
+	}
+	// A request from a browser is checked against the Client the token was
+	// issued to, once its signature shows that pulsar issued it, and before
+	// it is validated, so that the application can read why an expired or
+	// revoked token is refused.
+	client, _ := p.registry.Client(signed.ClientID)
+	if !p.userInfoCORS.allow(w, r, client) {
+		return nil, &bearerError{status: http.StatusBadRequest, code: errInvalidRequest, desc: errOriginNotAllowed}
+	}
+	at, err := p.validateAccessToken(ctx, signed)
 	switch {
 	case errors.Is(err, errTokenNotValid):
 		return nil, errBadToken
@@ -151,12 +166,12 @@ func bearerToken(w http.ResponseWriter, r *http.Request) (string, *bearerError) 
 	return tokens[0], nil
 }
 
-// errTokenNotValid is returned by verifyAccessToken for an access token
+// errTokenNotValid is returned by validateAccessToken for an access token
 // that fails validation.
 var errTokenNotValid = errors.New("the access token is not valid")
 
 // verifiedAccessToken is what UserInfo reads of an access token that
-// verifyAccessToken accepted, and of its record.
+// validateAccessToken accepted, and of its record.
 type verifiedAccessToken struct {
 	subject string
 	scope   string
@@ -180,27 +195,40 @@ func (at verifiedAccessToken) requested() requestedClaims {
 	return requested
 }
 
-// verifyAccessToken validates token as RFC 9068 §4 requires of a resource
-// server, with this OP as the resource, and checks that its record is
-// current: it is recorded, and has not expired.
-func (p *Provider) verifyAccessToken(ctx context.Context, token string) (verifiedAccessToken, error) {
-	// A signature by a key the OP publishes, by RS256, never none.
+// signedAccessToken holds the claims of an access token whose signature
+// and type parseAccessToken verified, which validateAccessToken has yet
+// to validate.
+type signedAccessToken struct {
+	jwt.Claims
+	Scope    string `json:"scope"`
+	ClientID string `json:"client_id"`
+}
+
+// parseAccessToken returns the claims of token, if it is a JWT access
+// token that one of the keys the OP publishes signed, by RS256, never
+// none, and whose typ is at+jwt (RFC 9068 §4).
+func (p *Provider) parseAccessToken(token string) (*signedAccessToken, bool) {
 	typ, payload, ok := p.keys.VerifyJWT(token)
 	if !ok {
-		return verifiedAccessToken{}, errTokenNotValid
+		return nil, false
 	}
 	// The media type, with or without its prefix, compared without regard
 	// to case (RFC 7515 §4.1.9).
 	if !strings.EqualFold(typ, "at+jwt") && !strings.EqualFold(typ, "application/at+jwt") {
-		return verifiedAccessToken{}, errTokenNotValid
+		return nil, false
 	}
-	var claims struct {
-		jwt.Claims
-		Scope string `json:"scope"`
-	}
+	var claims signedAccessToken
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return verifiedAccessToken{}, errTokenNotValid
+		return nil, false
 	}
+	return &claims, true
+}
+
+// validateAccessToken validates the claims of an access token that
+// parseAccessToken returned, as RFC 9068 §4 requires of a resource server,
+// with this OP as the resource, and checks that its record is current: it
+// is recorded, and has not expired.
+func (p *Provider) validateAccessToken(ctx context.Context, claims *signedAccessToken) (verifiedAccessToken, error) {
 	now := time.Now()
 	issuer := p.issuer.String()
 	switch {
