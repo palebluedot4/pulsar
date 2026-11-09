@@ -1,7 +1,7 @@
 # Form Post, RP-Initiated Logout, token revocation and Resource Indicators
 
-Surveyed 2026-11-09 for the specifications of form_post, RP-Initiated Logout
-and token revocation (Spec 3) and of Resource Indicators (Spec 4). It covers
+Surveyed 2026-11-09 for #69, the specification of form_post, RP-Initiated
+Logout and token revocation, and #70, that of Resource Indicators. It covers
 these questions: what the conformance suite's Form Post and RP-Initiated
 Logout plans send and expect; what RP-Initiated Logout 1.0, the Form Post
 Response Mode, RFC 7009 and RFC 8707 require of an OP; whether logout should
@@ -390,12 +390,12 @@ browser-based applications differently by default, so none follows OAuth 2.1
 
 ### Revocation
 
-| Provider           | Refresh token revoked: its access tokens?                                                                                                                           | Access token revoked: what else?                                                                                                                                                            | Public Clients                                                                                                                           | Another Client's token                                                                                                                                        | Source                                                                                                                           |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| node-oidc-provider | Yes: every access token, refresh token and code of the grant, and the grant itself.                                                                                 | Every token of the grant, refresh tokens included; only the grant record is kept. JWT access tokens cannot be revoked: `unsupported_token_type`, "Structured JWT Tokens cannot be revoked". | `client_id` alone (`none`).                                                                                                              | Confidential: `invalid_request`, "client is not authorized to revoke the presented token". Public: 200, nothing revoked, "to disallow guessing valid tokens". | `lib/actions/revocation.js`, `lib/helpers/revoke.js`, `lib/helpers/defaults.js` (`revocationAllowedPolicy`, `revokeGrantPolicy`) |
-| Keycloak           | Yes: the client session is detached ("make sure that issued access-tokens are revoked as well"); an offline token also removes the Client from the offline session. | Only that token: its `jti` is kept in a revoked-token store until its `exp`.                                                                                                                | `client_id` alone.                                                                                                                       | 400 `invalid_request`, "Unmatching clients". An unknown or invalid token gets `invalid_token` in the body with status 200.                                    | `protocol/oidc/endpoints/TokenRevocationEndpoint.java`, `protocol/oidc/refresh/DefaultRefreshTokenProvider.java`                 |
-| Ory Hydra          | Yes: the refresh tokens and access tokens of the whole request ID.                                                                                                  | The same: the refresh tokens and access tokens of that request ID.                                                                                                                          | `client_id` alone (`token_endpoint_auth_method: none`).                                                                                  | `unauthorized_client` internally, but any error other than `invalid_request` or `invalid_client` is written as 200; nothing is revoked.                       | `fosite/handler/oauth2/revocation.go`, `fosite/revoke_handler.go`                                                                |
-| Spring AS          | Yes: the authorization's current access token, and an unused code.                                                                                                  | Only that access token.                                                                                                                                                                     | Not by default: the public-client converter matches only a code exchange with `code_verifier`, so a public Client gets `invalid_client`. | `invalid_client`.                                                                                                                                             | `authentication/OAuth2TokenRevocationAuthenticationProvider.java`, `web/authentication/PublicClientAuthenticationConverter.java` |
+| Provider           | Refresh token revoked: its access tokens?                                                                                                                           | Access token revoked: what else?                                                                                                                                                                                                       | Public Clients                                                                                                                           | Another Client's token                                                                                                                                        | Source                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| node-oidc-provider | Yes: every access token, refresh token and code of the grant, and the grant itself.                                                                                 | Every token of the grant, refresh tokens included; only the grant record is kept. JWT access tokens cannot be revoked: `unsupported_token_type`, "Structured JWT Tokens cannot be revoked" (`lib/shared/reject_structured_tokens.js`). | `client_id` alone (`none`).                                                                                                              | Confidential: `invalid_request`, "client is not authorized to revoke the presented token". Public: 200, nothing revoked, "to disallow guessing valid tokens". | `lib/actions/revocation.js`, `lib/helpers/revoke.js`, `lib/helpers/defaults.js` (`revocationAllowedPolicy`, `revokeGrantPolicy`) |
+| Keycloak           | Yes: the client session is detached ("make sure that issued access-tokens are revoked as well"); an offline token also removes the Client from the offline session. | Only that token: its `jti` is kept in a revoked-token store until its `exp`.                                                                                                                                                           | `client_id` alone.                                                                                                                       | 400 `invalid_request`, "Unmatching clients". An unknown or invalid token gets `invalid_token` in the body with status 200.                                    | `protocol/oidc/endpoints/TokenRevocationEndpoint.java`, `protocol/oidc/refresh/DefaultRefreshTokenProvider.java`                 |
+| Ory Hydra          | Yes: the refresh tokens and access tokens of the whole request ID.                                                                                                  | The same: the refresh tokens and access tokens of that request ID.                                                                                                                                                                     | `client_id` alone (`token_endpoint_auth_method: none`).                                                                                  | `unauthorized_client` internally, but any error other than `invalid_request` or `invalid_client` is written as 200; nothing is revoked.                       | `fosite/handler/oauth2/revocation.go`, `fosite/revoke_handler.go`                                                                |
+| Spring AS          | Yes: the authorization's current access token, and an unused code.                                                                                                  | Only that access token.                                                                                                                                                                                                                | Not by default: the public-client converter matches only a code exchange with `code_verifier`, so a public Client gets `invalid_client`. | `invalid_client`.                                                                                                                                             | `authentication/OAuth2TokenRevocationAuthenticationProvider.java`, `web/authentication/PublicClientAuthenticationConverter.java` |
 
 All four revoke a refresh token's access tokens with it. Revoking an access
 token reaches the refresh tokens in node-oidc-provider and Hydra, and only
@@ -450,7 +450,8 @@ Decided on 2026-11-09.
   Form Post plan reads errors from the POST body, and Core §3.1.2.6 sends
   errors by the requested Response Mode.
 - The auto-submitting page works under the login package's CSP, by a nonce
-  or a hash for its script. `default-src 'none'` blocks an inline script but
+  or a hash for its script, and a visible button submits it when scripts
+  are off. `default-src 'none'` blocks an inline script but
   not the submission, and whether the suite's HtmlUnit enforces CSP is
   unknown.
 
@@ -464,9 +465,10 @@ Decided on 2026-11-09.
   allow a confirmation, the suite's automation can click through one, and
   node-oidc-provider always asks.
 - `id_token_hint` is optional, as it is in §2. Its signature, issuer and
-  audience are checked, which the two forged-hint modules exercise, and an
-  expired but otherwise valid hint is accepted, as §2's SHOULD asks and
-  Spring does.
+  audience are checked, which the two forged-hint modules exercise. Its
+  `exp` is not checked, as Spring does not check it: this goes beyond §2's
+  SHOULD, which asks only that a hint be accepted after its expiry when its
+  RP has a current or recent session.
 - The OP redirects only when the Client is identified, by the hint or by
   `client_id`, and the `post_logout_redirect_uri` exactly matches one
   registered for that Client (§3). The redirect echoes `state`, which the
@@ -496,7 +498,7 @@ Decided on 2026-11-09.
   access tokens issued from it, as RFC 7009 §1 and §2.1 describe and all
   four providers do.
 - Revoking an access token revokes only that token, as Keycloak and Spring
-  do. It takes effect at UserInfo; a resource server that verifies the JWT
+  do. It takes effect at UserInfo; a Resource Server that verifies the JWT
   itself accepts it until it expires, at most ten minutes later, the case
   RFC 7009 §3 and §5 describe.
 - Public Clients authenticate with `client_id` alone (RFC 7009 §5), as 3 of
@@ -508,9 +510,10 @@ Decided on 2026-11-09.
 - CORS follows the token endpoint's policy, as node-oidc-provider's does;
   RFC 7009 §2.3 allows CORS, and OAuth 2.1 §3.2 requires it for
   browser-based applications.
-- Discovery lists `revocation_endpoint` and
-  `revocation_endpoint_auth_methods_supported` (RFC 8414 §2), which the
-  Config OP plan's schema accepts.
+- Discovery lists `revocation_endpoint`,
+  `revocation_endpoint_auth_methods_supported` and, since `private_key_jwt`
+  is among those methods, `revocation_endpoint_auth_signing_alg_values_supported`
+  (RFC 8414 §2), which the Config OP plan's schema accepts.
 
 ### Resource Indicators
 
@@ -526,3 +529,9 @@ Decided on 2026-11-09.
   gets `invalid_target`.
 - Without `resource`, the audience stays the issuer (REQ-AT-5), as RFC 8707
   §2.1 and RFC 9068 §3 allow.
+- An access token for a Resource Server names it as `aud` and carries only
+  its scopes, the audience restriction RFC 8707 §2 and RFC 9700 §2.3 ask
+  for. A Refresh Token Family keeps its Resource Server, and a token request
+  naming another one gets `invalid_target`.
+- A Resource Server's scopes are its own, apart from OpenID Connect's,
+  as node-oidc-provider keeps each resource's scopes apart.
