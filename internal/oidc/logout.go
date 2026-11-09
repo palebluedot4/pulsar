@@ -249,19 +249,6 @@ func (p *Provider) idTokenHintClient(idToken string) (*registry.Client, bool) {
 	return p.registry.Client(claims.Audience[0])
 }
 
-// withQuery returns uri with params added to any query it has, which is
-// kept as registered.
-func withQuery(uri string, params url.Values) string {
-	sep := "?"
-	switch {
-	case strings.HasSuffix(uri, "?") || strings.HasSuffix(uri, "&"):
-		sep = ""
-	case strings.Contains(uri, "?"):
-		sep = "&"
-	}
-	return uri + sep + params.Encode()
-}
-
 // logoutFailed logs err, a failure of pulsar's own, and answers 500.
 func (p *Provider) logoutFailed(w http.ResponseWriter, r *http.Request, err error) {
 	p.logger.ErrorContext(r.Context(), "logout", "error", err)

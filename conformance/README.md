@@ -5,19 +5,19 @@ What `make conformance` needs to run the
 against pulsar. The Makefile target says how a run proceeds;
 `compose.yaml` says what runs.
 
-| File                     | Contents                                                                                                                                                          |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `compose.yaml`           | pulsar, its PostgreSQL, the suite's prebuilt images at `release-v5.3.4`, and the suite's CI runner                                                                |
-| `config-op.json`         | The suite's configuration for `oidcc-config-certification-test-plan`                                                                                              |
-| `config-basic.json`      | The suite's configuration for `oidcc-basic-certification-test-plan`: its Clients' credentials, and the browser automation that signs the End-User in and consents |
-| `config-formpost.json`   | The same for `oidcc-formpost-basic-certification-test-plan`, whose browser automation also passes pulsar's form-post page                                         |
-| `config-logout.json`     | The suite's configuration for `oidcc-rp-initiated-logout-certification-test-plan`: its Client's credentials, and the browser automation that signs in and confirms logout      |
-| `registry.json` | pulsar's registry: the three Clients `config-basic.json` and `config-formpost.json` name, the one of them `config-logout.json` names with its post-logout redirect URI, and the End-User all three sign in as |
-| `expected-failures.json` | Conditions the runner is to accept as failures                                                                                                                    |
-| `expected-warnings.json` | Conditions the runner is to accept as warnings                                                                                                                    |
-| `expected-skips.json`    | Modules the runner is to accept as skipped                                                                                                                        |
-| `runner/`                | The runner's image: `scripts/run-test-plan.py` from the suite, checksummed, and its hashed dependencies                                                           |
-| `tls/`, `results/`       | Written by each run and ignored by git: pulsar's certificate and key; exported results and the logs of every service but the runner                               |
+| File                     | Contents                                                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `compose.yaml`           | pulsar, its PostgreSQL, the suite's prebuilt images at `release-v5.3.4`, and the suite's CI runner                                                                                                            |
+| `config-op.json`         | The suite's configuration for `oidcc-config-certification-test-plan`                                                                                                                                          |
+| `config-basic.json`      | The suite's configuration for `oidcc-basic-certification-test-plan`: its Clients' credentials, and the browser automation that signs the End-User in and consents                                             |
+| `config-formpost.json`   | The same for `oidcc-formpost-basic-certification-test-plan`, whose browser automation also passes pulsar's form-post page                                                                                     |
+| `config-logout.json`     | The suite's configuration for `oidcc-rp-initiated-logout-certification-test-plan`: its Client's credentials, and the browser automation that signs in and confirms logout                                     |
+| `registry.json`          | pulsar's registry: the three Clients `config-basic.json` and `config-formpost.json` name, the one of them `config-logout.json` names with its post-logout redirect URI, and the End-User all three sign in as |
+| `expected-failures.json` | Conditions the runner is to accept as failures                                                                                                                                                                |
+| `expected-warnings.json` | Conditions the runner is to accept as warnings                                                                                                                                                                |
+| `expected-skips.json`    | Modules the runner is to accept as skipped                                                                                                                                                                    |
+| `runner/`                | The runner's image: `scripts/run-test-plan.py` from the suite, checksummed, and its hashed dependencies                                                                                                       |
+| `tls/`, `results/`       | Written by each run and ignored by git: pulsar's certificate and key; exported results and the logs of every service but the runner                                                                           |
 
 The credentials in `config-basic.json`, `config-formpost.json`,
 `config-logout.json` and `registry.json` are for this stack only and

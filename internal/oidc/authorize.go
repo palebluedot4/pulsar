@@ -605,17 +605,23 @@ func (a authorizationResponse) send(w http.ResponseWriter, r *http.Request, para
 		writeFormPost(w, a.redirectURI, params)
 		return
 	}
-	sep := "?"
-	switch {
-	case strings.HasSuffix(a.redirectURI, "?") || strings.HasSuffix(a.redirectURI, "&"):
-		sep = ""
-	case strings.Contains(a.redirectURI, "?"):
-		sep = "&"
-	}
 	// The response carries a code, which no cache may keep. 303, as RFC
 	// 9700 §4.12 advises, so that a request sent by POST is not sent on.
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, a.redirectURI+sep+params.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, withQuery(a.redirectURI, params), http.StatusSeeOther)
+}
+
+// withQuery returns uri with params added to any query it has, which is
+// kept as registered (RFC 6749 §3.1.2).
+func withQuery(uri string, params url.Values) string {
+	sep := "?"
+	switch {
+	case strings.HasSuffix(uri, "?") || strings.HasSuffix(uri, "&"):
+		sep = ""
+	case strings.Contains(uri, "?"):
+		sep = "&"
+	}
+	return uri + sep + params.Encode()
 }
 
 // sendError sends an error response (RFC 6749 §4.1.2.1) to the redirect
