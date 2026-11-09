@@ -110,19 +110,21 @@ result and human review time.
 
 ## Deliberately not doing
 
-| Not doing                                                                   | Until                                                                                                |
-| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Using this provider in production                                           | Never; it is a reference implementation.                                                             |
-| Sign-up, password reset, MFA, social login, SAML, admin UI                  | Never; no authoritative spec, so no objective done.                                                  |
-| Implicit and hybrid flows, front-channel logout, session management         | Never; discouraged by RFC 9700 or fragile in current browsers.                                       |
-| Dynamic Client Registration                                                 | MCP deprecated it for Client ID Metadata Documents.                                                  |
-| FAPI 2.0: PAR, DPoP, mTLS                                                   | Never; it needs PAR and sender-constrained tokens, a large addition beyond the Basic OP profile.     |
-| Token revocation (RFC 7009), introspection (RFC 7662), `client_credentials` | A consumer in `examples/` or MCP authorization support needs one; #47 defers them.                   |
-| Custom skills, subagents or hooks beyond `docs/harness.md`                  | A recorded failure calls for one, and an eval (a skill or subagent) or a test (a hook) checks it.    |
-| Ablation of harness controls (with and without each)                        | A control's value is disputed and its named evidence cannot settle it; see `docs/research/evals.md`. |
-| obra/superpowers                                                            | Its always-on prompt conflicts with lean context; see `docs/research/ai-development.md`.             |
-| A second vendor's model for review                                          | Calibration shows a systematic blind spot.                                                           |
-| Agents running in CI                                                        | #1.                                                                                                  |
+| Not doing                                                                                  | Until                                                                                                                                      |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Using this provider in production                                                          | Never; it is a reference implementation.                                                                                                   |
+| Sign-up, password reset, MFA, social login, SAML, admin UI                                 | Never; no authoritative spec, so no objective done.                                                                                        |
+| Implicit and hybrid flows, front-channel logout, session management                        | Never; discouraged by RFC 9700 or fragile in current browsers.                                                                             |
+| Dynamic Client Registration                                                                | MCP deprecated it for Client ID Metadata Documents.                                                                                        |
+| FAPI 2.0: PAR, DPoP, mTLS                                                                  | Never; it needs PAR and sender-constrained tokens, a large addition beyond the Basic OP profile.                                           |
+| Introspection (RFC 7662), `client_credentials`                                             | A consumer in `examples/` needs one; access tokens are JWTs that Resource Servers verify themselves, and no example is machine to machine. |
+| Back-Channel Logout                                                                        | A Client must learn of a logout without the browser; it needs `sid` and calls from the OP to every Client.                                 |
+| Client ID Metadata Documents, token exchange (RFC 8693), MCP authorization beyond RFC 8707 | A consumer needs one; Client ID Metadata Documents also depart from ADR 0001's static registry.                                            |
+| Custom skills, subagents or hooks beyond `docs/harness.md`                                 | A recorded failure calls for one, and an eval (a skill or subagent) or a test (a hook) checks it.                                          |
+| Ablation of harness controls (with and without each)                                       | A control's value is disputed and its named evidence cannot settle it; see `docs/research/evals.md`.                                       |
+| obra/superpowers                                                                           | Its always-on prompt conflicts with lean context; see `docs/research/ai-development.md`.                                                   |
+| A second vendor's model for review                                                         | Calibration shows a systematic blind spot.                                                                                                 |
+| Agents running in CI                                                                       | #1.                                                                                                                                        |
 
 ## Agent skills
 

@@ -21,6 +21,11 @@ An application registered with the OP that requests tokens. Called a Relying
 Party only where a statement is specific to OpenID Connect.
 _Avoid_: app
 
+**Resource Server**:
+A server registered with the OP that accepts access tokens issued for it,
+and refuses those issued for anything else.
+_Avoid_: API, audience, backend, protected resource (outside RFC 9728)
+
 ## Identity
 
 **Subject**:
