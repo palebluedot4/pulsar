@@ -13,8 +13,9 @@ import (
 // REQ-DISC-8, REQ-DISC-9, REQ-DISC-10, REQ-DISC-11, REQ-DISC-12,
 // REQ-DISC-14, REQ-DISC-15, REQ-DISC-16, REQ-DISC-17, REQ-DISC-19,
 // REQ-ISS-1, REQ-BCP-1, REQ-ASMETA-1, REQ-ASMETA-2, REQ-ASMETA-3,
-// REQ-REVOKE-3: the discovery document, at the path derived from the
-// issuer, with the metadata specs #11 and #69 list.
+// REQ-REVOKE-3, REQ-REVOKE-15, REQ-REVOKE-16: the discovery document, at
+// the path derived from the issuer, with the metadata specs #11 and #69
+// list.
 func TestDiscovery(t *testing.T) {
 	t.Parallel()
 

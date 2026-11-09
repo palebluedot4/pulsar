@@ -75,10 +75,9 @@ func fromOrigin(t *testing.T, handler http.Handler, req *http.Request, origin st
 // REQ-BROWSER-1, REQ-DISC-20, REQ-CORE-65, REQ-REVOKE-13: a preflight to
 // the token or revocation endpoint is approved for the origin of a public
 // Client's redirect URI, and one to UserInfo for that of any Client's,
-// with the method and
-// request headers each endpoint takes; any other origin, or an OPTIONS
-// request that is not a preflight, gets no CORS headers. A preflight
-// needs neither the database nor the signing keys.
+// with the method and request headers each endpoint takes; any other
+// origin, or an OPTIONS request that is not a preflight, gets no CORS
+// headers. A preflight needs neither the database nor the signing keys.
 func TestCORSPreflight(t *testing.T) {
 	t.Parallel()
 
@@ -308,11 +307,7 @@ func TestRevocationCORS(t *testing.T) {
 	public := withCORS(map[string]string{"Access-Control-Allow-Origin": publicOrigin})
 	send := func(t *testing.T, c pkceClient, token, origin string) response {
 		t.Helper()
-		form := revocationForm(token, "")
-		if c.basic.id == "" {
-			form.Set("client_id", c.clientID)
-		}
-		return fromOrigin(t, handler, newRevocationRequest(t, c.basic.id, c.basic.secret, form), origin)
+		return fromOrigin(t, handler, c.revocationRequest(t, token, ""), origin)
 	}
 
 	t.Run("public Client", func(t *testing.T) {
