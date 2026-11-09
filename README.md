@@ -13,9 +13,14 @@ A `private_key_jwt` assertion must name pulsar's issuer as its sole
 audience, as RFC 10070 requires, so one naming the token endpoint is
 refused.
 A public Client cannot prove its identity, so the consent page asks for it
-every time rather than remembering. The token endpoint sends no CORS
-headers, so a public Client running in a browser on another origin cannot
-reach it. UserInfo returns the End-User's `sub` and the claims of the
+every time rather than remembering. A public Client running in a browser
+on another origin can redeem its code and refresh tokens, and call
+UserInfo, from the origin of one of its redirect URIs; UserInfo answers
+any Client's redirect URI origins, and the JWK Set any origin. A
+confidential Client gets no such headers at the token endpoint, since a
+browser cannot keep its secret. RFC 10017 recommends a
+backend-for-frontend, a confidential Client on the server, over a Client
+that runs in the browser. UserInfo returns the End-User's `sub` and the claims of the
 `profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
 with the access token in the `Authorization` header or the body; the
 `claims` parameter requests individual claims in the ID token or from

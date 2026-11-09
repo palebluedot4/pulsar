@@ -58,6 +58,19 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
 - REQ-DISC-11 (§3, `claims_supported`): "RECOMMENDED. JSON array
   containing a list of the Claim Names of the Claims that the OpenID
   Provider MAY be able to supply values for."
+- REQ-DISC-20 (§3): "The Token Endpoint, UserInfo Endpoint, jwks_uri
+  endpoint, Dynamic Client Registration Endpoint, and any other endpoints
+  directly accessed by Clients SHOULD support the use of Cross-Origin
+  Resource Sharing (CORS) [CORS] and/or other methods as appropriate to
+  enable JavaScript Clients and other Browser-Based Clients to access
+  them."
+
+  pulsar offers no Dynamic Client Registration. The origins each endpoint
+  allows are those of REQ-BROWSER-1.
+
+- REQ-DISC-21 (§3): "The use of CORS at the Authorization Endpoint is NOT
+  RECOMMENDED as it is redirected to by the client and not directly
+  accessed."
 
 ## Obtaining the configuration (§4)
 

@@ -98,6 +98,13 @@ var (
 // userInfo sends a UserInfo request with token, as s says.
 func userInfo(t *testing.T, handler http.Handler, s tokenSending, token string) response {
 	t.Helper()
+	b := &browser{t: t, handler: handler}
+	return b.do(newUserInfoRequest(t, s, token))
+}
+
+// newUserInfoRequest returns a UserInfo request with token, as s says.
+func newUserInfoRequest(t *testing.T, s tokenSending, token string) *http.Request {
+	t.Helper()
 	var body io.Reader = http.NoBody
 	if s.body {
 		body = strings.NewReader(url.Values{"access_token": {token}}.Encode())
@@ -109,8 +116,7 @@ func userInfo(t *testing.T, handler http.Handler, s tokenSending, token string) 
 	if s.header {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	b := &browser{t: t, handler: handler}
-	return b.do(req)
+	return req
 }
 
 // userInfoClaims returns the claims of a successful UserInfo response,

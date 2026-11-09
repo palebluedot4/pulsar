@@ -232,15 +232,15 @@ that pulsar, as an OP, must or should meet.
   Endpoint returns an Error Response as defined in Section 3 of OAuth 2.0
   Bearer Token Usage [RFC6750]."
 
-§5.3 also says the UserInfo Endpoint "SHOULD support the use of
-Cross-Origin Resource Sharing (CORS) [CORS] and/or other methods as
-appropriate to enable JavaScript Clients and other Browser-Based Clients
-to access it." pulsar departs from this: no endpoint but discovery sends
-CORS headers, and a browser-based Client that cannot reach the token
-endpoint has no access token to send to UserInfo. CORS at UserInfo alone
-would serve no Client. Other providers do answer cross-origin requests there
-([research](../research/userinfo-and-claims.md)); #41 decides whether
-pulsar should, at the token endpoint and UserInfo together.
+- REQ-CORE-65 (§5.3): "The UserInfo Endpoint SHOULD support the use of
+  Cross-Origin Resource Sharing (CORS) [CORS] and/or other methods as
+  appropriate to enable JavaScript Clients and other Browser-Based Clients
+  to access it."
+
+  UserInfo answers a request from the origin of a redirect URI of the
+  Client the access token was issued to, and the token endpoint one from
+  a public Client's, so that a browser-based Client can obtain the token
+  it sends here (REQ-BROWSER-1).
 
 ## Claims (§5.4, §5.5)
 

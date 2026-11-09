@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -63,6 +64,9 @@ type Provider struct {
 	db       *pgxpool.Pool
 	queries  *queries.Queries
 	logger   *slog.Logger
+
+	tokenCORS    *corsPolicy
+	userInfoCORS *corsPolicy
 }
 
 // NewProvider returns the endpoints of the OP at issuer, for the Clients
@@ -80,6 +84,23 @@ func NewProvider(issuer *Issuer, reg *registry.Registry, sessions *login.Session
 		db:       db,
 		queries:  queries.New(db),
 		logger:   logger,
+		// Only a public Client redeems a code from a browser, which cannot
+		// keep a secret. A public Client sends no Authorization header, so
+		// none is allowed.
+		tokenCORS: newCORSPolicy(reg, corsPolicy{
+			allowHeader: "OPTIONS, POST",
+			methods:     http.MethodPost,
+			allows:      (*registry.Client).Public,
+		}),
+		// Any Client's access token, which the Authorization header carries,
+		// and the challenge of an error response readable (RFC 6750 §3).
+		userInfoCORS: newCORSPolicy(reg, corsPolicy{
+			allowHeader: "GET, HEAD, OPTIONS, POST",
+			methods:     "GET, POST",
+			headers:     "Authorization",
+			expose:      "WWW-Authenticate",
+			allows:      func(*registry.Client) bool { return true },
+		}),
 	}
 }
 

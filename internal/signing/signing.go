@@ -287,9 +287,15 @@ func (s *KeySet) VerifyJWT(token string) (typ string, claims []byte, ok bool) {
 // HandleJWKS serves the public halves of the keys as a JWK Set (RFC 7517
 // §5), each with its kid, use and alg. Before the key set is loaded it
 // answers 503, which no cache may keep.
+//
+// The JWK Set is public, so any origin may read it, as a browser-based
+// Client does to verify an ID token (RFC 10017 §6.3.3.4). The header is
+// sent on every response, whatever its origin, so that no response varies
+// by it (Fetch, "CORS protocol and HTTP caches").
 func (s *KeySet) HandleJWKS() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		h := w.Header()
+		h.Set("Access-Control-Allow-Origin", "*")
 		snap := s.loaded.Load()
 		if snap == nil {
 			h.Set("Cache-Control", "no-store")

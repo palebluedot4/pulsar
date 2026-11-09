@@ -50,9 +50,12 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"iter"
+	"maps"
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -104,6 +107,12 @@ type Client struct {
 	ID           string
 	AuthMethod   AuthMethod
 	RedirectURIs []string
+	// Origins are the origins of the RedirectURIs whose scheme is http or
+	// https, each once, as a browser serializes them in an Origin header
+	// (RFC 6454 §6.1); a redirect URI of another scheme, as a native app
+	// uses, has none. A browser-based Client is served from the origin its
+	// redirect URI names, so these are the origins it sends requests from.
+	Origins []string
 	// JWKS holds the public keys of a Client that authenticates with
 	// private_key_jwt, and is nil for any other. Each key's Algorithm is
 	// one of AssertionAlgorithms, and is the only one it is used with.
@@ -341,9 +350,41 @@ func newClient(e clientEntry) (*Client, error) {
 		if err := checkRedirectURI(raw); err != nil {
 			return nil, fmt.Errorf("redirect_uris[%d]: %w", i, err)
 		}
+		if o, ok := webOrigin(raw); ok && !slices.Contains(c.Origins, o) {
+			c.Origins = append(c.Origins, o)
+		}
 	}
 	c.RedirectURIs = e.RedirectURIs
 	return c, nil
+}
+
+// webOrigin returns the origin of raw, a redirect URI that checkRedirectURI
+// accepted, serialized as RFC 6454 §6.1 has it: the scheme and host in
+// lowercase, and the port only if it is not the scheme's default. Only an
+// http or https URI has one.
+func webOrigin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	var defaultPort string
+	switch scheme {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	default:
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]" // an IPv6 literal (RFC 3986 §3.2.2)
+	}
+	if port := u.Port(); port != "" && port != defaultPort {
+		host += ":" + port
+	}
+	return scheme + "://" + host, true
 }
 
 // AssertionAlgorithms returns the JWS algorithms with which a Client
@@ -483,6 +524,11 @@ func isUUID(s string) bool {
 		}
 	}
 	return true
+}
+
+// Clients returns every Client, in no particular order.
+func (r *Registry) Clients() iter.Seq[*Client] {
+	return maps.Values(r.clients)
 }
 
 // Client returns the Client whose client_id is id.
