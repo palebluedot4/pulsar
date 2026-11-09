@@ -105,18 +105,19 @@ const usage = "usage: pulsar [keys rotate | client-secret]"
 // stand in for the process environment so that tests can drive the whole
 // program.
 func run(ctx context.Context, args []string, getenv func(string) string, _ io.Reader, stdout, _ io.Writer) error {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	command := strings.Join(args[min(1, len(args)):], " ")
-	if command == "client-secret" {
-		// Before the configuration is loaded, since it needs none.
+	switch command {
+	case "client-secret":
+		// It needs no configuration, and does not wait on anything.
 		return printClientSecret(stdout)
-	}
-	rotating := command == "keys rotate"
-	if command != "" && !rotating {
+	case "", "keys rotate":
+	default:
 		return fmt.Errorf("unknown command %q; %s", command, usage)
 	}
+	rotating := command == "keys rotate"
+
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	cfg, err := config.Load(getenv)
 	if err != nil {

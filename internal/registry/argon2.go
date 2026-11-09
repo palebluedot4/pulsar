@@ -148,14 +148,20 @@ func NewClientSecret() (secret, hash string) {
 		time:    clientSecretTime,
 		threads: clientSecretThreads,
 		salt:    salt,
-		key:     argon2.IDKey([]byte(secret), salt, clientSecretTime, clientSecretMemory, clientSecretThreads, clientSecretKey),
 	}
+	h.key = h.derive(secret, clientSecretKey)
 	return secret, h.encode()
+}
+
+// derive returns the size-byte Argon2id hash of password under h's
+// parameters and salt.
+func (h passwordHash) derive(password string, size uint32) []byte {
+	return argon2.IDKey([]byte(password), h.salt, h.time, h.memory, h.threads, size)
 }
 
 // verify reports whether password hashes to h. The comparison takes the
 // same time wherever the two hashes differ.
 func (h passwordHash) verify(password string) bool {
-	key := argon2.IDKey([]byte(password), h.salt, h.time, h.memory, h.threads, uint32(len(h.key))) //nolint:gosec // G115: len(h.key) is the length of a decoded base64 field, far below 2^32.
+	key := h.derive(password, uint32(len(h.key))) //nolint:gosec // G115: len(h.key) is the length of a decoded base64 field, far below 2^32.
 	return subtle.ConstantTimeCompare(key, h.key) == 1
 }

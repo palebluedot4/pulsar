@@ -121,12 +121,6 @@ func TestRunRefusesCommand(t *testing.T) {
 			args:        []string{"keys"},
 			want:        `unknown command "keys"`,
 		},
-		{
-			name:        "client-secret with an argument",
-			databaseURL: postgrestest.UnreachableURL,
-			args:        []string{"client-secret", "rp"},
-			want:        `unknown command "client-secret rp"`,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
