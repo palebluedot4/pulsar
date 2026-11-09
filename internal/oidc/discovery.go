@@ -94,7 +94,7 @@ func HandleDiscovery(issuer *Issuer) http.Handler {
 		JWKSURI:                           issuer.endpointURL(jwksPath),
 		ScopesSupported:                   append(scopeValues(supportedScopes), offlineAccessScope.Value),
 		ResponseTypesSupported:            []string{"code"},
-		ResponseModesSupported:            []string{"query", "form_post"},
+		ResponseModesSupported:            responseModes,
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		SubjectTypesSupported:             []string{"public"},
 		IDTokenSigningAlgValuesSupported:  []string{"RS256"},

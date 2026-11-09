@@ -15,6 +15,17 @@ requested (REQ-CORE-67).
   The form has one hidden input for each parameter, every value
   HTML-escaped, so that a `state` cannot add markup to the page.
 
+  A browser can make an HTTP POST only to an `http` or `https` URI; one of
+  another scheme, such as a native app's (RFC 8252 §7.1), it hands to the
+  app that claims it, without a body. So `form_post` for such a redirect
+  URI is refused with `invalid_request`, which RFC 6749 §4.1.2.1 defines
+  for a request that "includes an invalid parameter value", sent by
+  `query` with the request's other errors. The form-post pages of Keycloak
+  (`OIDCRedirectUriBuilder.java`) and node-oidc-provider
+  (`lib/response_modes/form_post.js`), at the commits
+  `docs/research/logout-revocation-resources.md` lists, check no scheme
+  before posting; the response then never reaches the Client.
+
 - REQ-FORMPOST-2 (§2): "The action attribute of the form MUST be the
   Client's Redirection URI. The method of the form attribute MUST be POST."
 - REQ-FORMPOST-3 (§2): "Because the Authorization Response is intended to

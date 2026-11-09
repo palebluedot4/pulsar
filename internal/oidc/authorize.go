@@ -70,6 +70,18 @@ var authorizationParams = []string{
 	"code_challenge", "code_challenge_method", "claims",
 }
 
+// The Response Modes pulsar supports: query, the default of the
+// response_type code (RFC 6749 §4.1.2), and form_post (OAuth 2.0 Form Post
+// Response Mode §2).
+// responseModes lists them, as discovery does, and the authorization
+// endpoint accepts no other.
+const (
+	responseModeQuery    = "query"
+	responseModeFormPost = "form_post"
+)
+
+var responseModes = []string{responseModeQuery, responseModeFormPost}
+
 // Error codes of an authorization error response (RFC 6749 §4.1.2.1,
 // OpenID Connect Core 1.0 §3.1.2.6).
 const (
@@ -156,12 +168,13 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 
 	// The Response Mode is read before any other parameter, so that every
 	// error from here on goes by the one requested (OpenID Connect Core 1.0
-	// §3.1.2.6). A response_mode repeated, or of a value pulsar does not
-	// support, is refused below, by query.
+	// §3.1.2.6). A response_mode repeated, of a value pulsar does not
+	// support, or of form_post for a redirect URI a browser cannot POST to,
+	// is refused below, by query.
 	resp := authorizationResponse{
 		redirectURI: redirectURI,
 		issuer:      p.issuer.String(),
-		formPost:    slices.Equal(params["response_mode"], []string{"form_post"}),
+		formPost:    slices.Equal(params["response_mode"], []string{responseModeFormPost}) && postable(redirectURI),
 	}
 	if state := params["state"]; len(state) > 0 {
 		resp.state = state[0]
@@ -378,10 +391,11 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	default:
 		return req, errUnsupportedResponseType, "Only the response_type code is supported."
 	}
-	switch params.Get("response_mode") {
-	case "", "query", "form_post":
-	default:
-		return req, errInvalidRequest, "Only the response_modes query and form_post are supported."
+	switch mode := params.Get("response_mode"); {
+	case mode != "" && !slices.Contains(responseModes, mode):
+		return req, errInvalidRequest, "Only the response_modes " + strings.Join(responseModes, " and ") + " are supported."
+	case mode == responseModeFormPost && !postable(redirectURI):
+		return req, errInvalidRequest, "The response_mode form_post requires a redirect_uri whose scheme is http or https."
 	}
 
 	// PKCE is required of a public Client only (ADR 0002), and S256 is the

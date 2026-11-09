@@ -32,9 +32,12 @@ Form Post Basic plan is the Basic OP plan's modules with
 every response, errors too, arrives at the callback by POST. Its
 configuration is `config-basic.json` but for the browser automation:
 pulsar's form-post page is at its authorization endpoint, which the
-consent task matches, so that task's click is optional, and a further
-task clicks the page's button if its script has not already submitted
-it. The registered redirect URI is the one the suite derives from the
+consent task matches, so that task's click is optional. The suite's
+browser automation is HtmlUnit with JavaScript on
+(`frontchannel/BrowserControl.java` at `release-v5.3.4`), so the page's
+script submits the form; a further task only waits until the browser
+reaches the callback, and never clicks the page's button, which would
+submit it a second time. The registered redirect URI is the one the suite derives from the
 configurations' shared `alias` and its own `BASE_URL` in `compose.yaml`; a
 change to either changes the `redirect_uris` in `registry.json` and the
 callback URL that `config-basic.json` and `config-formpost.json` match.
@@ -48,7 +51,11 @@ refuses an entry without one, a failure or warning entry whose
 with any field but `test-name`, `variant`, `configuration-filename` and
 `comment`, since it names a whole module. The runner also counts a listed
 module that ends `FAILED` as the skip expected, though any condition that
-failed in it is still reported unless listed. An entry looks like this:
+failed in it is still reported unless listed. The Basic OP and Form Post
+Basic plans run the same modules, so an entry for both names the
+configuration `*`, which the Config OP plan, running none of those
+modules, never matches; such an entry goes stale only once neither plan
+needs it. An entry looks like this:
 
 ```json
 {

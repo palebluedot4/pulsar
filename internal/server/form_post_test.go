@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"html"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,7 +13,11 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
+	"github.com/palebluedot4/pulsar/internal/registry"
+	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 // What the form-post page holds, as its template writes it.
@@ -250,6 +255,57 @@ func TestUnsupportedResponseMode(t *testing.T) {
 			want := url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
 			if diff := cmp.Diff(want, errorResponse(t, b.authorize(http.MethodGet, params))); diff != "" {
 				t.Errorf("response_mode %q error response mismatch (-want +got):\n%s", tt.mode, diff)
+			}
+		})
+	}
+}
+
+// nativeRedirectURI is the redirect URI of a native app, by a private-use
+// URI scheme (RFC 8252 §7.1).
+const nativeRedirectURI = "com.example.app:/callback"
+
+// REQ-FORMPOST-1, REQ-CORE-67: a browser cannot POST to a redirect URI
+// whose scheme is neither http nor https, so form_post asked for one is
+// refused with invalid_request, by query, as is every other error of that
+// request.
+func TestFormPostRequiresWebRedirectURI(t *testing.T) {
+	t.Parallel()
+
+	reg, err := registry.Parse([]byte(`{"clients": [
+		{"client_id": "native", "token_endpoint_auth_method": "none", "redirect_uris": ["` + nativeRedirectURI + `"]}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := postgrestest.Open(t, postgrestest.UnreachableURL(t))
+	handler := New(slog.New(slog.DiscardHandler), mustParse(t, loginIssuer), pool, signing.New(pool, config.Secret{}), reg, guessing.New(pool, nil), ready())
+
+	tests := []struct {
+		name string
+		del  string // a parameter to remove
+	}{
+		{name: "valid otherwise"},
+		{name: "no response_type", del: "response_type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			params := withFormPost(url.Values{"client_id": {"native"}, "redirect_uri": {nativeRedirectURI}})
+			withPKCE(params)
+			params.Del(tt.del)
+			b := &browser{t: t, handler: handler}
+			callback := location(t, b.authorize(http.MethodGet, params))
+			if got := withoutQuery(callback); got != nativeRedirectURI {
+				t.Fatalf("GET %s redirected to %q, want %q", authorizationPath, got, nativeRedirectURI)
+			}
+			got := callback.Query()
+			if desc := got.Get("error_description"); desc == "" {
+				t.Errorf("error_description = %q, want a description", desc)
+			}
+			got.Del("error_description")
+			want := url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("error response mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
