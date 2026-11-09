@@ -2,7 +2,7 @@
 
 Clauses of [OpenID Connect RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html)
 that pulsar, as an OP, must or should meet. The `end_session_endpoint`
-metadata of §2.1 is REQ-DISC-22. pulsar registers no Client for Session
+metadata of §2.1 is REQ-DISC-23. pulsar registers no Client for Session
 Management, Front-Channel or Back-Channel Logout, so §2's notification of
 other RPs has no one to notify, and `sid` is neither issued nor read.
 
