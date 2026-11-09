@@ -7,7 +7,8 @@
 //	    "client_id": "rp",
 //	    "token_endpoint_auth_method": "client_secret_basic",
 //	    "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$...$...",
-//	    "redirect_uris": ["https://rp.example/callback"]
+//	    "redirect_uris": ["https://rp.example/callback"],
+//	    "post_logout_redirect_uris": ["https://rp.example/signed-out"]
 //	  }],
 //	  "end_users": [{
 //	    "sub": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
@@ -16,6 +17,10 @@
 //	    "claims": {"name": "Alice", "email": "alice@example.com"}
 //	  }]
 //	}
+//
+// A Client may list post_logout_redirect_uris, to which pulsar returns
+// the End-User after logout (OpenID Connect RP-Initiated Logout 1.0 §3.1).
+// Each is checked as a redirect URI is, and listed once.
 //
 // A Client authenticates with the token_endpoint_auth_method it registers:
 // client_secret_basic or client_secret_post with a client_secret_hash,
@@ -110,6 +115,9 @@ type Client struct {
 	ID           string
 	AuthMethod   AuthMethod
 	RedirectURIs []string
+	// PostLogoutRedirectURIs are where the End-User may be returned after
+	// logout, each listed once; none if the Client registered none.
+	PostLogoutRedirectURIs []string
 	// Origins are the origins of the RedirectURIs whose scheme is http or
 	// https, each once, as a browser serializes them in an Origin header
 	// (RFC 6454 §6.1); a redirect URI of another scheme, as a native
@@ -185,6 +193,7 @@ type clientEntry struct {
 	ClientSecretHash        string              `json:"client_secret_hash"`
 	JWKS                    *jose.JSONWebKeySet `json:"jwks"`
 	RedirectURIs            []string            `json:"redirect_uris"`
+	PostLogoutRedirectURIs  []string            `json:"post_logout_redirect_uris"`
 }
 
 type endUserEntry struct {
@@ -359,6 +368,19 @@ func newClient(e clientEntry) (*Client, error) {
 		}
 	}
 	c.RedirectURIs = e.RedirectURIs
+
+	// RP-Initiated Logout 1.0 §3 compares a post-logout redirect URI
+	// exactly with one registered, as RFC 6749 §3.1.2 does a redirect URI,
+	// so each is held to the same form.
+	for i, raw := range e.PostLogoutRedirectURIs {
+		if _, err := checkRedirectURI(raw); err != nil {
+			return nil, fmt.Errorf("post_logout_redirect_uris[%d]: %w", i, err)
+		}
+		if slices.Contains(e.PostLogoutRedirectURIs[:i], raw) {
+			return nil, fmt.Errorf("post_logout_redirect_uris[%d]: %q is listed twice", i, raw)
+		}
+	}
+	c.PostLogoutRedirectURIs = e.PostLogoutRedirectURIs
 	return c, nil
 }
 

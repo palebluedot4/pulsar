@@ -103,6 +103,8 @@ func with(e entry, key string, value any) entry {
 //
 // REQ-OAUTH-1: a redirect URI is absolute, without a fragment.
 // REQ-OAUTH-2: every Client registers its redirect URIs.
+// REQ-LOGOUT-10: a post-logout redirect URI is checked as a redirect URI
+// is, and listed once per Client.
 // REQ-CORE-1: a Subject is unique, at most 255 ASCII characters and
 // compared as a case-sensitive string, so it is a UUID in its one
 // lowercase form.
@@ -180,6 +182,11 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "redirect URI with a space", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example/a b"})}, nil), problem: "redirect_uris"},
 		{name: "redirect URI with angle brackets", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example/<x>"})}, nil), problem: "redirect_uris"},
 		{name: "https redirect URI without host", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https:///callback"})}, nil), problem: "redirect_uris"},
+		{name: "relative post-logout redirect URI", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"/signed-out"})}, nil), problem: "post_logout_redirect_uris[0]"},
+		{name: "post-logout redirect URI with fragment", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https://rp.example/signed-out#top"})}, nil), problem: "post_logout_redirect_uris[0]"},
+		{name: "post-logout redirect URI not a URI", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https://rp.example/a b"})}, nil), problem: "post_logout_redirect_uris[0]"},
+		{name: "https post-logout redirect URI without host", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https:///signed-out"})}, nil), problem: "post_logout_redirect_uris[0]"},
+		{name: "duplicate post-logout redirect URI", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https://rp.example/signed-out", "https://rp.example/signed-out"})}, nil), problem: "post_logout_redirect_uris[1]"},
 		{name: "End-User without Subject", registry: registryJSON(t, nil, []entry{with(alice, "sub", nil)}), problem: "sub"},
 		{name: "Subject not a UUID", registry: registryJSON(t, nil, []entry{with(alice, "sub", "alice")}), problem: "sub"},
 		{name: "Subject in uppercase", registry: registryJSON(t, nil, []entry{with(alice, "sub", "7C9E6679-7425-40DE-944B-E07FC1F90AE7")}), problem: "sub"},
@@ -256,7 +263,8 @@ func TestRunRequiresRegistry(t *testing.T) {
 // pulsar starts with a registry of each kind of Client and an End-User
 // with claims.
 //
-// REQ-OAUTH-1, REQ-CORE-1: the forms the refusals above allow.
+// REQ-OAUTH-1, REQ-CORE-1, REQ-LOGOUT-10: the forms the refusals above
+// allow.
 func TestRunAcceptsRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -273,10 +281,13 @@ func TestRunAcceptsRegistry(t *testing.T) {
 			with(with(secretClient(), "client_id", "post"), "token_endpoint_auth_method", "client_secret_post"),
 			jwtClient,
 			with(with(with(secretClient(), "client_secret_hash", nil), "token_endpoint_auth_method", "none"), "client_id", "native"),
-			with(with(secretClient(), "client_id", "app"), "redirect_uris", []string{
+			with(with(with(secretClient(), "client_id", "app"), "redirect_uris", []string{
 				"https://rp.example/callback?tenant=a",
 				"com.example.app:/oauth2redirect",
 				"http://127.0.0.1:8080/callback",
+			}), "post_logout_redirect_uris", []string{
+				"https://rp.example/signed-out?tenant=a",
+				"com.example.app:/signed-out",
 			}),
 		},
 		[]entry{

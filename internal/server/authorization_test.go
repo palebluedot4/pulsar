@@ -67,7 +67,7 @@ const aliceClaims = `{
 // with aliceClaims, and bob: rp and other authenticate with
 // client_secret_basic, post with client_secret_post, and jwt with
 // private_key_jwt, by the public keys of jwtKeys; public is a public
-// Client.
+// Client. Only rp and other register post-logout redirect URIs.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
 	reg, err := registry.Parse(flowRegistryFile(tb))
@@ -116,9 +116,10 @@ func flowRegistryFile(tb testing.TB) []byte {
 	return []byte(`{
 		"clients": [
 			{"client_id": "rp", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hashPassword(tb, rpSecret) + `",
-			 "redirect_uris": ["` + rpRedirectURI + `", "` + rpQueryRedirectURI + `"]},
+			 "redirect_uris": ["` + rpRedirectURI + `", "` + rpQueryRedirectURI + `"],
+			 "post_logout_redirect_uris": ["` + rpSignedOutURI + `", "` + rpQuerySignedOutURI + `"]},
 			{"client_id": "other", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hashPassword(tb, otherSecret) + `",
-			 "redirect_uris": ["https://other.example/callback"]},
+			 "redirect_uris": ["https://other.example/callback"], "post_logout_redirect_uris": ["` + otherSignedOutURI + `"]},
 			{"client_id": "post", "token_endpoint_auth_method": "client_secret_post", "client_secret_hash": "` + hashPassword(tb, postSecret) + `",
 			 "redirect_uris": ["` + postRedirectURI + `"]},
 			{"client_id": "jwt", "token_endpoint_auth_method": "private_key_jwt", "jwks": ` + jwtJWKS(tb) + `,

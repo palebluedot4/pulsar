@@ -55,9 +55,20 @@ deletes the codes no longer kept for a second redemption to revoke, the
 expired access tokens, client assertions and Login Sessions, the ended Refresh
 Token Families with their refresh tokens, and the counts of login attempts
 forgotten a day after the last. `pulsar keys rotate` rotates the signing key.
-The OpenID conformance suite's Config OP, Basic OP and Form Post Basic plans
-run against it in CI; on 2026-11-06, at commit `8d6ab47`, the first two
-finished with no failures, as
+A Client may send the End-User to the logout endpoint, the
+`end_session_endpoint` of discovery, by GET or POST (OpenID Connect
+RP-Initiated Logout 1.0). pulsar asks the End-User to confirm every time,
+naming the Client when an `id_token_hint` or a `client_id` identifies it;
+confirming ends the Login Session, and declining keeps it. pulsar then
+returns the End-User to the `post_logout_redirect_uri`, with `state` and
+nothing else, only if the identified Client registered exactly that URI, and
+otherwise shows a page that says whether they are signed out. An
+`id_token_hint` must be an ID token pulsar issued to a registered Client,
+though it may have expired; any other gets an error page and logs no one
+out. Logout revokes no refresh token and no access token.
+The OpenID conformance suite's Config OP, Basic OP, Form Post Basic and
+RP-Initiated Logout plans run against it in CI; on 2026-11-06, at commit
+`8d6ab47`, the first two finished with no failures, as
 [Checking conformance](#checking-conformance) details.
 
 ## Running it
@@ -152,8 +163,8 @@ curl -i localhost:8080/readyz
 
 The login page is at `/login` under the issuer; an authorization request
 from an End-User without a Login Session is sent there and resumes after
-login. The Login Session cookie is `Secure`, which browsers keep over plain
-http only on `localhost`.
+login. The logout endpoint is at `/logout`. The Login Session cookie is
+`Secure`, which browsers keep over plain http only on `localhost`.
 
 As with libpq, anything `PULSAR_DATABASE_URL` leaves out is taken from the
 `PG*` environment variables (`PGHOST`, `PGPASSWORD` and the rest), a
@@ -183,7 +194,7 @@ make conformance
 
 This runs pulsar and the
 [OpenID conformance suite](https://gitlab.com/openid/conformance-suite)
-at `release-v5.3.4` in Docker Compose, and three of the suite's plans:
+at `release-v5.3.4` in Docker Compose, and four of the suite's plans:
 `oidcc-config-certification-test-plan`, which checks the discovery document
 and the JWK Set; `oidcc-basic-certification-test-plan`, which signs an
 End-User in through the authorization code flow with static Clients and
@@ -204,8 +215,16 @@ so it tests neither rotation nor reuse detection: only pulsar's own tests
 check that each refresh token is redeemed once, and that one presented
 again, or a code replayed, revokes its Refresh Token Family. No plan in
 that release tests token revocation (RFC 7009); only pulsar's own tests
-do. The suite's
-browser automation fills in the login and consent pages. The run exits
+do. The fourth
+plan, `oidcc-rp-initiated-logout-certification-test-plan`, signs the
+End-User in and sends them to the logout endpoint by GET, with only
+`id_token_hint`, `post_logout_redirect_uri` and `state`. Two of its modules
+check the redirect back and then that `prompt=none` fails; eight check only
+that pulsar does not redirect, and end in `REVIEW`
+([conformance/README.md](conformance/README.md#pages-a-person-would-review)).
+It never sends `client_id`, a POST or an expired hint, so pulsar's own
+tests alone check those. The suite's browser automation fills in the login
+and consent pages, and confirms the logout. The run exits
 non-zero on a failure, a warning or a skipped module that `conformance/`
 does not list with a reason, and leaves the results in
 `conformance/results/`. CI runs the same target on every pull request.
@@ -213,8 +232,9 @@ does not list with a reason, and leaves the results in
 [conformance/README.md](conformance/README.md) describes the files it uses.
 
 On 2026-11-06, CI ran the Config OP and Basic OP plans against commit
-`8d6ab47`, on `main`, with no failures; the Form Post Basic plan was added
-later, and no result of it is recorded here yet.
+`8d6ab47`, on `main`, with no failures; the Form Post Basic and
+RP-Initiated Logout plans were added after that run, and no result of
+them is recorded here yet.
 Of the Basic OP plan's 35 modules, 28 passed; one ended in a warning,
 since pulsar never returns `acr`; two were skipped, since pulsar issues no
 refresh tokens and supports no request objects; and four ended in

@@ -17,6 +17,7 @@ const (
 	tokenPath         = "/token"
 	userinfoPath      = "/userinfo"
 	jwksPath          = "/jwks"
+	logoutPath        = "/logout"
 	revocationPath    = "/revoke"
 )
 
@@ -25,14 +26,15 @@ const (
 const discoveryCacheControl = "public, max-age=3600"
 
 // metadata is the OpenID Provider Metadata of OpenID Connect Discovery 1.0
-// §3, with the RFC 8414 and RFC 9207 additions pulsar supports. A list with
-// no elements is omitted, as §4.2 requires.
+// §3, with the RFC 8414, RFC 9207 and RP-Initiated Logout 1.0 additions
+// pulsar supports. A list with no elements is omitted, as §4.2 requires.
 type metadata struct {
 	Issuer                                     string   `json:"issuer"`
 	AuthorizationEndpoint                      string   `json:"authorization_endpoint"`
 	TokenEndpoint                              string   `json:"token_endpoint"`
 	UserinfoEndpoint                           string   `json:"userinfo_endpoint"`
 	JWKSURI                                    string   `json:"jwks_uri"`
+	EndSessionEndpoint                         string   `json:"end_session_endpoint"`
 	ScopesSupported                            []string `json:"scopes_supported,omitempty"`
 	ResponseTypesSupported                     []string `json:"response_types_supported,omitempty"`
 	ResponseModesSupported                     []string `json:"response_modes_supported,omitempty"`
@@ -92,6 +94,7 @@ func HandleDiscovery(issuer *Issuer) http.Handler {
 		TokenEndpoint:                     issuer.endpointURL(tokenPath),
 		UserinfoEndpoint:                  issuer.endpointURL(userinfoPath),
 		JWKSURI:                           issuer.endpointURL(jwksPath),
+		EndSessionEndpoint:                issuer.endpointURL(logoutPath),
 		ScopesSupported:                   append(scopeValues(supportedScopes), offlineAccessScope.Value),
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            responseModes,

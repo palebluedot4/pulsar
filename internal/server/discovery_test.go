@@ -12,10 +12,11 @@ import (
 // REQ-DISC-2, REQ-DISC-3, REQ-DISC-4, REQ-DISC-5, REQ-DISC-6, REQ-DISC-7,
 // REQ-DISC-8, REQ-DISC-9, REQ-DISC-10, REQ-DISC-11, REQ-DISC-12,
 // REQ-DISC-14, REQ-DISC-15, REQ-DISC-16, REQ-DISC-17, REQ-DISC-19,
-// REQ-DISC-22, REQ-ISS-1, REQ-BCP-1, REQ-ASMETA-1, REQ-ASMETA-2,
-// REQ-ASMETA-3, REQ-REVOKE-3, REQ-REVOKE-15, REQ-REVOKE-16: the discovery
-// document, at the path derived from the issuer, with the metadata specs
-// #11 and #69 list, including #69's Response Modes.
+// REQ-DISC-22, REQ-DISC-23, REQ-ISS-1, REQ-BCP-1, REQ-ASMETA-1,
+// REQ-ASMETA-2, REQ-ASMETA-3, REQ-REVOKE-3, REQ-REVOKE-15, REQ-REVOKE-16:
+// the discovery document, at the path derived from the issuer, with the
+// metadata specs #11 and #69 list, including #69's Response Modes and
+// end_session_endpoint.
 func TestDiscovery(t *testing.T) {
 	t.Parallel()
 
@@ -58,6 +59,7 @@ func TestDiscovery(t *testing.T) {
 				"token_endpoint":                        tt.issuer + "/token",
 				"userinfo_endpoint":                     tt.issuer + "/userinfo",
 				"jwks_uri":                              tt.issuer + "/jwks",
+				"end_session_endpoint":                  tt.issuer + "/logout",
 				"scopes_supported":                      []any{"openid", "profile", "email", "address", "phone", "offline_access"},
 				"response_types_supported":              []any{"code"},
 				"response_modes_supported":              []any{"query", "form_post"},

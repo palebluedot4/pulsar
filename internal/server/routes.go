@@ -59,6 +59,14 @@ func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, poo
 	mux.Handle("GET "+oidc.UserInfoPath(issuer), userInfo)
 	mux.Handle("POST "+oidc.UserInfoPath(issuer), userInfo)
 	mux.Handle("OPTIONS "+oidc.UserInfoPath(issuer), op.HandleUserInfoPreflight())
+
+	// A Client sends the End-User to the logout endpoint from its own site,
+	// by GET or POST; the confirmation the endpoint asks for refuses
+	// cross-origin submissions, as the consent form does.
+	logout := whenReady(ready, op.HandleLogout())
+	mux.Handle("GET "+oidc.LogoutPath(issuer), logout)
+	mux.Handle("POST "+oidc.LogoutPath(issuer), logout)
+	mux.Handle("POST "+oidc.LogoutConfirmationPath(issuer), whenReady(ready, op.HandleLogoutConfirmation()))
 }
 
 // whenReady answers 503, which no cache may keep, until ready is closed,
