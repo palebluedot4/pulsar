@@ -3,7 +3,7 @@
     {
       "client_id": "conformance-client",
       "token_endpoint_auth_method": "client_secret_basic",
-      "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$6mzY2fcYZmzXpr3dmRsHyg$gOGm8XfXn05Vt/A2L+36loNfauTdB/8SFv751tuTfVg",
+      "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$fkS/I72Slgqx7ubVna+aOw$RYsIP5NQeMQLe8mu1D2FKzgP232x4mwiELSux7DIiYQ",
       "redirect_uris": [
         "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback"
       ],

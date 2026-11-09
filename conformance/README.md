@@ -23,7 +23,11 @@ The credentials in `config-basic.json`, `config-formpost.json`,
 `config-logout.json` and `registry.json` are for this stack only and
 published deliberately (SECURITY.md): the secrets and the password in plain
 text in one, as the suite sends them, and as Argon2id hashes in the other,
-as pulsar reads them.
+as pulsar reads them. `conformance-client`'s secret was made by
+`pulsar client-secret`. The logout plan's
+`oidcc-rp-initiated-logout-bad-id-token-hint` signs an HS256 hint with it,
+and the suite refuses a secret shorter than 32 bytes for that
+(`GenerateJWKsFromClientSecret` at `release-v5.3.4`).
 
 `runner/run.sh` runs the Config OP plan, then the Basic OP plan, then the
 Form Post Basic plan, the last two with the variants
