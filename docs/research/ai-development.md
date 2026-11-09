@@ -139,11 +139,11 @@ read as "harness theater" — Canva's interview guide calls the pattern an
 
 Three distinct products, easily confused:
 
-| Name                                  | What it is                                                                                                                                                        | Version follows                           |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `/code-review`                        | Skill bundled in the Claude Code binary; runs as a forked subagent with its own context; effort `low`…`max`, plus `ultra`; `--fix`, `--comment`, `--max-findings` | Claude Code version                       |
-| `code-review@claude-plugins-official` | Open-source multi-agent PR review plugin                                                                                                                          | Marketplace repo commits (no version pin) |
-| Code Review (a managed service)       | GitHub app for Team/Enterprise plans, ~$15–25 and ~20 min per review                                                                                              | Anthropic-hosted                          |
+| Name                                  | What it is                                                                                                                                                        | Version follows                                         |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `/code-review`                        | Skill bundled in the Claude Code binary; runs as a forked subagent with its own context; effort `low`…`max`, plus `ultra`; `--fix`, `--comment`, `--max-findings` | Claude Code version                                     |
+| `code-review@claude-plugins-official` | Open-source multi-agent PR review plugin                                                                                                                          | The plugin manifest's `version`, 1.0.1 since 2026-10-26 |
+| Code Review (a managed service)       | GitHub app for Team/Enterprise plans, ~$15–25 and ~20 min per review                                                                                              | Anthropic-hosted                                        |
 
 **The plugin's current command** (`plugins/code-review/commands/code-review.md`,
 revised 2026-01 to 2026-03, synced into the official marketplace 2026-10-26):
@@ -161,8 +161,9 @@ revised 2026-01 to 2026-03, synced into the official marketplace 2026-10-26):
    general quality concerns not required by CLAUDE.md.
 
 Principle: "We only want HIGH SIGNAL issues … False positives erode trust."
-The plugin's README still describes the earlier design (five Sonnet agents,
-then a Haiku scorer per issue with a 0–100 rubric, dropping anything below 80).
+The plugin's README describes an earlier design: four parallel agents, each
+issue scored 0–100 and those below 80 dropped, with no model named
+(corrected 2026-11-09, `docs/research/code-review-tools.md`).
 
 **Code Review**, "a managed service" (launched 2026-03-09): find → verify
 (separate verifier agents filter false positives) → rank by severity
@@ -221,9 +222,9 @@ identities.
   <https://code.claude.com/docs/en/plugins/org.md>
 - Official-marketplace plugins auto-update by default (within ~10 minutes of
   a session's first message); others do not. `enabledPlugins` cannot pin a
-  version; a marketplace entry can pin `sha`. `code-review` has no version
-  and tracks the marketplace repo; `mattpocock-skills` is pinned by SHA in the
-  catalog. `DISABLE_AUTOUPDATER` / `DISABLE_UPDATES` freeze updates.
+  version; a marketplace entry can pin `sha`. `code-review` sets
+  `"version": "1.0.1"` in its manifest since 2026-10-26; `mattpocock-skills`
+  is pinned by SHA in the catalog. `DISABLE_AUTOUPDATER` / `DISABLE_UPDATES` freeze updates.
   <https://code.claude.com/docs/en/plugins/loading.md>
 - Consequence for evals: record the Claude Code version, model IDs and plugin
   SHAs with every result, and freeze updates while running a comparison.
