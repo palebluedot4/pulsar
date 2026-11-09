@@ -6,6 +6,15 @@
     "current-block": "Verify authorization endpoint response",
     "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
     "expected-result": "warning",
-    "comment": "In the Basic OP and Form Post Basic plans; the Config OP plan has no such module. pulsar has one authentication level and never returns acr, since claiming one would be untrue (#11, REQ-CORE-26). acr_values requests acr as a Voluntary Claim, and the minimum support OpenID Connect Core 1.0 §15.1 requires is that its use not result in an error, which the module checks first."
+    "comment": "In the Basic OP and Form Post Basic plans; the Config OP plan has no such module. pulsar has one authentication level and never returns acr, since claiming one would be untrue (#11, REQ-CORE-26). acr_values requests acr as a Voluntary Claim, and the minimum support OpenID Connect Core 1.0 \u00a715.1 requires is that its use not result in an error, which the module checks first."
+  },
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*config-formpost.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "CheckDiscEndpointRequestParameterSupported",
+    "expected-result": "warning",
+    "comment": "Form Post Basic plan only; see the failures of this module in expected-failures.json. The discovery document lists request_parameter_supported as false, so the warning is accurate: pulsar supports no request objects."
   }
 ]
