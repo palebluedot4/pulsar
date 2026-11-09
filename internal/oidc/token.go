@@ -113,23 +113,9 @@ func (p *Provider) writeTokenError(w http.ResponseWriter, tokErr *tokenError) {
 // exchange reads a token request, authenticates its Client and exchanges
 // its grant for tokens.
 func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenResponse, *tokenError) {
-	// Parameters are read from the form-encoded body only (RFC 6749
-	// §4.1.3, §6).
-	params, err := readParams(w, r)
-	if err != nil {
-		return nil, badRequest(errInvalidRequest, "The request body is not a form-encoded set of parameters.")
-	}
-	if name, ok := repeated(params, tokenParams); ok {
-		return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
-	}
-	// A request from a browser is checked against the public Client its
-	// client_id names before its grant is, since a browser sends a token
-	// request without a preflight: one from an origin not allowed must not
-	// redeem a code or rotate a refresh token whose response the browser
-	// withholds (RFC 10017 §6.3.3.4).
-	client, _ := p.registry.Client(params.Get("client_id"))
-	if !p.tokenCORS.check(w, r, client) {
-		return nil, badRequest(errInvalidRequest, p.tokenCORS.refusal)
+	params, tokErr := p.readClientRequest(w, r, tokenParams)
+	if tokErr != nil {
+		return nil, tokErr
 	}
 
 	// Each grant checks the request's form before its Client
@@ -145,6 +131,29 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	default:
 		return nil, badRequest(errUnsupportedGrantType, "Only the grant_types authorization_code and refresh_token are supported.")
 	}
+}
+
+// readClientRequest returns the parameters of r, a request to the token or
+// revocation endpoint, read from its form-encoded body only (RFC 6749
+// §4.1.3, §6; RFC 7009 §2.1), none of names repeated. A request from a
+// browser is checked against the public Client its client_id names before
+// the request does anything, since a browser sends it without a
+// preflight: one from an origin not allowed must not redeem a code,
+// rotate a refresh token or revoke a token when the browser withholds the
+// response (RFC 10017 §6.3.3.4).
+func (p *Provider) readClientRequest(w http.ResponseWriter, r *http.Request, names []string) (url.Values, *tokenError) {
+	params, err := readParams(w, r)
+	if err != nil {
+		return nil, badRequest(errInvalidRequest, "The request body is not a form-encoded set of parameters.")
+	}
+	if name, ok := repeated(params, names); ok {
+		return nil, badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
+	}
+	named, _ := p.registry.Client(params.Get("client_id"))
+	if !p.tokenCORS.check(w, r, named) {
+		return nil, badRequest(errInvalidRequest, p.tokenCORS.refusal)
+	}
+	return params, nil
 }
 
 // exchangeCode authenticates the Client of a token request for the

@@ -53,18 +53,9 @@ func (p *Provider) revocation(w http.ResponseWriter, r *http.Request) {
 // the token it names, if it finds one. A token it does not find, of
 // whichever type, is no error (RFC 7009 §2.2).
 func (p *Provider) revoke(w http.ResponseWriter, r *http.Request) *tokenError {
-	params, err := readParams(w, r)
-	if err != nil {
-		return badRequest(errInvalidRequest, "The request body is not a form-encoded set of parameters.")
-	}
-	if name, ok := repeated(params, revocationParams); ok {
-		return badRequest(errInvalidRequest, "The parameter "+name+" is repeated.")
-	}
-	// A request from a browser is checked before its token is revoked, as
-	// a token request is before its grant is redeemed (exchange).
-	client, _ := p.registry.Client(params.Get("client_id"))
-	if !p.tokenCORS.check(w, r, client) {
-		return badRequest(errInvalidRequest, p.tokenCORS.refusal)
+	params, tokErr := p.readClientRequest(w, r, revocationParams)
+	if tokErr != nil {
+		return tokErr
 	}
 	// Checked before the Client authenticates, so that a malformed request
 	// does not use up a client assertion.

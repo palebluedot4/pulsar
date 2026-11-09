@@ -42,16 +42,22 @@ func revocationForm(token, hint string) url.Values {
 	return form
 }
 
-// revoke sends a revocation request from the Client for token, with hint
-// as its token_type_hint unless it is "".
-func (c pkceClient) revoke(t *testing.T, handler http.Handler, token, hint string) response {
+// revocationRequest returns a revocation request from the Client for
+// token, with hint as its token_type_hint unless it is "".
+func (c pkceClient) revocationRequest(t *testing.T, token, hint string) *http.Request {
 	t.Helper()
 	form := revocationForm(token, hint)
 	if c.basic.id == "" {
 		form.Set("client_id", c.clientID)
 	}
+	return newRevocationRequest(t, c.basic.id, c.basic.secret, form)
+}
+
+// revoke sends the Client's revocationRequest.
+func (c pkceClient) revoke(t *testing.T, handler http.Handler, token, hint string) response {
+	t.Helper()
 	b := &browser{t: t, handler: handler}
-	return b.do(newRevocationRequest(t, c.basic.id, c.basic.secret, form))
+	return b.do(c.revocationRequest(t, token, hint))
 }
 
 // wantRevocationOK fails the test unless resp is a successful revocation
@@ -119,8 +125,8 @@ func TestRevokeRefreshToken(t *testing.T) {
 	}
 }
 
-// REQ-REVOKE-1, REQ-REVOKE-5, REQ-REVOKE-8, REQ-REVOKE-9, REQ-REVOKE-10,
-// REQ-REVOKE-11: a confidential or a public Client revokes one of its
+// REQ-REVOKE-1, REQ-REVOKE-5, REQ-REVOKE-8, REQ-REVOKE-9, REQ-REVOKE-10:
+// a confidential or a public Client revokes one of its
 // access tokens, with any token_type_hint, a wrong one included, and gets
 // 200. UserInfo refuses that token from then on, and nothing else is
 // revoked: UserInfo accepts the family's other access token, and the
@@ -157,10 +163,10 @@ func TestRevokeAccessToken(t *testing.T) {
 	}
 }
 
-// REQ-REVOKE-10, REQ-REVOKE-11: a token pulsar does not know, an ID token,
+// REQ-REVOKE-5, REQ-REVOKE-10: a token pulsar does not know, an ID token,
 // and a refresh token or access token already revoked each get 200 with an
-// empty body, so that a Client retrying a revocation whose response it
-// lost succeeds.
+// empty body, whatever the token_type_hint, so that a Client retrying a
+// revocation whose response it lost succeeds.
 func TestRevokeInvalidToken(t *testing.T) {
 	t.Parallel()
 
@@ -209,7 +215,7 @@ func TestRevokeInvalidToken(t *testing.T) {
 	}
 }
 
-// REQ-REVOKE-11: an access token that has expired, and a refresh token
+// REQ-REVOKE-10: an access token that has expired, and a refresh token
 // whose Refresh Token Family has ended, before and after the family is
 // deleted, each get 200.
 func TestRevokeExpiredToken(t *testing.T) {
@@ -231,6 +237,40 @@ func TestRevokeExpiredToken(t *testing.T) {
 	})
 }
 
+// revocationAuth is how a revocation request authenticates its Client: the
+// credentials it sends by HTTP Basic authentication, if any, and the
+// parameters its form adds.
+type revocationAuth struct {
+	basic credentials
+	form  func(t *testing.T) url.Values
+}
+
+// send sends a revocation request for token, authenticated as a says.
+func (a revocationAuth) send(t *testing.T, handler http.Handler, token string) response {
+	t.Helper()
+	form := revocationForm(token, "")
+	if a.form != nil {
+		maps.Copy(form, a.form(t))
+	}
+	b := &browser{t: t, handler: handler}
+	return b.do(newRevocationRequest(t, a.basic.id, a.basic.secret, form))
+}
+
+// formAuth returns a revocationAuth that adds params to the form.
+func formAuth(params url.Values) revocationAuth {
+	return revocationAuth{form: func(*testing.T) url.Values { return params }}
+}
+
+// assertionAuth returns a revocationAuth that authenticates jwt by a new
+// client assertion.
+func assertionAuth() revocationAuth {
+	return revocationAuth{form: func(t *testing.T) url.Values {
+		t.Helper()
+		k := jwtKey(jose.RS256)
+		return url.Values{"client_assertion_type": {jwtBearer}, "client_assertion": {signAssertion(t, k.alg, k.key, k.kid, assertionClaims())}}
+	}}
+}
+
 // REQ-REVOKE-7, REQ-REVOKE-12, REQ-REVOKE-14, REQ-OAUTH-15: a refresh
 // token or an access token presented by a Client other than the one it was
 // issued to, whichever way that Client authenticates, is refused with 400
@@ -240,33 +280,17 @@ func TestRevokeOtherClientsToken(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
-	rs := jwtKey(jose.RS256)
 	tests := []struct {
 		name     string
 		owner    pkceClient
 		verifier string
-		// The request of the other Client: the credentials it sends by HTTP
-		// Basic authentication, if any, and what its form adds.
-		basic credentials
-		form  func(t *testing.T) url.Values
+		auth     revocationAuth // the other Client's
 	}{
-		{name: "by client_secret_basic", owner: publicPKCE, verifier: pkceVerifier, basic: credentials{"rp", rpSecret}},
-		{name: "by client_secret_basic, another confidential Client", owner: rpNoPKCE, basic: credentials{"other", otherSecret}},
-		{
-			name: "by client_secret_post", owner: rpNoPKCE,
-			form: func(*testing.T) url.Values { return url.Values{"client_id": {"post"}, "client_secret": {postSecret}} },
-		},
-		{
-			name: "by private_key_jwt", owner: rpNoPKCE,
-			form: func(t *testing.T) url.Values {
-				t.Helper()
-				return url.Values{"client_assertion_type": {jwtBearer}, "client_assertion": {signAssertion(t, rs.alg, rs.key, rs.kid, assertionClaims())}}
-			},
-		},
-		{
-			name: "as a public Client", owner: rpNoPKCE,
-			form: func(*testing.T) url.Values { return url.Values{"client_id": {"public"}} },
-		},
+		{name: "by client_secret_basic", owner: publicPKCE, verifier: pkceVerifier, auth: revocationAuth{basic: credentials{"rp", rpSecret}}},
+		{name: "by client_secret_basic, another confidential Client", owner: rpNoPKCE, auth: revocationAuth{basic: credentials{"other", otherSecret}}},
+		{name: "by client_secret_post", owner: rpNoPKCE, auth: formAuth(url.Values{"client_id": {"post"}, "client_secret": {postSecret}})},
+		{name: "by private_key_jwt", owner: rpNoPKCE, auth: assertionAuth()},
+		{name: "as a public Client", owner: rpNoPKCE, auth: formAuth(url.Values{"client_id": {"public"}})},
 	}
 	for _, tt := range tests {
 		for _, kind := range []string{"refresh_token", "access_token"} {
@@ -277,12 +301,7 @@ func TestRevokeOtherClientsToken(t *testing.T) {
 				if kind == "access_token" {
 					token = tokens.AccessToken
 				}
-				form := revocationForm(token, "")
-				if tt.form != nil {
-					maps.Copy(form, tt.form(t))
-				}
-				b := &browser{t: t, handler: handler}
-				resp := b.do(newRevocationRequest(t, tt.basic.id, tt.basic.secret, form))
+				resp := tt.auth.send(t, handler, token)
 				if got := revocationErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
 					t.Errorf("POST %s with another Client's %s error = %q, want %q", revocationPath, kind, got, "invalid_request")
 				}
@@ -320,40 +339,6 @@ func accessTokenOf(t *testing.T, handler http.Handler, clientID string) string {
 	}
 	accessToken, _ := tokensOf(t, resp)
 	return accessToken
-}
-
-// revocationAuth is how a revocation request authenticates its Client: the
-// credentials it sends by HTTP Basic authentication, if any, and the
-// parameters its form adds.
-type revocationAuth struct {
-	basic credentials
-	form  func(t *testing.T) url.Values
-}
-
-// send sends a revocation request for token, authenticated as a says.
-func (a revocationAuth) send(t *testing.T, handler http.Handler, token string) response {
-	t.Helper()
-	form := revocationForm(token, "")
-	if a.form != nil {
-		maps.Copy(form, a.form(t))
-	}
-	b := &browser{t: t, handler: handler}
-	return b.do(newRevocationRequest(t, a.basic.id, a.basic.secret, form))
-}
-
-// formAuth returns a revocationAuth that adds params to the form.
-func formAuth(params url.Values) revocationAuth {
-	return revocationAuth{form: func(*testing.T) url.Values { return params }}
-}
-
-// assertionAuth returns a revocationAuth that authenticates jwt by a new
-// client assertion.
-func assertionAuth() revocationAuth {
-	return revocationAuth{form: func(t *testing.T) url.Values {
-		t.Helper()
-		k := jwtKey(jose.RS256)
-		return url.Values{"client_assertion_type": {jwtBearer}, "client_assertion": {signAssertion(t, k.alg, k.key, k.kid, assertionClaims())}}
-	}}
 }
 
 // REQ-REVOKE-6, REQ-REVOKE-12, REQ-OAUTH-3, REQ-OAUTH-25, REQ-JWTAUTH-1,
@@ -443,6 +428,44 @@ func TestRevocationClientAuthenticationFails(t *testing.T) {
 				t.Errorf("POST %s error = %q, want %q", revocationPath, got, tt.wantError)
 			}
 			wantAccepted(t, handler, "after a revocation that failed", claimsOf(aliceProfile), []string{accessToken})
+		})
+	}
+}
+
+// REQ-REVOKE-17, REQ-OAUTH-44: failed attempts to authenticate as a Client
+// at the revocation endpoint are not counted against it, as at the token
+// endpoint, so that no one who knows its client_id can hold up its
+// revocations: after many with a wrong secret, by either method, it still
+// authenticates with its own.
+func TestRevocationClientSecretNotThrottled(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	tests := []struct {
+		clientID     string
+		wrong, right revocationAuth
+	}{
+		{
+			clientID: "rp",
+			wrong:    revocationAuth{basic: credentials{"rp", "wrong"}},
+			right:    revocationAuth{basic: credentials{"rp", rpSecret}},
+		},
+		{
+			clientID: "post",
+			wrong:    formAuth(url.Values{"client_id": {"post"}, "client_secret": {"wrong"}}),
+			right:    formAuth(url.Values{"client_id": {"post"}, "client_secret": {postSecret}}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.clientID, func(t *testing.T) {
+			t.Parallel()
+			accessToken := accessTokenOf(t, handler, tt.clientID)
+			for i := range 20 {
+				if got := revocationErrorCode(t, tt.wrong.send(t, handler, accessToken), http.StatusUnauthorized); got != "invalid_client" {
+					t.Fatalf("POST %s with a wrong secret, number %d: error = %q, want %q", revocationPath, i+1, got, "invalid_client")
+				}
+			}
+			wantRevocationOK(t, tt.right.send(t, handler, accessToken))
 		})
 	}
 }
