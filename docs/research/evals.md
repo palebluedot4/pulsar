@@ -2,10 +2,10 @@
 
 Surveyed 2026-11-09 for #3, #4 and #5 and for the Evidence column of
 `docs/harness.md`, which then marked most controls "Hypothesis" and the
-three review controls "Pending ablation". It answers three questions. Which kinds
-of harness component do Anthropic, OpenAI, Google, AWS and credible
-practitioners evaluate with evals, and which do they justify by other
-evidence? How do organizations measure whether an AI code reviewer, or
+three review controls "Pending ablation". It answers three questions.
+Which kinds of harness component do Anthropic, OpenAI, Google, AWS and
+credible practitioners evaluate with evals, and which do they justify by
+other evidence? How do organizations measure whether an AI code reviewer, or
 several stacked review passes, helps? When do sources judge evals not worth
 their cost, and what do they recommend instead? Sources are the owners'
 own posts, documentation, papers and code, all read on 2026-11-09; a
@@ -444,7 +444,7 @@ checks #3's tasks would be scored with.
 | The three review controls                                                                                                                              | Yes, by the replay above | Until then, "Pending ablation"; for the two third-party ones, also the trust decision Anthropic asks for: source, the frozen marketplace, and what they run       |
 | The maintainer merges every pull request                                                                                                               | No                       | The maintainer's decision; #4's review time shows whether it is a real check rather than what Thoughtworks calls "human-in-the-loop theater"                      |
 
-"Hypothesis" in the Evidence column now covers both controls whose function
+"Hypothesis" in the Evidence column then covered both controls whose function
 is verified but whose value to the agent is unmeasured and controls with no
 check at all. Splitting it into the kinds of evidence the sources use
 (tested, catches, incident, vendor practice, maintainer's decision, eval)
