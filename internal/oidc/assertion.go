@@ -73,8 +73,8 @@ func (p *Provider) authenticateAssertion(ctx context.Context, params url.Values)
 // authenticates at now, and its claims, if raw is one JWS in the compact
 // serialization, signed by an algorithm of the allow-list (RFC 8725 §3.2)
 // with a key that Client registered for that algorithm (RFC 8725 §3.1,
-// §3.8), and its claims are those RFC 7523 §3 and OpenID Connect Core 1.0
-// §9 require.
+// §3.8), and its claims are those RFC 7523 §3, as RFC 10070 §4 updates it,
+// and OpenID Connect Core 1.0 §9 require.
 func (p *Provider) verifyAssertion(raw string, now time.Time) (*registry.Client, *jwt.Claims, bool) {
 	tok, err := jwt.ParseSigned(raw, registry.AssertionAlgorithms())
 	if err != nil {
@@ -100,7 +100,10 @@ func (p *Provider) verifyAssertion(raw string, now time.Time) (*registry.Client,
 	// value.
 	case claims.Issuer != client.ID || claims.Subject != client.ID:
 		return nil, nil, false
-	case !claims.Audience.Contains(p.issuer.endpointURL(tokenPath)) && !claims.Audience.Contains(p.issuer.String()):
+	// RFC 10070 §4: the issuer is the sole audience, compared as a string,
+	// and the token endpoint URL is refused. A string and an array of one
+	// both decode to one value.
+	case len(claims.Audience) != 1 || claims.Audience[0] != p.issuer.String():
 		return nil, nil, false
 	// Core §9: "on or after which the JWT MUST NOT be accepted". No clock
 	// skew is allowed, so that a jti is kept exactly as long as its
