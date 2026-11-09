@@ -302,13 +302,15 @@ Sources:
 - **Generation.** The five open-source providers that generate secrets
   read them from a CSPRNG and encode them in a fixed alphabet; four of
   them also accept a secret the operator chose (Zitadel: UNVERIFIED), and
-  Authelia accepts only the operator's. A 256-bit secret from `crypto/rand` is within what they
-  do (Dex about 249 bits, Keycloak and node-oidc-provider 512).
-  `crypto/rand.Text` alone gives 130 bits, below the README's 256.
+  Authelia accepts only the operator's. A 256-bit secret from
+  `crypto/rand` is within what they do (Dex about 249 bits, Keycloak and
+  node-oidc-provider 512). `crypto/rand.Text` alone gives 130 bits, below
+  the 256 the README required before #61.
 - **Alphabet.** 32 bytes in unpadded base64url is 43 characters that
   form-encoding leaves unchanged, so a Client that skips the encoding
-  still authenticates. The README's `openssl rand -base64 32` produces
-  `+`, `/` and `=`, and a `+` breaks against such a Client.
+  still authenticates. The `openssl rand -base64 32` the README suggested
+  before #61 produces `+`, `/` and `=`, and a `+` breaks against such a
+  Client.
 - **Hash.** NIST SP 800-63B-4 §3.1.2.2 and ASVS 6.5.2 would accept a
   plain SHA-256 of a 256-bit secret; Argon2id is not required but is
   allowed, and keeps one format for passwords and secrets in the
