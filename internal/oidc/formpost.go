@@ -61,8 +61,9 @@ type formPostParam struct {
 
 // writeFormPost answers with the form-post page that posts params to
 // redirectURI, under the headers of pulsar's other pages: never cached
-// (Form Post §2) and never framed (RFC 9700 §4.16), with the same
-// Content-Security-Policy but for allowing autoSubmit.
+// (OAuth 2.0 Form Post Response Mode §2) and never framed (RFC 9700
+// §4.16), with the same Content-Security-Policy but for allowing
+// autoSubmit.
 func writeFormPost(w http.ResponseWriter, redirectURI string, params url.Values) {
 	page := formPostPage{Action: template.URL(redirectURI)} //nolint:gosec // G203: a registered redirect URI; see formPostPage.
 	for _, name := range slices.Sorted(maps.Keys(params)) {

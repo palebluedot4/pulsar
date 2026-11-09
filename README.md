@@ -188,11 +188,13 @@ End-User in through the authorization code flow with static Clients and
 discovery, and checks the responses of the authorization, token and
 UserInfo endpoints; and `oidcc-formpost-basic-certification-test-plan`,
 which runs the same modules with `response_mode=form_post` and checks that
-every authorization response, errors too, arrives by POST. It does not
-check `response_modes_supported`, the form-post page's headers, or a
-browser without script; only pulsar's own tests do. Its `oidcc-refresh-token` module redeems a refresh
-token once with `scope` and once without, checks the response, the
-refreshed ID token, and UserInfo with the new access token, and checks
+every authorization response, errors too, arrives by POST. The Form Post
+plan does not check `response_modes_supported`, the form-post page's
+headers, or a browser without script; only pulsar's own tests do. The
+Basic OP plan's `oidcc-refresh-token` module, which the Form Post plan
+repeats, redeems a refresh token once with `scope` and once without,
+checks the response, the refreshed ID token, and UserInfo with the new
+access token, and checks
 that another Client's refresh token is refused. It never presents a
 refresh token twice
 ([research](docs/research/refresh-tokens.md#the-suites-oidcc-refresh-token-module)),

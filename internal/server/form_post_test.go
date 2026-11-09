@@ -72,8 +72,8 @@ func parseFormPost(t *testing.T, resp response) formPost {
 	return formPost{action: html.UnescapeString(forms[0][1]), params: params}
 }
 
-// withFormPost returns authorizationParams with response_mode=form_post
-// and each parameter of set set to its values in set.
+// withFormPost returns the parameters of requestWith(set), with
+// response_mode=form_post.
 func withFormPost(set url.Values) url.Values {
 	params := requestWith(set)
 	params.Set("response_mode", "form_post")
@@ -191,8 +191,8 @@ func TestFormPostErrors(t *testing.T) {
 			if page.action != wantAction {
 				t.Errorf("form action = %q, want %q", page.action, wantAction)
 			}
-			if page.params.Get("error_description") == "" {
-				t.Errorf("form-post error response has no error_description")
+			if got := page.params.Get("error_description"); got == "" {
+				t.Errorf("form-post error_description = %q, want a description", got)
 			}
 			page.params.Del("error_description")
 			if diff := cmp.Diff(tt.want, page.params); diff != "" {
@@ -214,8 +214,8 @@ func TestFormPostEscapesState(t *testing.T) {
 	params.Del("response_type")
 	resp := b.authorize(http.MethodGet, params)
 	page := parseFormPost(t, resp)
-	if got := page.params["state"]; !cmp.Equal(got, []string{state}) {
-		t.Errorf("form-post state = %q, want [%q]", got, state)
+	if diff := cmp.Diff([]string{state}, page.params["state"]); diff != "" {
+		t.Errorf("form-post state mismatch (-want +got):\n%s", diff)
 	}
 	for _, markup := range []string{"<script>alert", "<input name='x'", `value="&amp;`} {
 		if strings.Contains(resp.body, markup) {
@@ -224,7 +224,7 @@ func TestFormPostEscapesState(t *testing.T) {
 	}
 }
 
-// REQ-CORE-67, REQ-DISC-22, REQ-OAUTH-5: a response_mode pulsar does not
+// REQ-CORE-67, REQ-OAUTH-5: a response_mode pulsar does not
 // support, or one repeated, is refused with invalid_request, by query, the
 // default Response Mode of the response type code.
 func TestUnsupportedResponseMode(t *testing.T) {
