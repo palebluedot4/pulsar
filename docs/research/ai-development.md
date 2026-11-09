@@ -164,11 +164,11 @@ Principle: "We only want HIGH SIGNAL issues … False positives erode trust."
 The plugin's README still describes the earlier design (five Sonnet agents,
 then a Haiku scorer per issue with a 0–100 rubric, dropping anything below 80).
 
-**Code Review**, "a managed service" (launched 2026-03-09): find → verify (separate
-verifier agents filter false positives) → rank by severity (Important, Nit,
-Pre-existing) → post. It reads `REVIEW.md` from the base branch. Reported
-internal results: substantive review comments rose from 16% to 54% of PRs;
-fewer than 1% of findings marked incorrect.
+**Code Review**, "a managed service" (launched 2026-03-09): find → verify
+(separate verifier agents filter false positives) → rank by severity
+(Important, Nit, Pre-existing) → post. It reads `REVIEW.md` from the base
+branch. Reported internal results: substantive review comments rose from 16%
+to 54% of PRs; fewer than 1% of findings marked incorrect.
 <https://claude.com/blog/code-review>, <https://code.claude.com/docs/en/code-review>
 
 **How Anthropic secures its own SDLC** (Jason Clinton, 2026-07-21): Claude
@@ -394,9 +394,8 @@ author's), then checked against primary sources.
   value?"** (2026-08-10): "no clearly discernable difference based on TDD
   workflow versus no TDD workflow", at 2.96–8.50× the tokens (her heading
   says "At least 3x"; the page prints no date, the series index gives
-  2026-08-10). She recommends
-  outcome-based checks instead: mutation testing, automated outcome feedback,
-  static analysis, structure reviews.
+  2026-08-10). She recommends outcome-based checks instead: mutation
+  testing, automated outcome feedback, static analysis, structure reviews.
   <https://martinfowler.com/articles/exploring-gen-ai/tdd-in-the-agent-loop.html>
 - **Anthropic, "How we contain Claude across products"** (2026-05-25): "if
   credentials never enter the sandbox, they can't be exfiltrated."

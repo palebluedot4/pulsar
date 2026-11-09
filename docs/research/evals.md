@@ -271,13 +271,13 @@ used rather than measured again. In particular:
   maintainer's labeling, is more than a reference implementation warrants.
   `docs/harness.md` cites the vendor practice behind the three reviews and
   records running all three, in order, as the maintainer's decision.
-- **#3 closes without an ablation runner.** Skills written here are still
-  evaluated, as `right-sizing` is; `AGENTS.md` is not ablated, and the
-  study above is cited instead.
+- **#3 closes without an ablation runner.** Skills and subagents written
+  here are still evaluated, as `right-sizing` is; `AGENTS.md` is not
+  ablated, and the study above is cited instead.
 - **#4 becomes a "Reviews" section in each pull request's description**:
   what each review found, fixed and left unchanged, and the maintainer's
   review time. Cost and turns are not recorded, and the wrapper for
-  unattended runs waits until there is one.
+  unattended runs waits until there is one (#67).
 - **#5 stays as planned**: a measurement, not a gate.
 - **The Evidence column of `docs/harness.md`** names the kind of evidence
   for each control, as the last table below proposes, except that
@@ -431,6 +431,9 @@ measure of what `repocheck` cannot see, and the strength of the hidden
 checks #3's tasks would be scored with.
 
 ### Controls that need no eval, and what their Evidence column could say
+
+_Adopted except for the `AGENTS.md` and review rows; see the decisions
+above._
 
 | Controls in `docs/harness.md`                                                                                                                          | Eval needed?             | Proposed evidence                                                                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
