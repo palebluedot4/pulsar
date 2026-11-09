@@ -1,9 +1,9 @@
 # AGENTS.md
 
 pulsar is an OpenID Provider in Go. The provider is the artifact; the subject
-is the method: agents build it, under a harness that has to prove it helps.
-Output is reviewed as if a person wrote it, by a person who will have to
-explain every line.
+is the method: agents build it, under a harness in which every control names
+the evidence behind it. Output is reviewed as if a person wrote it, by a
+person who will have to explain every line.
 
 This file is a map. Detail lives where it is linked.
 
@@ -37,7 +37,7 @@ sandbox; if one is missing, say so rather than installing it.
 | `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                             |
 | `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                                    |
 | `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                                     |
-| `evals/`                       | How evals are run. Skill evals live with each plugin; evals of harness controls are planned (#3).   |
+| `evals/`                       | How evals are run. Skill evals live with each plugin.                                               |
 | `docs/agents/`                 | Configuration read by the engineering skills.                                                       |
 
 ## Requirements and tests
@@ -94,6 +94,10 @@ it changes (sandbox settings, for example, in `docs/harness.md`).
 2. Run `/security-review`.
 3. After opening it, review the pull request with
    `/code-review:code-review --comment`, and resolve every thread it opens.
+4. Keep a "Reviews" section in the pull request's description: for each of
+   the three reviews, how many findings it reported, how many were fixed
+   and how many were not changed, and why. Update it after step 3. The
+   maintainer adds the time they spent reviewing before merging.
 
 ## Unattended runs
 
@@ -105,18 +109,19 @@ result and human review time.
 
 ## Deliberately not doing
 
-| Not doing                                                                   | Until                                                                                            |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Using this provider in production                                           | Never; it is a reference implementation.                                                         |
-| Sign-up, password reset, MFA, social login, SAML, admin UI                  | Never; no authoritative spec, so no objective done.                                              |
-| Implicit and hybrid flows, front-channel logout, session management         | Never; discouraged by RFC 9700 or fragile in current browsers.                                   |
-| Dynamic Client Registration                                                 | MCP deprecated it for Client ID Metadata Documents.                                              |
-| FAPI 2.0: PAR, DPoP, mTLS                                                   | Never; it needs PAR and sender-constrained tokens, a large addition beyond the Basic OP profile. |
-| Token revocation (RFC 7009), introspection (RFC 7662), `client_credentials` | A consumer in `examples/` or MCP authorization support needs one; #47 defers them.               |
-| Custom skills, subagents or hooks beyond `docs/harness.md`                  | A recorded failure calls for one, and an eval can measure it.                                    |
-| obra/superpowers                                                            | Its always-on prompt conflicts with lean context; see `docs/research/ai-development.md`.         |
-| A second vendor's model for review                                          | Calibration shows a systematic blind spot.                                                       |
-| Agents running in CI                                                        | #1.                                                                                              |
+| Not doing                                                                   | Until                                                                                                |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Using this provider in production                                           | Never; it is a reference implementation.                                                             |
+| Sign-up, password reset, MFA, social login, SAML, admin UI                  | Never; no authoritative spec, so no objective done.                                                  |
+| Implicit and hybrid flows, front-channel logout, session management         | Never; discouraged by RFC 9700 or fragile in current browsers.                                       |
+| Dynamic Client Registration                                                 | MCP deprecated it for Client ID Metadata Documents.                                                  |
+| FAPI 2.0: PAR, DPoP, mTLS                                                   | Never; it needs PAR and sender-constrained tokens, a large addition beyond the Basic OP profile.     |
+| Token revocation (RFC 7009), introspection (RFC 7662), `client_credentials` | A consumer in `examples/` or MCP authorization support needs one; #47 defers them.                   |
+| Custom skills, subagents or hooks beyond `docs/harness.md`                  | A recorded failure calls for one, and an eval (a skill or subagent) or a test (a hook) checks it.    |
+| Ablation of harness controls (with and without each)                        | A control's value is disputed and its named evidence cannot settle it; see `docs/research/evals.md`. |
+| obra/superpowers                                                            | Its always-on prompt conflicts with lean context; see `docs/research/ai-development.md`.             |
+| A second vendor's model for review                                          | Calibration shows a systematic blind spot.                                                           |
+| Agents running in CI                                                        | #1.                                                                                                  |
 
 ## Agent skills
 
