@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/palebluedot4/pulsar/internal/registry"
@@ -15,13 +16,18 @@ type LogoutPage struct {
 	// ClientID is the Client that sent the End-User, or "" if it is not
 	// known.
 	ClientID string
-	// Subject and Username are those of the End-User signed in, or "" if
-	// no one is. A confirmation counts only for that Subject.
+	// Known reports whether the page is shown for the End-User whose
+	// Subject and Username these are, or for no one if they are "": a
+	// confirmation then counts only for that Subject. A page not Known is
+	// shown for whoever is signed in when it is answered, and names no one.
+	Known    bool
 	Subject  string
 	Username string
-	// Action is where the form is submitted: the confirmation's path, with
-	// the logout request's parameters as its query.
+	// Action is where the form is submitted: the confirmation's path.
 	Action string
+	// Request is the logout request's parameters, which the form submits
+	// again in its body, so that no URL carries them.
+	Request map[string]string
 }
 
 // The values the confirmation form submits for the decisions an End-User
@@ -58,7 +64,12 @@ var logoutTemplate = template.Must(template.New("logout").Parse(`<!doctype html>
 <p>A client asks to sign you out of this provider.</p>
 {{- end}}
 <form method="post" action="{{.Action}}">
+{{- range $name, $value := .Request}}
+<input type="hidden" name="{{$name}}" value="{{$value}}">
+{{- end}}
+{{- if .Known}}
 <input type="hidden" name="{{.EndUserField}}" value="{{.Subject}}">
+{{- end}}
 <p><button type="submit" name="decision" value="{{.Logout}}">Sign out</button>
 <button type="submit" name="decision" value="{{.Stay}}">Stay signed in</button></p>
 </form>
@@ -96,9 +107,9 @@ var logoutOutcomeTemplate = template.Must(template.New("logout outcome").Parse(`
 `))
 
 // WriteLogoutOutcomePage writes the page that ends a logout with no Client
-// to return to: that the End-User is signed out, or, if they declined,
-// still signed in. It must be called after the Login Session is ended or
-// saved.
+// to return to: that the End-User is signed out, if no Login Session is
+// left, or still signed in, if they declined and theirs is kept. It must
+// be called after the Login Session is ended or saved.
 func WriteLogoutOutcomePage(w http.ResponseWriter, signedOut bool) error {
 	return writePage(w, logoutOutcomeTemplate, signedOut)
 }
@@ -107,9 +118,13 @@ func WriteLogoutOutcomePage(w http.ResponseWriter, signedOut bool) error {
 type LogoutForm struct {
 	// Confirmed reports whether the End-User chose to log out.
 	Confirmed bool
-	// Subject is that of the End-User the page was shown for, or "" if no
-	// one was signed in.
-	Subject string
+	// ShownFor is the Subject of the End-User the page was shown for, or ""
+	// if it was shown for no one; nil if it was shown for whoever is signed
+	// in when it is answered (see [LogoutPage]).
+	ShownFor *string
+	// Values are every value of the form's body, the logout request's
+	// parameters among them.
+	Values url.Values
 }
 
 // ReadLogoutForm reads the confirmation form from the body of r. It reports
@@ -119,7 +134,11 @@ func ReadLogoutForm(w http.ResponseWriter, r *http.Request) (LogoutForm, bool) {
 	if err := r.ParseForm(); err != nil {
 		return LogoutForm{}, false
 	}
-	f := LogoutForm{Subject: r.PostForm.Get(endUserField)}
+	f := LogoutForm{Values: r.PostForm}
+	if r.PostForm.Has(endUserField) {
+		subject := r.PostForm.Get(endUserField)
+		f.ShownFor = &subject
+	}
 	switch r.PostForm.Get("decision") {
 	case logoutValue:
 		f.Confirmed = true

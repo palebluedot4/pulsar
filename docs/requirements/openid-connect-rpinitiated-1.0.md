@@ -12,8 +12,10 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   GET and POST methods defined in [...] at the Logout Endpoint."
 
   A POST a Client sends from its own site arrives without the SameSite=Lax
-  Login Session cookie, and is sent back to the endpoint by GET, with the
-  same parameters, as the authorization endpoint does.
+  Login Session cookie, so its confirmation page names no End-User, and is
+  answered for whoever is signed in then. The confirmation form carries the
+  request in its body, so no URL pulsar sends the browser to holds the
+  hint, whichever method the Client used.
 
 - REQ-LOGOUT-2 (§2, `id_token_hint`): "When an id_token_hint parameter is
   present, the OP MUST validate that it was the issuer of the ID Token."
@@ -32,6 +34,14 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   pulsar never checks a hint's `exp`, whatever the session, as Spring
   Authorization Server does not
   ([research](../research/logout-revocation-resources.md#rp-initiated-logout)).
+
+  Limit: a hint must still verify against a key the JWK Set publishes
+  (REQ-LOGOUT-2), and a key outlives its replacement's activation by
+  eleven minutes only, the token lifetime plus a reload interval, while a
+  Login Session lasts up to ten hours. So after `pulsar keys rotate`, an
+  ID token the old key signed is refused as a hint, with the error page,
+  even while the RP's session lasts. The RP can still log the End-User
+  out by sending `client_id` instead of the hint.
 
 - REQ-LOGOUT-4 (§2, `client_id`): "When both client_id and id_token_hint
   are present, the OP MUST verify that the Client Identifier matches the
@@ -72,7 +82,8 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   pulsar asks in every case, naming the Client when the request identifies
   it. Saying yes deletes the Login Session and clears its cookie. Saying
   no keeps it, and returns the End-User to the Client as a logout would,
-  or shows that they are still signed in.
+  or shows that they are still signed in, or signed out if no Login
+  Session is left.
 
 ## Redirection and registration (§3)
 
@@ -105,7 +116,8 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
 
   A browser without a Login Session is asked to confirm, and then
   returned to the Client or shown that it is signed out, as one with a
-  Login Session is.
+  Login Session is. So is one whose Login Session ends while the page is
+  open: the logout is done, and its answer is not asked for again.
 
 - REQ-LOGOUT-12 (§4): "If any of the validation procedures defined in
   this specification fail, any operations requiring the information that
@@ -124,6 +136,8 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   explicit confirmation from the End-User before acting upon them."
 
   The confirmation form refuses cross-origin submissions, as the consent
-  form does, and ends only the Login Session of the End-User it was shown
-  for; a submission for another, or for none, sends the browser back to
-  be asked again.
+  form does. A page shown for an End-User, or for no one, ends no other
+  End-User's Login Session: if another is signed in when it is answered,
+  they are asked instead. A page shown for a Client's cross-site POST,
+  which carries no cookie, names no one, and ends the Login Session of
+  whoever is signed in when it is answered.
