@@ -245,13 +245,14 @@ session.
 
 ### What pulsar takes from this: retention
 
-pulsar keeps a redeemed code while the Refresh Token Family it started has
-neither ended nor been revoked. Each authorization request decides this
-for every expired code, with a `NOT EXISTS` join to the families
-(`DeleteExpiredAuthorizationCodes`, marked `TODO(#53)`); each token response
-deletes expired access tokens. Ended families have an index on `expiry`,
-"For deleting the families that have ended", but no query yet deletes a
-family or its refresh tokens.
+When surveyed, pulsar kept a redeemed code while the Refresh Token Family
+it started had neither ended nor been revoked. Each authorization request
+decided this for every expired code, with a `NOT EXISTS` join to the
+families (`DeleteExpiredAuthorizationCodes`, then marked `TODO(#53)`); each
+token response deleted expired access tokens. Ended families had an index
+on `expiry`, "For deleting the families that have ended", but no query yet
+deleted a family or its refresh tokens. #53 then took option A below, and
+#59 moved every deletion out of requests into a periodic task.
 
 - Option A: write on each code's row when it may be deleted, and move it as
   the code's state changes: when it is redeemed, to when its access tokens
