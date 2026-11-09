@@ -100,8 +100,8 @@ func (p *Provider) userInfoClaims(w http.ResponseWriter, r *http.Request) (map[s
 	// it is validated, so that the application can read why an expired or
 	// revoked token is refused.
 	client, _ := p.registry.Client(signed.ClientID)
-	if !p.userInfoCORS.allow(w, r, client) {
-		return nil, &bearerError{status: http.StatusBadRequest, code: errInvalidRequest, desc: errOriginNotAllowed}
+	if !p.userInfoCORS.check(w, r, client) {
+		return nil, &bearerError{status: http.StatusBadRequest, code: errInvalidRequest, desc: p.userInfoCORS.refusal}
 	}
 	at, err := p.validateAccessToken(ctx, signed)
 	switch {

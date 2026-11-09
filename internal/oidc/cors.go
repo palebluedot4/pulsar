@@ -25,11 +25,14 @@ const corsMaxAge = "3600"
 // browser withholds it from the application. No response allows
 // credentials: these endpoints use no cookies.
 type corsPolicy struct {
-	allowHeader string // the endpoint's methods, as Allow lists them (RFC 9110 §10.2.1)
-	methods     string // Access-Control-Allow-Methods
-	headers     string // Access-Control-Allow-Headers, or "" for none
-	expose      string // Access-Control-Expose-Headers, or "" for none
-	allows      func(*registry.Client) bool
+	allow         string // Allow: the endpoint's methods (RFC 9110 §10.2.1)
+	allowMethods  string // Access-Control-Allow-Methods
+	allowHeaders  string // Access-Control-Allow-Headers, or "" for none
+	exposeHeaders string // Access-Control-Expose-Headers, or "" for none
+	// refusal describes the error that answers a request from an origin
+	// not allowed.
+	refusal string
+	allows  func(*registry.Client) bool
 	// known holds the origins a preflight is approved for.
 	known map[string]bool
 }
@@ -48,10 +51,14 @@ func newCORSPolicy(reg *registry.Registry, p corsPolicy) *corsPolicy {
 	return &p
 }
 
-// requestOrigin returns the origin r was sent from, and whether it names
-// one: a browser sends an Origin header with every cross-origin request,
-// and a Client that is not a browser sends none (Fetch, "Origin header"). A request
-// with more than one returns "", which no Client's origins hold.
+// requestOrigin returns the origin in r's Origin header, and whether r
+// has one. A browser sends one with every cross-origin request, and with
+// a POST from the same origin too; a Client that is not a browser sends
+// none (Fetch, "Origin header"). A request with more than one returns "",
+// which no Client's origins hold, so that it is refused as one from an
+// origin not allowed. pulsar serves no page that sends requests to these
+// endpoints, so a same-origin request is refused too, unless its origin
+// is that of a Client's redirect URI.
 func requestOrigin(r *http.Request) (origin string, sent bool) {
 	values := r.Header.Values("Origin")
 	switch len(values) {
@@ -73,14 +80,14 @@ func requestOrigin(r *http.Request) (origin string, sent bool) {
 func (p *corsPolicy) handlePreflight() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Allow", p.allowHeader)
+		h.Set("Allow", p.allow)
 		h.Add("Vary", "Origin")
 		origin, _ := requestOrigin(r)
 		if r.Header.Get("Access-Control-Request-Method") != "" && p.known[origin] {
 			h.Set("Access-Control-Allow-Origin", origin)
-			h.Set("Access-Control-Allow-Methods", p.methods)
-			if p.headers != "" {
-				h.Set("Access-Control-Allow-Headers", p.headers)
+			h.Set("Access-Control-Allow-Methods", p.allowMethods)
+			if p.allowHeaders != "" {
+				h.Set("Access-Control-Allow-Headers", p.allowHeaders)
 			}
 			h.Set("Access-Control-Max-Age", corsMaxAge)
 		}
@@ -88,14 +95,14 @@ func (p *corsPolicy) handlePreflight() http.Handler {
 	})
 }
 
-// allow reports whether r, an actual request whose Client is client, or
+// check reports whether r, an actual request whose Client is client, or
 // nil if no Client is known, may be answered: it was not sent from a
 // browser, or was sent from one of the origins client may send requests
 // from. If it was, the response's headers let the application read it,
-// and any header of p's expose. Every response varies by origin, so that
-// a cache does not serve one to another (Fetch, "CORS protocol and HTTP
-// caches"); the handler sets Vary before calling allow.
-func (p *corsPolicy) allow(w http.ResponseWriter, r *http.Request, client *registry.Client) bool {
+// and the headers of p's exposeHeaders. Every response varies by origin,
+// so that a cache does not serve one to another (Fetch, "CORS protocol
+// and HTTP caches"); the handler sets Vary before calling check.
+func (p *corsPolicy) check(w http.ResponseWriter, r *http.Request, client *registry.Client) bool {
 	origin, sent := requestOrigin(r)
 	if !sent {
 		return true
@@ -105,15 +112,11 @@ func (p *corsPolicy) allow(w http.ResponseWriter, r *http.Request, client *regis
 	}
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", origin)
-	if p.expose != "" {
-		h.Set("Access-Control-Expose-Headers", p.expose)
+	if p.exposeHeaders != "" {
+		h.Set("Access-Control-Expose-Headers", p.exposeHeaders)
 	}
 	return true
 }
-
-// errOriginNotAllowed is the description of the error that answers a
-// request from an origin its Client may not send requests from.
-const errOriginNotAllowed = "The client may not send requests from this origin."
 
 // HandleTokenPreflight answers OPTIONS requests at the token endpoint,
 // approving preflights from the origins of public Clients.

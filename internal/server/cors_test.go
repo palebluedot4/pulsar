@@ -318,10 +318,14 @@ func TestAuthorizationNoCORS(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	params := authorizationParams().Encode()
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
-		req := httptest.NewRequestWithContext(t.Context(), method, "https://op.example"+authorizationPath+"?"+authorizationParams().Encode(), http.NoBody)
-		if method == http.MethodPost {
-			req = httptest.NewRequestWithContext(t.Context(), method, "https://op.example"+authorizationPath, strings.NewReader(authorizationParams().Encode()))
+		var req *http.Request
+		switch method {
+		case http.MethodGet:
+			req = httptest.NewRequestWithContext(t.Context(), method, "https://op.example"+authorizationPath+"?"+params, http.NoBody)
+		case http.MethodPost:
+			req = httptest.NewRequestWithContext(t.Context(), method, "https://op.example"+authorizationPath, strings.NewReader(params))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
 		resp := fromOrigin(t, handler, req, rpOrigin)

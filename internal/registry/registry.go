@@ -109,8 +109,8 @@ type Client struct {
 	RedirectURIs []string
 	// Origins are the origins of the RedirectURIs whose scheme is http or
 	// https, each once, as a browser serializes them in an Origin header
-	// (RFC 6454 §6.1); a redirect URI of another scheme, as a native app
-	// uses, has none. A browser-based Client is served from the origin its
+	// (RFC 6454 §6.1); a redirect URI of another scheme, as a native
+	// Client uses, has none. A browser-based Client is served from the origin its
 	// redirect URI names, so these are the origins it sends requests from.
 	Origins []string
 	// JWKS holds the public keys of a Client that authenticates with
