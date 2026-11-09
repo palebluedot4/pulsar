@@ -10,6 +10,7 @@ against pulsar. The Makefile target says how a run proceeds;
 | `compose.yaml`           | pulsar, its PostgreSQL, the suite's prebuilt images at `release-v5.3.4`, and the suite's CI runner                                                                |
 | `config-op.json`         | The suite's configuration for `oidcc-config-certification-test-plan`                                                                                              |
 | `config-basic.json`      | The suite's configuration for `oidcc-basic-certification-test-plan`: its Clients' credentials, and the browser automation that signs the End-User in and consents |
+| `config-formpost.json`   | The same for `oidcc-formpost-basic-certification-test-plan`, whose browser automation also passes pulsar's form-post page                                         |
 | `registry.json`          | pulsar's registry: the three Clients `config-basic.json` names, and the End-User it signs in as                                                                   |
 | `expected-failures.json` | Conditions the runner is to accept as failures                                                                                                                    |
 | `expected-warnings.json` | Conditions the runner is to accept as warnings                                                                                                                    |
@@ -17,18 +18,26 @@ against pulsar. The Makefile target says how a run proceeds;
 | `runner/`                | The runner's image: `scripts/run-test-plan.py` from the suite, checksummed, and its hashed dependencies                                                           |
 | `tls/`, `results/`       | Written by each run and ignored by git: pulsar's certificate and key; exported results and the logs of every service but the runner                               |
 
-The credentials in `config-basic.json` and `registry.json` are for this
+The credentials in `config-basic.json`, `config-formpost.json` and
+`registry.json` are for this
 stack only and published deliberately (SECURITY.md): the secrets and the
 password in plain text in one, as the suite sends them, and as Argon2id
 hashes in the other, as pulsar reads them.
 
-`runner/run.sh` runs the Config OP plan and then the Basic OP plan, with
-the variants `server_metadata=discovery` and
-`client_registration=static_client`. The registered redirect URI is the
-one the suite derives from the configuration's `alias` and its own
-`BASE_URL` in `compose.yaml`; a change to either changes the
-`redirect_uris` in `registry.json` and the callback URL that
-`config-basic.json` matches.
+`runner/run.sh` runs the Config OP plan, then the Basic OP plan, then the
+Form Post Basic plan, the last two with the variants
+`server_metadata=discovery` and `client_registration=static_client`. The
+Form Post Basic plan is the Basic OP plan's modules with
+`response_mode=form_post` on every authorization request; it checks that
+every response, errors too, arrives at the callback by POST. Its
+configuration is `config-basic.json` but for the browser automation:
+pulsar's form-post page is at its authorization endpoint, which the
+consent task matches, so that task's click is optional, and a further
+task clicks the page's button if its script has not already submitted
+it. The registered redirect URI is the one the suite derives from the
+configurations' shared `alias` and its own `BASE_URL` in `compose.yaml`; a
+change to either changes the `redirect_uris` in `registry.json` and the
+callback URL that `config-basic.json` and `config-formpost.json` match.
 
 The runner fails a run when a condition fails or warns without a matching
 entry, when a module is skipped without one, and also when an entry
@@ -58,14 +67,15 @@ template for each unexpected result.
 
 ## Pages a person would review
 
-Four modules of the Basic OP plan ask for a page to be reviewed rather than
-checked by the suite. `oidcc-prompt-login` and `oidcc-max-age-1` review
+Four modules of the Basic OP plan, and the same four of the Form Post Basic
+plan, ask for a page to be reviewed rather than checked by the suite. `oidcc-prompt-login` and `oidcc-max-age-1` review
 the login page shown again for `prompt=login` and for `max_age=1`;
 `oidcc-ensure-registered-redirect-uri` and
 `oidcc-ensure-request-object-with-redirect-uri` review the error page
 pulsar shows for a redirect URI the Client did not register. Such a module
 ends in `REVIEW`, which the runner accepts.
-The browser automation in `config-basic.json` hands that page to the
+The browser automation in `config-basic.json` and `config-formpost.json`
+hands that page to the
 suite, which records it in the module's log: any login page does so for a
 module waiting for one, and an override does so for each of the two
 modules that expect the error page. A module whose page never comes never

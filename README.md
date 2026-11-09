@@ -53,8 +53,9 @@ deletes the codes no longer kept for a second redemption to revoke, the
 expired access tokens, client assertions and Login Sessions, the ended Refresh
 Token Families with their refresh tokens, and the counts of login attempts
 forgotten a day after the last. `pulsar keys rotate` rotates the signing key.
-The OpenID conformance suite's Config OP and Basic OP plans run against it in
-CI; on 2026-11-06, at commit `8d6ab47`, they finished with no failures, as
+The OpenID conformance suite's Config OP, Basic OP and Form Post Basic plans
+run against it in CI; on 2026-11-06, at commit `8d6ab47`, the first two
+finished with no failures, as
 [Checking conformance](#checking-conformance) details.
 
 ## Running it
@@ -180,12 +181,16 @@ make conformance
 
 This runs pulsar and the
 [OpenID conformance suite](https://gitlab.com/openid/conformance-suite)
-at `release-v5.3.4` in Docker Compose, and two of the suite's plans:
+at `release-v5.3.4` in Docker Compose, and three of the suite's plans:
 `oidcc-config-certification-test-plan`, which checks the discovery document
-and the JWK Set, and `oidcc-basic-certification-test-plan`, which signs an
+and the JWK Set; `oidcc-basic-certification-test-plan`, which signs an
 End-User in through the authorization code flow with static Clients and
 discovery, and checks the responses of the authorization, token and
-UserInfo endpoints. Its `oidcc-refresh-token` module redeems a refresh
+UserInfo endpoints; and `oidcc-formpost-basic-certification-test-plan`,
+which runs the same modules with `response_mode=form_post` and checks that
+every authorization response, errors too, arrives by POST. It does not
+check `response_modes_supported`, the form-post page's headers, or a
+browser without script; only pulsar's own tests do. Its `oidcc-refresh-token` module redeems a refresh
 token once with `scope` and once without, checks the response, the
 refreshed ID token, and UserInfo with the new access token, and checks
 that another Client's refresh token is refused. It never presents a
@@ -203,8 +208,9 @@ does not list with a reason, and leaves the results in
 
 [conformance/README.md](conformance/README.md) describes the files it uses.
 
-On 2026-11-06, CI ran both plans against commit `8d6ab47`, on `main`,
-with no failures.
+On 2026-11-06, CI ran the Config OP and Basic OP plans against commit
+`8d6ab47`, on `main`, with no failures; the Form Post Basic plan was added
+later, and no result of it is recorded here yet.
 Of the Basic OP plan's 35 modules, 28 passed; one ended in a warning,
 since pulsar never returns `acr`; two were skipped, since pulsar issues no
 refresh tokens and supports no request objects; and four ended in
