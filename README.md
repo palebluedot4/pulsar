@@ -9,10 +9,12 @@ remembers the scopes an End-User allows each Client, and the authorization
 code flow, with `prompt` and `max_age`, to an ID token and access token for
 Clients that authenticate with `client_secret_basic`, `client_secret_post` or
 `private_key_jwt`, and for public Clients, which must use PKCE with `S256`. A
-Client may ask for `response_mode=form_post`: every response pulsar sends to
-its redirect URI, the code or an error, then arrives in the body of a POST,
-from a page that submits itself by a script its Content-Security-Policy
-allows by hash, with a button for a browser without script. A
+Client may send `response_mode=form_post` once, with an `http` or `https`
+redirect URI: every response pulsar sends to that URI, the code or an error,
+then arrives in the body of a POST, from a page that submits itself by a
+script its Content-Security-Policy allows by hash, with a button for a browser
+without script. A repeated `response_mode`, or `form_post` with a redirect URI
+of another scheme, is refused with `invalid_request` in the query. A
 `private_key_jwt` assertion must name pulsar's issuer as its sole audience, as
 RFC 10070 requires, so one naming the token endpoint is refused. A public
 Client cannot prove its identity, so the consent page asks for it every time

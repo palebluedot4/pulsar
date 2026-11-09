@@ -401,6 +401,7 @@ None yet.
   earlier reviews report.
 - #72: `make conformance` runs the Form Post Basic plan after the Basic OP
   plan, with `config-formpost.json`, whose browser automation also passes
-  pulsar's form-post page, and with the Basic OP plan's skip and warning
-  entries repeated for it. CI runs it as part of the same job, which the
-  `main` ruleset already requires.
+  pulsar's form-post page; the Basic OP plan's skip and warning entries
+  now name the configuration `*`, so that one entry covers both plans. CI
+  runs it as part of the same job, which the `main` ruleset already
+  requires.

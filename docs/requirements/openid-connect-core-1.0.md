@@ -195,8 +195,10 @@ that pulsar, as an OP, must or should meet.
   (REQ-FORMPOST-1). It reads `response_mode` once the Client and redirect
   URI are valid and before any other parameter, so that every later
   error, a missing `response_type` among them, goes by the Response Mode
-  requested. A `response_mode` repeated, or of another value, is
-  `invalid_request`, sent by `query`.
+  requested. A `response_mode` repeated, or of another value, or
+  `form_post` for a redirect URI that is neither `http` nor `https`
+  (REQ-FORMPOST-1), is `invalid_request`, sent by `query`, as is every
+  other error of that request.
 
 ### Error codes (§3.1.2.6)
 

@@ -18,7 +18,7 @@
   },
   "browser": [
     {
-      "comment": "Every authorization response, a code or an error: the login page and the consent page when pulsar shows them, then the suite's callback page, which pulsar's form-post page posts to. A login page fills the module's placeholder if it has one: only oidcc-prompt-login and oidcc-max-age-1 do, for their second login, and they never finish until it is filled. The form-post page is also at pulsar's /authorize, which the consent task matches, so its click is optional: the browser has normally left that page by its script by then. If it has not, the next task submits the form by its button, as a browser without script would.",
+      "comment": "Every authorization response, a code or an error: the login page and the consent page when pulsar shows them, then the suite's callback page, which pulsar's form-post page posts to. A login page fills the module's placeholder if it has one: only oidcc-prompt-login and oidcc-max-age-1 do, for their second login, and they never finish until it is filled. The form-post page is also at pulsar's /authorize, which the consent task matches, so its click is optional. The suite's browser runs the page's script, which submits the form; the form-post task only waits, at any URL, until the browser reaches the callback, and never clicks the page's button, so the form is submitted once.",
       "match": "https://pulsar:9443/authorize*",
       "tasks": [
         {
@@ -54,16 +54,7 @@
         },
         {
           "task": "Form post",
-          "optional": true,
-          "match": "https://pulsar:9443/authorize*",
-          "commands": [
-            [
-              "click",
-              "xpath",
-              "//button[normalize-space()='Continue']",
-              "optional"
-            ]
-          ]
+          "commands": [["wait", "contains", "/test/a/pulsar/callback", 10]]
         },
         {
           "task": "Verify Complete",

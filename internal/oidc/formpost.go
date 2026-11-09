@@ -41,16 +41,12 @@ var formPostTemplate = template.Must(template.New("form_post").Parse(`<!doctype 
 </html>
 `))
 
+// formPostHeaders are the form-post page's headers.
+var formPostHeaders = login.NewScriptPage(autoSubmit)
+
 // formPostPage is what formPostTemplate reads.
 type formPostPage struct {
-	// Action is a redirect URI the Client registered, and which the
-	// operator's registry holds, not one the request supplied. It is
-	// passed as template.URL so that the custom scheme of a native app's
-	// URI is kept, which html/template would replace; it is still escaped
-	// for the attribute. A javascript: URI there would not run: the page's
-	// policy allows its one script by hash, which allows no javascript:
-	// URL.
-	Action template.URL
+	Action string // a redirect URI the Client registered, one postable accepts
 	Params []formPostParam
 }
 
@@ -59,13 +55,23 @@ type formPostParam struct {
 	Name, Value string
 }
 
+// postable reports whether a browser can POST to redirectURI, a redirect
+// URI the Client registered: whether its scheme is http or https. A
+// browser hands a URI of any other scheme, such as a native app's
+// (RFC 8252 §7.1), to the app that claims it, without a body, so a
+// response sent there by form_post would never arrive.
+func postable(redirectURI string) bool {
+	u, err := url.Parse(redirectURI) // Parse lowercases the scheme.
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http")
+}
+
 // writeFormPost answers with the form-post page that posts params to
-// redirectURI, under the headers of pulsar's other pages: never cached
-// (OAuth 2.0 Form Post Response Mode §2) and never framed (RFC 9700
-// §4.16), with the same Content-Security-Policy but for allowing
-// autoSubmit.
+// redirectURI, which must be postable, under the headers of pulsar's
+// other pages: never cached (OAuth 2.0 Form Post Response Mode §2) and
+// never framed (RFC 9700 §4.16), with the same Content-Security-Policy but
+// for allowing autoSubmit.
 func writeFormPost(w http.ResponseWriter, redirectURI string, params url.Values) {
-	page := formPostPage{Action: template.URL(redirectURI)} //nolint:gosec // G203: a registered redirect URI; see formPostPage.
+	page := formPostPage{Action: redirectURI}
 	for _, name := range slices.Sorted(maps.Keys(params)) {
 		for _, v := range params[name] {
 			page.Params = append(page.Params, formPostParam{Name: name, Value: v})
@@ -77,7 +83,7 @@ func writeFormPost(w http.ResponseWriter, redirectURI string, params url.Values)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	login.SetScriptPageHeaders(w.Header(), autoSubmit)
+	formPostHeaders.SetHeaders(w.Header())
 	w.WriteHeader(http.StatusOK)
 	_, _ = buf.WriteTo(w) // A failed write means the browser has gone.
 }

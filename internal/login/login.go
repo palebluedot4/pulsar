@@ -75,18 +75,20 @@ const busy = "Too many sign-ins are being checked. Try again in a moment."
 // its password is checked.
 var errTooSoon = errors.New("login: too soon after the last")
 
-// The directives of every page's Content-Security-Policy: the page loads
-// nothing and runs no script, and no other page may frame it.
+// The directives every page's Content-Security-Policy starts and ends
+// with. default-src 'none' lets the page load nothing and run no script
+// unless another directive allows it; frame-ancestors 'none' lets no page
+// frame it.
 const (
 	loadNothing = "default-src 'none'"
 	noFraming   = "frame-ancestors 'none'"
 )
 
 // Headers of every page this package serves. The page is personal and
-// must not be cached. It runs no script and loads nothing, and no other
-// page may frame it, which is how RFC 9700 §4.16 has an authorization
-// server prevent clickjacking; X-Frame-Options does the same for browsers
-// without CSP frame-ancestors.
+// must not be cached. Its policy allows no script, and no other page may
+// frame it, which is how RFC 9700 §4.16 has an authorization server
+// prevent clickjacking; X-Frame-Options does the same for browsers without
+// CSP frame-ancestors.
 var pageHeaders = map[string]string{
 	"Content-Type":            "text/html; charset=utf-8",
 	"Cache-Control":           "no-store",
@@ -102,16 +104,27 @@ func SetPageHeaders(h http.Header) {
 	}
 }
 
-// SetScriptPageHeaders sets on h the headers of [SetPageHeaders] for a
-// page that runs one inline script, whose text is script. Its
-// Content-Security-Policy is the same but for allowing that script, by its
-// SHA-256 hash (CSP Level 3 §2.3.1); no other script runs, nor any event
-// handler or javascript: URL, which a hash does not allow.
-func SetScriptPageHeaders(h http.Header, script string) {
-	SetPageHeaders(h)
+// A ScriptPage is the headers of a page that runs one inline script: those
+// of [SetPageHeaders], with a Content-Security-Policy that is the same but
+// for allowing that script, by its SHA-256 hash (CSP Level 3 §2.3.1). No
+// other script runs, nor any event handler or javascript: URL, which a
+// hash does not allow.
+type ScriptPage struct {
+	policy string
+}
+
+// NewScriptPage returns the headers of a page whose one inline script has
+// the text script. The policy is computed once, here.
+func NewScriptPage(script string) ScriptPage {
 	sum := sha256.Sum256([]byte(script))
 	allowScript := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
-	h.Set("Content-Security-Policy", loadNothing+"; "+allowScript+"; "+noFraming)
+	return ScriptPage{policy: loadNothing + "; " + allowScript + "; " + noFraming}
+}
+
+// SetHeaders sets the page's headers on h.
+func (p ScriptPage) SetHeaders(h http.Header) {
+	SetPageHeaders(h)
+	h.Set("Content-Security-Policy", p.policy)
 }
 
 // page is the login page's content.
