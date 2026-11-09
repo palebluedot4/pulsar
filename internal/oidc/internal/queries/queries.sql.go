@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+const deleteAccessToken = `-- name: DeleteAccessToken :exec
+DELETE FROM access_tokens
+WHERE jti = $1
+`
+
+// Revokes the access token whose jti this is, alone, by deleting its
+// record.
+func (q *Queries) DeleteAccessToken(ctx context.Context, jti string) error {
+	_, err := q.db.Exec(ctx, deleteAccessToken, jti)
+	return err
+}
+
 const deleteAccessTokensOfCode = `-- name: DeleteAccessTokensOfCode :exec
 DELETE FROM access_tokens
 WHERE code_hash = $1

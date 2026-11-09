@@ -657,11 +657,11 @@ func TestRefreshTokenWaitsForRevocationInProgress(t *testing.T) {
 	}
 }
 
-// REQ-BCP-11, REQ-OAUTH-29: a revocation of a Refresh Token Family, by a
-// refresh token of it presented again or by a valid second redemption of
-// its code, sent while a refresh in the family is in progress, waits for
-// the refresh to commit and then revokes the access token it recorded
-// too.
+// REQ-BCP-11, REQ-OAUTH-29, REQ-REVOKE-8: a revocation of a Refresh Token
+// Family, by a refresh token of it presented again, by a valid second
+// redemption of its code, or at the revocation endpoint, sent while a
+// refresh in the family is in progress, waits for the refresh to commit
+// and then revokes the access token it recorded too.
 //
 // The refresh in progress is the test's own transaction. As a refresh
 // does, it locks the family's row, marks the family's newest refresh token
@@ -671,14 +671,45 @@ func TestRefreshTokenWaitsForRevocationInProgress(t *testing.T) {
 func TestRevocationWaitsForRefreshInProgress(t *testing.T) {
 	t.Parallel()
 
+	// wantRefused fails the test unless resp is a token endpoint's refusal.
+	wantRefused := func(t *testing.T, resp response) {
+		t.Helper()
+		if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
+			t.Errorf("POST %s during a refresh in the family error = %q, want %q", tokenPath, got, "invalid_grant")
+		}
+	}
 	tests := []struct {
 		name string
-		// form is the form of the request that revokes the family, given
-		// the family's code and its first refresh token, already redeemed.
-		form func(code, refreshToken string) url.Values
+		// request returns the request that revokes the family, given the
+		// family's code and its first refresh token, already redeemed.
+		request func(t *testing.T, code, refreshToken string) *http.Request
+		// want checks the response to it.
+		want func(t *testing.T, resp response)
 	}{
-		{name: "by a refresh token presented again", form: func(_, refreshToken string) url.Values { return refreshForm(refreshToken, "") }},
-		{name: "by a second redemption of the code", form: func(code, _ string) url.Values { return codeForm(code) }},
+		{
+			name: "by a refresh token presented again",
+			request: func(t *testing.T, _, refreshToken string) *http.Request {
+				t.Helper()
+				return newTokenRequest(t, "rp", rpSecret, refreshForm(refreshToken, ""))
+			},
+			want: wantRefused,
+		},
+		{
+			name: "by a second redemption of the code",
+			request: func(t *testing.T, code, _ string) *http.Request {
+				t.Helper()
+				return newTokenRequest(t, "rp", rpSecret, codeForm(code))
+			},
+			want: wantRefused,
+		},
+		{
+			name: "at the revocation endpoint",
+			request: func(t *testing.T, _, refreshToken string) *http.Request {
+				t.Helper()
+				return newRevocationRequest(t, "rp", rpSecret, revocationForm(refreshToken, ""))
+			},
+			want: wantRevocationOK,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -717,10 +748,7 @@ func TestRevocationWaitsForRefreshInProgress(t *testing.T) {
 				}
 			}
 
-			resp := serveWhileLocked(t, pool, handler, newTokenRequest(t, "rp", rpSecret, tt.form(c, first.RefreshToken)), tx)
-			if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
-				t.Errorf("POST %s during a refresh in the family error = %q, want %q", tokenPath, got, "invalid_grant")
-			}
+			tt.want(t, serveWhileLocked(t, pool, handler, tt.request(t, c, first.RefreshToken), tx))
 			if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
 				t.Errorf("UserInfo with the access token of the refresh in progress error = %q, want %q", got, "invalid_token")
 			}

@@ -61,6 +61,12 @@ WHERE code_hash = @code_hash;
 DELETE FROM access_tokens
 WHERE code_hash = @code_hash;
 
+-- name: DeleteAccessToken :exec
+-- Revokes the access token whose jti this is, alone, by deleting its
+-- record.
+DELETE FROM access_tokens
+WHERE jti = @jti;
+
 -- name: StopKeepingAuthorizationCode :exec
 -- Lets the code's row be deleted from @now, its tokens having been
 -- revoked, so that nothing is left for a second redemption to revoke.

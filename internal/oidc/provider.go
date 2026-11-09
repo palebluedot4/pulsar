@@ -51,10 +51,10 @@ type JWTKeys interface {
 	VerifyJWT(token string) (typ string, claims []byte, ok bool)
 }
 
-// Provider serves the authorization, token and UserInfo endpoints, which
-// share the authorization codes the first issues and the second redeems,
-// and the access tokens the second issues and the third accepts. It is
-// safe for concurrent use.
+// Provider serves the authorization, token, UserInfo and revocation
+// endpoints, which share the authorization codes the first issues and the
+// second redeems, and the tokens the second issues, the third accepts and
+// the fourth revokes. It is safe for concurrent use.
 type Provider struct {
 	issuer   *Issuer
 	registry *registry.Registry
@@ -118,6 +118,13 @@ func AuthorizationPath(issuer *Issuer) string {
 // publishes.
 func TokenPath(issuer *Issuer) string {
 	return issuer.Route(tokenPath)
+}
+
+// RevocationPath returns the path at which the revocation endpoint for
+// issuer is served: the path of the revocation_endpoint that the discovery
+// document publishes.
+func RevocationPath(issuer *Issuer) string {
+	return issuer.Route(revocationPath)
 }
 
 // UserInfoPath returns the path at which the UserInfo endpoint for issuer

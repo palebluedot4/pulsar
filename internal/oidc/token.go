@@ -75,27 +75,39 @@ func (p *Provider) HandleToken() http.Handler {
 }
 
 func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
-	// Every response, success or error, is about a credential, and no
-	// cache may keep it (RFC 6749 §5.1).
+	setCredentialHeaders(w)
+	resp, tokErr := p.exchange(w, r)
+	if tokErr != nil {
+		p.writeTokenError(w, tokErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// setCredentialHeaders sets the headers of every response of the token
+// and revocation endpoints. Each, success or error, is about a credential,
+// and no cache may keep it (RFC 6749 §5.1); each varies by origin
+// (corsPolicy.check).
+func setCredentialHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Pragma", "no-cache")
 	h.Add("Vary", "Origin")
+}
 
-	resp, tokErr := p.exchange(w, r)
-	if tokErr != nil {
-		if tokErr.status == http.StatusUnauthorized {
-			// RFC 6749 §5.2: the scheme the Client used, or, if it used
-			// none, the one pulsar supports.
-			h.Set("WWW-Authenticate", `Basic realm="`+p.issuer.String()+`"`)
-		}
-		if tokErr.retryAfter > 0 {
-			h.Set("Retry-After", strconv.Itoa(int(tokErr.retryAfter/time.Second)))
-		}
-		writeJSON(w, tokErr.status, tokErr)
-		return
+// writeTokenError writes tokErr as an error response in the JSON form of
+// RFC 6749 §5.2.
+func (p *Provider) writeTokenError(w http.ResponseWriter, tokErr *tokenError) {
+	h := w.Header()
+	if tokErr.status == http.StatusUnauthorized {
+		// RFC 6749 §5.2: the scheme the Client used, or, if it used
+		// none, the one pulsar supports.
+		h.Set("WWW-Authenticate", `Basic realm="`+p.issuer.String()+`"`)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	if tokErr.retryAfter > 0 {
+		h.Set("Retry-After", strconv.Itoa(int(tokErr.retryAfter/time.Second)))
+	}
+	writeJSON(w, tokErr.status, tokErr)
 }
 
 // exchange reads a token request, authenticates its Client and exchanges
@@ -649,12 +661,12 @@ func isSubset(sub, set []string) bool {
 	return true
 }
 
-// stopKeepingCode lets the code whose hash is codeHash be deleted from now on,
-// its Refresh Token Family having been revoked by a refresh token presented
-// again, so that it is no longer kept for the family. It runs after the
-// revocation commits, so that a refresh never waits for a code's row while
-// it holds its family's, which a replay of the code locks in the other
-// order. A failure leaves the code
+// stopKeepingCode lets the code whose hash is codeHash be deleted from now
+// on, its Refresh Token Family having been revoked by a refresh token
+// presented again or at the revocation endpoint, so that it is no longer
+// kept for the family. It runs after the revocation commits, so that a
+// refresh never waits for a code's row while it holds its family's, which
+// a replay of the code locks in the other order. A failure leaves the code
 // until its family ends, when it would be deleted anyway, and does not
 // fail the request.
 func (p *Provider) stopKeepingCode(ctx context.Context, codeHash []byte, now time.Time) {

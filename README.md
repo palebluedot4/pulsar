@@ -34,7 +34,13 @@ refused from then on, and UserInfo refuses its access tokens. A second
 redemption of a code that is otherwise valid, by its own Client, with its
 redirect URI, and with a matching `code_verifier` exactly when the code has a
 challenge, revokes the access tokens issued from it and, for as long as the
-family lives, the Refresh Token Family it started. While an End-User is out of
+family lives, the Refresh Token Family it started. A Client may revoke a
+refresh token or access token issued to it at the revocation endpoint (RFC
+7009), authenticating as at the token endpoint. A refresh token revokes its
+whole Refresh Token Family and the access tokens issued in it; an access
+token revokes only itself. Revoking an access token takes effect at
+UserInfo; a Resource Server that verifies the JWT itself accepts it until
+it expires, at most ten minutes later. While an End-User is out of
 the registry, no code or refresh token issued for them is redeemed, and
 UserInfo refuses their access tokens; a Client out of the registry cannot
 authenticate, so it redeems neither. Removal revokes nothing, so one added
@@ -183,7 +189,9 @@ refresh token twice
 ([research](docs/research/refresh-tokens.md#the-suites-oidcc-refresh-token-module)),
 so it tests neither rotation nor reuse detection: only pulsar's own tests
 check that each refresh token is redeemed once, and that one presented
-again, or a code replayed, revokes its Refresh Token Family. The suite's
+again, or a code replayed, revokes its Refresh Token Family. No plan in
+that release tests token revocation (RFC 7009); only pulsar's own tests
+do. The suite's
 browser automation fills in the login and consent pages. The run exits
 non-zero on a failure, a warning or a skipped module that `conformance/`
 does not list with a reason, and leaves the results in

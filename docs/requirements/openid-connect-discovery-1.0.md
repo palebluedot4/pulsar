@@ -72,6 +72,37 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
   RECOMMENDED as it is redirected to by the client and not directly
   accessed."
 
+## RFC 8414 metadata
+
+Members of the discovery document that
+[RFC 8414](https://www.rfc-editor.org/rfc/rfc8414) §2 defines, which an
+OpenID Provider may also publish. Their IDs are numbered apart from
+Discovery's.
+
+- REQ-ASMETA-1 (RFC 8414 §2, `revocation_endpoint`): "OPTIONAL. URL of the
+  authorization server's OAuth 2.0 revocation endpoint [RFC7009]."
+
+  pulsar lists it, since it serves one (REQ-REVOKE-2).
+
+- REQ-ASMETA-2 (RFC 8414 §2, `revocation_endpoint_auth_methods_supported`):
+  "OPTIONAL. JSON array containing a list of client authentication methods
+  supported by this revocation endpoint. [...] If omitted, the default is
+  "client_secret_basic" -- the HTTP Basic Authentication Scheme specified
+  in Section 2.3.1 of OAuth 2.0 [RFC6749]."
+
+  pulsar lists the token endpoint's methods, `none` included, since a
+  Client authenticates at both alike.
+
+- REQ-ASMETA-3 (RFC 8414 §2,
+  `revocation_endpoint_auth_signing_alg_values_supported`): "This metadata
+  entry MUST be present if either of these authentication methods are
+  specified in the "revocation_endpoint_auth_methods_supported" entry. No
+  default algorithms are implied if this entry is omitted. The value "none"
+  MUST NOT be used."
+
+  `private_key_jwt` is listed, so it is present, with the algorithms of
+  `token_endpoint_auth_signing_alg_values_supported` (REQ-DISC-10).
+
 ## Obtaining the configuration (§4)
 
 - REQ-DISC-12 (§4): "OpenID Providers supporting Discovery MUST make a JSON
