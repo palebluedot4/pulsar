@@ -36,6 +36,12 @@ func readParams(w http.ResponseWriter, r *http.Request) (url.Values, error) {
 	if err != nil {
 		return nil, err
 	}
+	return nonEmpty(values), nil
+}
+
+// nonEmpty returns values without the parameters sent without a value, as
+// if they had not been sent (RFC 6749 §3.1).
+func nonEmpty(values url.Values) url.Values {
 	params := make(url.Values, len(values))
 	for name, vs := range values {
 		for _, v := range vs {
@@ -44,7 +50,7 @@ func readParams(w http.ResponseWriter, r *http.Request) (url.Values, error) {
 			}
 		}
 	}
-	return params, nil
+	return params
 }
 
 // repeated returns the first of names that params holds more than once,
