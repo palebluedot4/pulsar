@@ -49,6 +49,14 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
 - REQ-DISC-7 (§3, `response_types_supported`): "REQUIRED. JSON array
   containing a list of the OAuth 2.0 response_type values that this OP
   supports."
+- REQ-DISC-22 (§3, `response_modes_supported`): "OPTIONAL. JSON array
+  containing a list of the OAuth 2.0 response_mode values that this OP
+  supports, as specified in OAuth 2.0 Multiple Response Type Encoding
+  Practices [OAuth.Responses]. If omitted, the default for Dynamic OpenID
+  Providers is ["query", "fragment"]."
+
+  pulsar lists `query` and `form_post`.
+
 - REQ-DISC-8 (§3, `subject_types_supported`): "REQUIRED. JSON array
   containing a list of the Subject Identifier types that this OP supports."
 - REQ-DISC-9 (§3, `id_token_signing_alg_values_supported`): "REQUIRED.

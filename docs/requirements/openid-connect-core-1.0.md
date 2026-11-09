@@ -111,7 +111,8 @@ that pulsar, as an OP, must or should meet.
   an error or it MAY ignore it"
 
   pulsar ignores `display` and serves every value the same page: plain HTML
-  without script, with a viewport meta tag. This departs from the SHOULDs
+  with a viewport meta tag, without script but the one that submits the
+  form-post page (REQ-FORMPOST-4). This departs from the SHOULDs
   that ask for a popup, touch or feature-phone variant; the pages have no
   layout to vary, and #11 leaves presentation beyond them out of scope.
 
@@ -177,6 +178,25 @@ that pulsar, as an OP, must or should meet.
   remembered as a Consent per End-User and Client, which a later request
   for no other scopes reuses. A Consent never includes `offline_access`
   (REQ-CORE-53).
+
+### Response Mode (§3.1.2.1, §3.1.2.5, §3.1.2.6)
+
+- REQ-CORE-66 (§3.1.2.5): "When using the Authorization Code Flow, the
+  Authorization Response MUST return the parameters defined in Section
+  4.1.2 of OAuth 2.0 [RFC6749] by adding them as query parameters to the
+  redirect_uri specified in the Authorization Request using the
+  application/x-www-form-urlencoded format, unless a different Response
+  Mode was specified."
+- REQ-CORE-67 (§3.1.2.6): "When using the Authorization Code Flow, the
+  error response parameters are added to the query component of the
+  Redirection URI, unless a different Response Mode was specified."
+
+  pulsar supports the Response Modes `query` and `form_post`
+  (REQ-FORMPOST-1). It reads `response_mode` once the Client and redirect
+  URI are valid and before any other parameter, so that every later
+  error, a missing `response_type` among them, goes by the Response Mode
+  requested. A `response_mode` repeated, or of another value, is
+  `invalid_request`, sent by `query`.
 
 ### Error codes (§3.1.2.6)
 

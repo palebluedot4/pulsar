@@ -676,8 +676,8 @@ func TestAuthorizationErrorRedirect(t *testing.T) {
 			want: url.Values{"error": {"request_uri_not_supported"}, "state": {"af0ifjsldkj"}},
 		},
 		{
-			name: "response_mode form_post",
-			edit: func(v url.Values) { v.Set("response_mode", "form_post") },
+			name: "response_mode fragment",
+			edit: func(v url.Values) { v.Set("response_mode", "fragment") },
 			want: url.Values{"error": {"invalid_request"}, "state": {"af0ifjsldkj"}},
 		},
 		{
@@ -1058,13 +1058,16 @@ func TestTokenCodeExpiry(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-10: whatever the parameters of an authorization request, by
-// GET or POST, the endpoint answers with an error page, a redirect to the
-// login page, a POST with a redirect to itself, or a redirect to one of
-// the redirect URIs rp registered with iss; never a redirect anywhere
-// else.
+// REQ-OAUTH-10, REQ-FORMPOST-2: whatever the parameters of an
+// authorization request, by GET or POST, the endpoint answers with an
+// error page, a redirect to the login page, a POST with a redirect to
+// itself, or a response with iss to one of the redirect URIs rp
+// registered: a redirect there, or a form-post page whose form posts
+// there; never a response anywhere else.
 func FuzzAuthorizationRequest(f *testing.F) {
 	f.Add(authorizationParams().Encode())
+	f.Add(withFormPost(url.Values{"prompt": {"none"}}).Encode())
+	f.Add(withFormPost(url.Values{"response_type": {"token"}, "state": {`"><b>`}}).Encode())
 	f.Add("client_id=rp&redirect_uri=https%3A%2F%2Frp.example%2Fcallback")
 	f.Add("client_id=rp&redirect_uri=https%3A%2F%2Frp.example%2Fcb%3Ftenant%3Da&request=x&state=%00")
 	f.Add("client_id=rp&client_id=other&redirect_uri=https%3A%2F%2Fevil.example")
@@ -1105,8 +1108,16 @@ func FuzzAuthorizationRequest(f *testing.F) {
 				if err != nil || u.Query().Get("iss") != loginIssuer {
 					t.Errorf("%s %s?%q redirected to %q, want iss %q", method, authorizationPath, raw, loc, loginIssuer)
 				}
+			case http.StatusOK:
+				page := parseFormPost(t, response{status: rec.Code, header: rec.Header(), body: rec.Body.String()})
+				if !slices.Contains(registered, page.action) {
+					t.Errorf("%s %s?%q form posts to %q, want a registered redirect URI", method, authorizationPath, raw, page.action)
+				}
+				if got := page.params.Get("iss"); got != loginIssuer {
+					t.Errorf("%s %s?%q form posts iss %q, want %q", method, authorizationPath, raw, got, loginIssuer)
+				}
 			default:
-				t.Errorf("%s %s?%q status = %d, want %d or %d", method, authorizationPath, raw, rec.Code, http.StatusBadRequest, http.StatusSeeOther)
+				t.Errorf("%s %s?%q status = %d, want %d, %d or %d", method, authorizationPath, raw, rec.Code, http.StatusOK, http.StatusBadRequest, http.StatusSeeOther)
 			}
 		}
 	})
