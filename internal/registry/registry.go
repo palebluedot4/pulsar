@@ -52,10 +52,12 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"net/netip"
 	"net/url"
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -347,10 +349,11 @@ func newClient(e clientEntry) (*Client, error) {
 		return nil, errors.New("redirect_uris must list at least one URI")
 	}
 	for i, raw := range e.RedirectURIs {
-		if err := checkRedirectURI(raw); err != nil {
+		u, err := checkRedirectURI(raw)
+		if err != nil {
 			return nil, fmt.Errorf("redirect_uris[%d]: %w", i, err)
 		}
-		if o, ok := webOrigin(raw); ok && !slices.Contains(c.Origins, o) {
+		if o, ok := webOrigin(u); ok && !slices.Contains(c.Origins, o) {
 			c.Origins = append(c.Origins, o)
 		}
 	}
@@ -358,33 +361,37 @@ func newClient(e clientEntry) (*Client, error) {
 	return c, nil
 }
 
-// webOrigin returns the origin of raw, a redirect URI that checkRedirectURI
-// accepted, serialized as RFC 6454 §6.1 has it: the scheme and host in
-// lowercase, and the port only if it is not the scheme's default. Only an
-// http or https URI has one.
-func webOrigin(raw string) (string, bool) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", false
-	}
-	scheme := strings.ToLower(u.Scheme)
-	var defaultPort string
-	switch scheme {
-	case "https":
-		defaultPort = "443"
-	case "http":
-		defaultPort = "80"
-	default:
+// defaultPort is the port each scheme a browser-based Client is served
+// over implies.
+var defaultPort = map[string]string{"https": "443", "http": "80"}
+
+// webOrigin returns the origin of u, a redirect URI that checkRedirectURI
+// accepted, as a browser serializes it in an Origin header (RFC 6454
+// §6.1): the scheme and host in lowercase, an IP address in its shortest
+// form, and the port, as a number, only if it is not the scheme's
+// default. Only an http or https URI has one. An IPv4 address in a form
+// other than four decimal parts, such as 127.1, is kept as it is written,
+// so a request from it is refused.
+func webOrigin(u *url.URL) (string, bool) {
+	def, ok := defaultPort[u.Scheme] // url.Parse lowercases the scheme
+	if !ok {
 		return "", false
 	}
 	host := strings.ToLower(u.Hostname())
-	if strings.Contains(host, ":") {
-		host = "[" + host + "]" // an IPv6 literal (RFC 3986 §3.2.2)
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.String()
+		if addr.Is6() {
+			host = "[" + host + "]" // RFC 3986 §3.2.2
+		}
 	}
-	if port := u.Port(); port != "" && port != defaultPort {
+	port := u.Port()
+	if n, err := strconv.ParseUint(port, 10, 16); err == nil {
+		port = strconv.FormatUint(n, 10)
+	}
+	if port != "" && port != def {
 		host += ":" + port
 	}
-	return scheme + "://" + host, true
+	return u.Scheme + "://" + host, true
 }
 
 // AssertionAlgorithms returns the JWS algorithms with which a Client
@@ -451,10 +458,11 @@ func checkAssertionKey(k jose.JSONWebKey) error {
 // native app uses, is allowed; an http or https URI must name a host.
 //
 // url.Parse accepts characters RFC 3986 does not, such as spaces, so raw
-// is first checked against the characters RFC 3986 §2 allows.
-func checkRedirectURI(raw string) error {
+// is first checked against the characters RFC 3986 §2 allows. It returns
+// raw parsed.
+func checkRedirectURI(raw string) (*url.URL, error) {
 	if i := strings.IndexFunc(raw, notURIChar); i >= 0 {
-		return fmt.Errorf("%q is not a URI: RFC 3986 does not allow %q", raw, raw[i])
+		return nil, fmt.Errorf("%q is not a URI: RFC 3986 does not allow %q", raw, raw[i])
 	}
 	u, err := url.Parse(raw)
 	switch {
@@ -462,17 +470,17 @@ func checkRedirectURI(raw string) error {
 		if ue, ok := errors.AsType[*url.Error](err); ok {
 			err = ue.Err
 		}
-		return fmt.Errorf("%q is not a URI: %w", raw, err)
+		return nil, fmt.Errorf("%q is not a URI: %w", raw, err)
 	case !u.IsAbs():
-		return fmt.Errorf("%q is not an absolute URI", raw)
+		return nil, fmt.Errorf("%q is not an absolute URI", raw)
 	case (u.Scheme == "https" || u.Scheme == "http") && u.Host == "":
-		return fmt.Errorf("%q has no host", raw)
+		return nil, fmt.Errorf("%q has no host", raw)
 	// The raw value is checked, because url.Parse does not record an
 	// empty fragment ("https://rp.example/cb#") at all.
 	case strings.Contains(raw, "#"):
-		return fmt.Errorf("%q must not have a fragment", raw)
+		return nil, fmt.Errorf("%q must not have a fragment", raw)
 	}
-	return nil
+	return u, nil
 }
 
 // notURIChar reports whether RFC 3986 §2 allows c nowhere in a URI: it is

@@ -63,6 +63,11 @@ func TestClientOrigins(t *testing.T) {
 		{name: "http on another port", redirectURIs: []string{"http://localhost:8080/cb"}, want: []string{"http://localhost:8080"}},
 		{name: "uppercase", redirectURIs: []string{"HTTPS://SPA.Example/cb"}, want: []string{"https://spa.example"}},
 		{name: "IPv6 literal", redirectURIs: []string{"http://[::1]:3000/cb"}, want: []string{"http://[::1]:3000"}},
+		{name: "IPv6 literal, uncompressed", redirectURIs: []string{"http://[0:0:0:0:0:0:0:1]:3000/cb"}, want: []string{"http://[::1]:3000"}},
+		{name: "IPv6 literal, uppercase", redirectURIs: []string{"https://[2001:DB8::1]/cb"}, want: []string{"https://[2001:db8::1]"}},
+		{name: "IPv4 literal", redirectURIs: []string{"http://127.0.0.1:8080/cb"}, want: []string{"http://127.0.0.1:8080"}},
+		{name: "port with a leading zero", redirectURIs: []string{"https://spa.example:08443/cb"}, want: []string{"https://spa.example:8443"}},
+		{name: "default port with a leading zero", redirectURIs: []string{"https://spa.example:0443/cb"}, want: []string{"https://spa.example"}},
 		{name: "query", redirectURIs: []string{"https://spa.example/cb?tenant=a"}, want: []string{"https://spa.example"}},
 		{name: "userinfo", redirectURIs: []string{"https://user@spa.example/cb"}, want: []string{"https://spa.example"}},
 		{

@@ -173,14 +173,15 @@ func TestCORSPreflight(t *testing.T) {
 // A request from any other origin, or from a confidential Client's
 // origin, gets invalid_request without CORS headers, before the code is
 // redeemed or a refresh token rotated: a token request is sent without a
-// preflight, so its sender cannot read the response. A request with no
+// preflight, so its sender cannot read the response. So does one whose
+// Client is not known, or that names two origins. A request with no
 // origin, as a Client that is not a browser sends, is answered as before.
 func TestTokenCORS(t *testing.T) {
 	t.Parallel()
 
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 	public := withCORS(map[string]string{"Access-Control-Allow-Origin": publicOrigin})
-	send := func(c pkceClient, form url.Values, origin string) response {
+	send := func(t *testing.T, c pkceClient, form url.Values, origin string) response {
 		t.Helper()
 		return fromOrigin(t, handler, newTokenRequest(t, c.basic.id, c.basic.secret, form), origin)
 	}
@@ -189,7 +190,7 @@ func TestTokenCORS(t *testing.T) {
 		t.Parallel()
 		form := publicPKCE.form(publicPKCE.code(t, handler), pkceVerifier)
 		for _, origin := range []string{unknownOrigin, rpOrigin, "null"} {
-			resp := send(publicPKCE, form, origin)
+			resp := send(t, publicPKCE, form, origin)
 			if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
 				t.Errorf("POST %s from %q error = %q, want %q", tokenPath, origin, got, "invalid_request")
 			}
@@ -199,14 +200,14 @@ func TestTokenCORS(t *testing.T) {
 		}
 
 		// The refused requests left the code to be redeemed.
-		resp := send(publicPKCE, form, publicOrigin)
+		resp := send(t, publicPKCE, form, publicOrigin)
 		tokenResponseOf(t, resp)
 		if diff := cmp.Diff(public, corsHeaders(resp)); diff != "" {
 			t.Errorf("POST %s from %q CORS headers mismatch (-want +got):\n%s", tokenPath, publicOrigin, diff)
 		}
 
 		// An error the application can read.
-		resp = send(publicPKCE, form, publicOrigin)
+		resp = send(t, publicPKCE, form, publicOrigin)
 		if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_grant" {
 			t.Errorf("POST %s for a code redeemed before: error = %q, want %q", tokenPath, got, "invalid_grant")
 		}
@@ -215,19 +216,43 @@ func TestTokenCORS(t *testing.T) {
 		}
 	})
 
+	t.Run("Client not known", func(t *testing.T) {
+		t.Parallel()
+		form := publicPKCE.form(publicPKCE.code(t, handler), pkceVerifier)
+		withoutID := maps.Clone(form)
+		withoutID.Del("client_id")
+		twoOrigins := newTokenRequest(t, "", "", form)
+		twoOrigins.Header.Add("Origin", publicOrigin)
+		twoOrigins.Header.Add("Origin", publicOrigin)
+		for name, resp := range map[string]response{
+			"without client_id":       send(t, publicPKCE, withoutID, publicOrigin),
+			"with two Origin headers": fromOrigin(t, handler, twoOrigins, ""),
+		} {
+			if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
+				t.Errorf("POST %s %s: error = %q, want %q", tokenPath, name, got, "invalid_request")
+			}
+			if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
+				t.Errorf("POST %s %s: CORS headers mismatch (-want +got):\n%s", tokenPath, name, diff)
+			}
+		}
+
+		// The refused requests left the code to be redeemed.
+		tokenResponseOf(t, send(t, publicPKCE, form, publicOrigin))
+	})
+
 	t.Run("refresh token", func(t *testing.T) {
 		t.Parallel()
 		refreshToken := publicPKCE.offlineTokens(t, handler, pkceVerifier, nil).RefreshToken
 		form := refreshForm(refreshToken, "")
 		form.Set("client_id", publicPKCE.clientID)
-		resp := send(publicPKCE, form, unknownOrigin)
+		resp := send(t, publicPKCE, form, unknownOrigin)
 		if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
 			t.Errorf("POST %s from %q error = %q, want %q", tokenPath, unknownOrigin, got, "invalid_request")
 		}
 
 		// The refused request left the refresh token unused: redeemed now,
 		// it does not revoke its family as a reused one would.
-		resp = send(publicPKCE, form, publicOrigin)
+		resp = send(t, publicPKCE, form, publicOrigin)
 		if tokenResponseOf(t, resp).RefreshToken == "" {
 			t.Errorf("POST %s from %q has no refresh_token", tokenPath, publicOrigin)
 		}
@@ -239,7 +264,7 @@ func TestTokenCORS(t *testing.T) {
 	t.Run("confidential Client", func(t *testing.T) {
 		t.Parallel()
 		form := rpNoPKCE.form(rpNoPKCE.code(t, handler), "")
-		resp := send(rpNoPKCE, form, rpOrigin)
+		resp := send(t, rpNoPKCE, form, rpOrigin)
 		if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
 			t.Errorf("POST %s by rp from %q error = %q, want %q", tokenPath, rpOrigin, got, "invalid_request")
 		}
@@ -248,7 +273,7 @@ func TestTokenCORS(t *testing.T) {
 		}
 
 		// Without an origin, as from rp's server.
-		resp = send(rpNoPKCE, form, "")
+		resp = send(t, rpNoPKCE, form, "")
 		tokenResponseOf(t, resp)
 		if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
 			t.Errorf("POST %s by rp without an origin: CORS headers mismatch (-want +got):\n%s", tokenPath, diff)
