@@ -88,18 +88,20 @@ func NewProvider(issuer *Issuer, reg *registry.Registry, sessions *login.Session
 		// keep a secret. A public Client sends no Authorization header, so
 		// none is allowed.
 		tokenCORS: newCORSPolicy(reg, corsPolicy{
-			allowHeader: "OPTIONS, POST",
-			methods:     http.MethodPost,
-			allows:      (*registry.Client).Public,
+			allow:        "OPTIONS, POST",
+			allowMethods: http.MethodPost,
+			refusal:      "Only a public client may send requests from a browser, and only from the origin of one of its redirect URIs.",
+			allows:       (*registry.Client).Public,
 		}),
 		// Any Client's access token, which the Authorization header carries,
 		// and the challenge of an error response readable (RFC 6750 §3).
 		userInfoCORS: newCORSPolicy(reg, corsPolicy{
-			allowHeader: "GET, HEAD, OPTIONS, POST",
-			methods:     "GET, POST",
-			headers:     "Authorization",
-			expose:      "WWW-Authenticate",
-			allows:      func(*registry.Client) bool { return true },
+			allow:         "GET, HEAD, OPTIONS, POST",
+			allowMethods:  "GET, POST",
+			allowHeaders:  "Authorization",
+			exposeHeaders: "WWW-Authenticate",
+			refusal:       "A client may send requests from a browser only from the origin of one of its redirect URIs.",
+			allows:        func(*registry.Client) bool { return true },
 		}),
 	}
 }

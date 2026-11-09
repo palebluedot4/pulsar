@@ -15,8 +15,9 @@ refused.
 A public Client cannot prove its identity, so the consent page asks for it
 every time rather than remembering. A public Client running in a browser
 on another origin can redeem its code and refresh tokens, and call
-UserInfo, from the origin of one of its redirect URIs; UserInfo answers
-any Client's redirect URI origins, and the JWK Set any origin. A
+UserInfo, from the origin of one of its redirect URIs. UserInfo answers
+any Client, confidential or public, from the origins of its own redirect
+URIs, and the JWK Set answers any origin. A
 confidential Client gets no such headers at the token endpoint, since a
 browser cannot keep its secret. RFC 10017 recommends a
 backend-for-frontend, a confidential Client on the server, over a Client

@@ -70,7 +70,7 @@ func TestClientOrigins(t *testing.T) {
 			redirectURIs: []string{"https://spa.example/a", "https://spa.example/b", "https://other.example/cb"},
 			want:         []string{"https://spa.example", "https://other.example"},
 		},
-		// A native app's redirect URI has no origin a browser would send.
+		// A native Client's redirect URI has no origin a browser would send.
 		{name: "custom scheme", redirectURIs: []string{"com.example.app:/oauth2redirect"}, want: nil},
 	}
 	for _, tt := range tests {

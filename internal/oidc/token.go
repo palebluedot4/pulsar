@@ -116,8 +116,8 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	// redeem a code or rotate a refresh token whose response the browser
 	// withholds (RFC 10017 §6.3.3.4).
 	client, _ := p.registry.Client(params.Get("client_id"))
-	if !p.tokenCORS.allow(w, r, client) {
-		return nil, badRequest(errInvalidRequest, errOriginNotAllowed)
+	if !p.tokenCORS.check(w, r, client) {
+		return nil, badRequest(errInvalidRequest, p.tokenCORS.refusal)
 	}
 
 	// Each grant checks the request's form before its Client
