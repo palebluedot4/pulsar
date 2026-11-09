@@ -258,13 +258,13 @@ func TestTokenClientAuthenticationMethod(t *testing.T) {
 const tokenEndpoint = loginIssuer + "/token"
 
 // assertionClaims returns the claims of a valid client assertion from jwt,
-// for the token endpoint, expiring a minute from now.
+// for the OP at loginIssuer, expiring a minute from now.
 func assertionClaims() map[string]any {
 	now := time.Now()
 	return map[string]any{
 		"iss": "jwt",
 		"sub": "jwt",
-		"aud": tokenEndpoint,
+		"aud": loginIssuer,
 		"exp": now.Add(time.Minute).Unix(),
 		"iat": now.Unix(),
 		"jti": rand.Text(),
@@ -272,10 +272,14 @@ func assertionClaims() map[string]any {
 }
 
 // signJWS returns a JWS of claims, signed with key by alg, whose header
-// names kid unless it is "".
-func signJWS(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, claims map[string]any) *jose.JSONWebSignature {
+// names kid unless it is "", and typ unless it is "".
+func signJWS(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid, typ string, claims map[string]any) *jose.JSONWebSignature {
 	tb.Helper()
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: jose.JSONWebKey{Key: key, KeyID: kid}}, nil)
+	opts := &jose.SignerOptions{}
+	if typ != "" {
+		opts = opts.WithType(jose.ContentType(typ))
+	}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: jose.JSONWebKey{Key: key, KeyID: kid}}, opts)
 	if err != nil {
 		tb.Fatalf("jose.NewSigner(%s) error = %v", alg, err)
 	}
@@ -290,10 +294,17 @@ func signJWS(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, cl
 	return jws
 }
 
-// signAssertion returns signJWS's JWS in the compact serialization: a JWT.
+// signAssertion returns signJWS's JWS, without typ, in the compact
+// serialization: a JWT.
 func signAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid string, claims map[string]any) string {
 	tb.Helper()
-	s, err := signJWS(tb, alg, key, kid, claims).CompactSerialize()
+	return signTypedAssertion(tb, alg, key, kid, "", claims)
+}
+
+// signTypedAssertion returns signJWS's JWS in the compact serialization.
+func signTypedAssertion(tb testing.TB, alg jose.SignatureAlgorithm, key any, kid, typ string, claims map[string]any) string {
+	tb.Helper()
+	s, err := signJWS(tb, alg, key, kid, typ, claims).CompactSerialize()
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -313,10 +324,11 @@ func jwtForm(code, assertion string) url.Values {
 }
 
 // REQ-JWTAUTH-1, REQ-JWTAUTH-2, REQ-JWTAUTH-3, REQ-JWTAUTH-4,
-// REQ-JWTAUTH-7, REQ-ASSERT-1, REQ-CORE-31, REQ-CORE-32, REQ-CORE-34,
-// REQ-JWTBCP-2: a Client registered for private_key_jwt redeems its code
-// with an assertion signed by any of its keys, by the key's algorithm,
-// whose audience is the token endpoint URL or the issuer.
+// REQ-JWTAUTH-7, REQ-ASSERT-1, REQ-ASSERTAUD-1, REQ-CORE-31, REQ-CORE-32,
+// REQ-CORE-34, REQ-JWTBCP-2: a Client registered for private_key_jwt
+// redeems its code with an assertion signed by any of its keys, by the
+// key's algorithm, whose sole audience is the issuer, as a string or an
+// array of one, with or without typ.
 func TestTokenPrivateKeyJWT(t *testing.T) {
 	t.Parallel()
 
@@ -326,17 +338,16 @@ func TestTokenPrivateKeyJWT(t *testing.T) {
 		name string
 		key  clientKey
 		kid  string // the header's kid
+		typ  string // the header's typ
 		edit func(claims map[string]any, form url.Values)
 	}{
 		{name: "RS256", key: rs, kid: rs.kid},
 		{name: "PS256", key: ps, kid: ps.kid},
 		{name: "ES256", key: es, kid: es.kid},
 		{name: "no kid", key: es},
-		{name: "aud the issuer", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { c["aud"] = loginIssuer }},
-		{
-			name: "aud an array holding the issuer", key: rs, kid: rs.kid,
-			edit: func(c map[string]any, _ url.Values) { c["aud"] = []string{"https://other.example", loginIssuer} },
-		},
+		{name: "aud an array of the issuer alone", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { c["aud"] = []string{loginIssuer} }},
+		{name: "typ client-authentication+jwt", key: rs, kid: rs.kid, typ: "client-authentication+jwt"},
+		{name: "typ JWT", key: rs, kid: rs.kid, typ: "JWT"},
 		{name: "no iat", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { delete(c, "iat") }},
 		{name: "nbf now", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { c["nbf"] = time.Now().Unix() }},
 		{name: "claims pulsar does not know", key: rs, kid: rs.kid, edit: func(c map[string]any, _ url.Values) { c["x-unknown"] = true }},
@@ -351,7 +362,7 @@ func TestTokenPrivateKeyJWT(t *testing.T) {
 				tt.edit(claims, form)
 			}
 			c := code(t, handler, clientParams("jwt", jwtRedirectURI))
-			maps.Copy(form, jwtForm(c, signAssertion(t, tt.key.alg, tt.key.key, tt.kid, claims)))
+			maps.Copy(form, jwtForm(c, signTypedAssertion(t, tt.key.alg, tt.key.key, tt.kid, tt.typ, claims)))
 			if got := idTokenAudience(t, handler, postTokenRequest(t, handler, form)); got != "jwt" {
 				t.Errorf("POST %s ID token aud = %v, want %q", tokenPath, got, "jwt")
 			}
@@ -434,12 +445,13 @@ func unsigned(tb testing.TB, claims map[string]any) string {
 
 // REQ-JWTAUTH-1, REQ-JWTAUTH-2, REQ-JWTAUTH-3, REQ-JWTAUTH-4,
 // REQ-JWTAUTH-5, REQ-JWTAUTH-7, REQ-JWTAUTH-8, REQ-ASSERT-1, REQ-ASSERT-2,
-// REQ-CORE-31, REQ-CORE-32, REQ-CORE-33, REQ-CORE-34, REQ-CORE-35,
-// REQ-JWTBCP-1, REQ-JWTBCP-2, REQ-JWTBCP-3, REQ-DISC-10: a client
-// assertion fails with invalid_client unless it is one JWT, signed by a
-// key jwt registered, with that key's algorithm, naming jwt as its issuer
-// and subject and the OP as its audience, with a jti, and with an exp that
-// has not passed and is at most an hour away.
+// REQ-ASSERTAUD-1, REQ-ASSERTAUD-2, REQ-CORE-31, REQ-CORE-32, REQ-CORE-33,
+// REQ-CORE-34, REQ-CORE-35, REQ-JWTBCP-1, REQ-JWTBCP-2, REQ-JWTBCP-3,
+// REQ-DISC-10: a client assertion fails with invalid_client unless it is
+// one JWT, signed by a key jwt registered, with that key's algorithm,
+// naming jwt as its issuer and subject and the OP's issuer, compared as a
+// string, as its sole audience, not its token endpoint URL, with a jti,
+// and with an exp that has not passed and is at most an hour away.
 func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 	t.Parallel()
 
@@ -489,7 +501,13 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 		{name: "no sub", assertion: sign(with("sub", nil))},
 		{name: "iss and sub a client_secret_basic Client", assertion: sign(confidential)},
 		{name: "aud another server", assertion: sign(with("aud", "https://other.example/token"))},
+		{name: "aud the token endpoint", assertion: sign(with("aud", tokenEndpoint))},
+		{name: "aud an array of the token endpoint alone", assertion: sign(with("aud", []string{tokenEndpoint}))},
+		{name: "aud an array of the issuer and the token endpoint", assertion: sign(with("aud", []string{loginIssuer, tokenEndpoint}))},
+		{name: "aud an array of another server and the issuer", assertion: sign(with("aud", []string{"https://other.example", loginIssuer}))},
+		{name: "aud an empty array", assertion: sign(with("aud", []string{}))},
 		{name: "aud the issuer with a slash", assertion: sign(with("aud", loginIssuer+"/"))},
+		{name: "aud the issuer in another case", assertion: sign(with("aud", strings.ToUpper(loginIssuer)))},
 		{name: "aud the authorization endpoint", assertion: sign(with("aud", loginIssuer+"/authorize"))},
 		{name: "no aud", assertion: sign(with("aud", nil))},
 		{name: "no exp", assertion: sign(with("exp", nil))},
@@ -511,7 +529,7 @@ func TestTokenPrivateKeyJWTRejected(t *testing.T) {
 		{name: "no client_assertion", edit: func(f url.Values) { f.Del("client_assertion") }},
 		{name: "not a JWT", assertion: "not a JWT"},
 		{name: "two JWTs", assertion: sign(assertionClaims()) + " " + sign(assertionClaims())},
-		{name: "the JWS JSON serialization", assertion: signJWS(t, rs.alg, rs.key, rs.kid, assertionClaims()).FullSerialize()},
+		{name: "the JWS JSON serialization", assertion: signJWS(t, rs.alg, rs.key, rs.kid, "", assertionClaims()).FullSerialize()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -332,7 +332,10 @@ are those of `private_key_jwt`.
   an intended audience for the token. The Audience SHOULD be the URL of
   the Authorization Server's Token Endpoint."
 
-  pulsar accepts its token endpoint URL or its issuer (REQ-JWTAUTH-3).
+  pulsar accepts its issuer as the sole audience, and refuses its token
+  endpoint URL, as RFC 10070 §4 requires (REQ-ASSERTAUD-1). A Client that
+  follows the SHOULD cannot authenticate; [ADR 0006](../adr/0006-client-assertions-name-the-issuer-as-sole-audience.md)
+  records the departure.
 
 - REQ-CORE-33 (§9, `jti`): "These tokens MUST only be used once, unless
   conditions for reuse were negotiated between the parties [...]"
