@@ -5,9 +5,9 @@ pulsar's issuer identifier and nothing else, as a string or as an array
 of one, compared as strings, as RFC 10070 §4 requires. An assertion whose
 `aud` is the token endpoint URL, or an array that holds the issuer beside
 another value, gets `invalid_client`. Until this decision, pulsar accepted
-the token endpoint URL or the issuer anywhere in `aud`, which let a
-malicious authorization server replay at pulsar an assertion a Client had
-signed for it (CVE-2025-27370, CVE-2025-27371). The evidence is in
+the issuer or the token endpoint URL anywhere in `aud`. The token endpoint
+URL let a malicious authorization server replay at pulsar an assertion a
+Client had signed for it (CVE-2025-27370, CVE-2025-27371). The evidence is in
 [docs/research/client-assertion-audience.md](../research/client-assertion-audience.md).
 
 ## Considered options
