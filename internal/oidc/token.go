@@ -76,6 +76,7 @@ func (p *Provider) HandleToken() http.Handler {
 
 func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	setCredentialHeaders(w)
+	r = withEndpoint(r, "token endpoint")
 	resp, tokErr := p.exchange(w, r)
 	if tokErr != nil {
 		p.writeTokenError(w, tokErr)
@@ -246,10 +247,23 @@ func (p *Provider) identifyPublic(params url.Values) (*registry.Client, *tokenEr
 	return client, nil
 }
 
-// serverError logs err, which ends a token request for a reason of
-// pulsar's own, and returns the answer to the request.
+// endpointKey is the key under which a request's context holds the name of
+// the endpoint serving it, by which serverError logs its failures.
+type endpointKey struct{}
+
+// withEndpoint returns r with name, that of the endpoint serving it, in its
+// context, so that a failure in code the token and revocation endpoints
+// share is logged as the right one's.
+func withEndpoint(r *http.Request, name string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), endpointKey{}, name))
+}
+
+// serverError logs err, which ends a request to the token or revocation
+// endpoint for a reason of pulsar's own, under the name of the endpoint
+// ctx holds (withEndpoint), and returns the answer to the request.
 func (p *Provider) serverError(ctx context.Context, err error) *tokenError {
-	p.logger.ErrorContext(ctx, "token endpoint", "error", err)
+	name, _ := ctx.Value(endpointKey{}).(string)
+	p.logger.ErrorContext(ctx, name, "error", err)
 	return &tokenError{status: http.StatusInternalServerError, Code: errServerError}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,7 +21,11 @@ var revocationParams = []string{
 }
 
 // errTokenNotFound is returned by a lookup of revoke for a token that is
-// not of its type, or that pulsar no longer keeps.
+// not of its type, that pulsar no longer keeps, or that is no longer valid:
+// an access token that has expired, or a refresh token whose Refresh Token
+// Family has ended. RFC 7009 §2.2 answers each as an invalid token, and
+// none is checked against the Client, so that the answer does not depend
+// on when the periodic deletion runs.
 var errTokenNotFound = errors.New("the token is not found")
 
 // errOtherClientsToken is returned by a lookup of revoke for a token
@@ -41,6 +46,7 @@ func (p *Provider) HandleRevocation() http.Handler {
 
 func (p *Provider) revocation(w http.ResponseWriter, r *http.Request) {
 	setCredentialHeaders(w)
+	r = withEndpoint(r, "revocation endpoint")
 	if tokErr := p.revoke(w, r); tokErr != nil {
 		p.writeTokenError(w, tokErr)
 		return
@@ -70,9 +76,18 @@ func (p *Provider) revoke(w http.ResponseWriter, r *http.Request) *tokenError {
 
 	// The hint orders the lookups, and the other is tried when the hinted
 	// one finds nothing (RFC 7009 §2.1); any other hint is ignored (§2.2).
+	// Without one, a token in the JWS compact serialization is looked for
+	// as an access token first, since a refresh token, base64url, has no
+	// dot, and that lookup needs no database.
 	lookups := []func(context.Context, *registry.Client, string) error{p.revokeRefreshToken, p.revokeAccessToken}
-	if params.Get("token_type_hint") == "access_token" {
+	switch params.Get("token_type_hint") {
+	case "refresh_token":
+	case "access_token":
 		slices.Reverse(lookups)
+	default:
+		if strings.Count(token, ".") == 2 {
+			slices.Reverse(lookups)
+		}
 	}
 	ctx := r.Context()
 	for _, lookup := range lookups {
@@ -85,8 +100,7 @@ func (p *Provider) revoke(w http.ResponseWriter, r *http.Request) *tokenError {
 			// code; Keycloak and node-oidc-provider answer this one.
 			return badRequest(errInvalidRequest, "The token was issued to another client.")
 		case err != nil:
-			p.logger.ErrorContext(ctx, "revocation endpoint", "error", err)
-			return &tokenError{status: http.StatusInternalServerError, Code: errServerError}
+			return p.serverError(ctx, err)
 		}
 		return nil
 	}
@@ -98,8 +112,8 @@ func (p *Provider) revoke(w http.ResponseWriter, r *http.Request) *tokenError {
 // code, as a refresh token presented again does (refresh): the family's
 // row is locked first, so that a refresh in progress in it commits before,
 // and one after finds it revoked. It returns errTokenNotFound if token is
-// no refresh token pulsar keeps, and errOtherClientsToken if it is
-// another Client's.
+// no refresh token pulsar keeps, or its family has ended, and
+// errOtherClientsToken if it is another Client's.
 func (p *Provider) revokeRefreshToken(ctx context.Context, client *registry.Client, token string) error {
 	var codeHash []byte
 	err := pgx.BeginTxFunc(ctx, p.db, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
@@ -110,6 +124,10 @@ func (p *Provider) revokeRefreshToken(ctx context.Context, client *registry.Clie
 		}
 		if err != nil {
 			return err
+		}
+		// Ended, as refresh has it, whether or not it has been deleted yet.
+		if !row.Expiry.After(time.Now()) {
+			return errTokenNotFound
 		}
 		if row.ClientID != client.ID {
 			return errOtherClientsToken
@@ -126,11 +144,12 @@ func (p *Provider) revokeRefreshToken(ctx context.Context, client *registry.Clie
 
 // revokeAccessToken revokes token, an access token of client's, alone, by
 // deleting its record, so that UserInfo refuses it. It returns
-// errTokenNotFound if token is no access token pulsar issued, and
+// errTokenNotFound if token is no access token pulsar issued, or its
+// claims are not valid now, as UserInfo checks them, expiry included; and
 // errOtherClientsToken if it is another Client's.
 func (p *Provider) revokeAccessToken(ctx context.Context, client *registry.Client, token string) error {
 	signed, ok := p.parseAccessToken(token)
-	if !ok {
+	if !ok || !p.validAccessTokenClaims(signed, time.Now()) {
 		return errTokenNotFound
 	}
 	if signed.ClientID != client.ID {

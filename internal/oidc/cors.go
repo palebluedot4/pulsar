@@ -118,16 +118,11 @@ func (p *corsPolicy) check(w http.ResponseWriter, r *http.Request, client *regis
 	return true
 }
 
-// HandleTokenPreflight answers OPTIONS requests at the token endpoint,
-// approving preflights from the origins of public Clients.
-func (p *Provider) HandleTokenPreflight() http.Handler {
-	return p.tokenCORS.handlePreflight()
-}
-
-// HandleRevocationPreflight answers OPTIONS requests at the revocation
-// endpoint, by the token endpoint's policy: a Client authenticates at both
-// alike, so only a public Client may send requests from a browser.
-func (p *Provider) HandleRevocationPreflight() http.Handler {
+// HandleClientPreflight answers OPTIONS requests at the token and
+// revocation endpoints, approving preflights from the origins of public
+// Clients: a Client authenticates at both alike, and only a public Client,
+// which keeps no secret, may send requests from a browser.
+func (p *Provider) HandleClientPreflight() http.Handler {
 	return p.tokenCORS.handlePreflight()
 }
 
