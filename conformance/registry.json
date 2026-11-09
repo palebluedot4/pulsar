@@ -6,6 +6,9 @@
       "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$6mzY2fcYZmzXpr3dmRsHyg$gOGm8XfXn05Vt/A2L+36loNfauTdB/8SFv751tuTfVg",
       "redirect_uris": [
         "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback"
+      ],
+      "post_logout_redirect_uris": [
+        "https://localhost.emobix.co.uk:8443/test/a/pulsar/post_logout_redirect"
       ]
     },
     {

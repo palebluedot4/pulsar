@@ -1,0 +1,508 @@
+{
+  "alias": "pulsar",
+  "description": "pulsar, run by make conformance. Test credentials only, published deliberately; see SECURITY.md.",
+  "server": {
+    "discoveryUrl": "https://pulsar:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "conformance-client",
+    "client_secret": "conformance-client-secret"
+  },
+  "browser": [
+    {
+      "comment": "The authorization each module starts with: the login page and the consent page when pulsar shows them, then the suite's callback page.",
+      "match": "https://pulsar:9443/authorize*",
+      "tasks": [
+        {
+          "task": "Login",
+          "optional": true,
+          "match": "https://pulsar:9443/login*",
+          "commands": [
+            ["text", "name", "username", "conformance"],
+            ["text", "name", "password", "conformance-password"],
+            ["click", "xpath", "//button[@type='submit']"]
+          ]
+        },
+        {
+          "task": "Consent",
+          "optional": true,
+          "match": "https://pulsar:9443/authorize*",
+          "commands": [
+            ["click", "xpath", "//button[normalize-space()='Allow']"]
+          ]
+        },
+        {
+          "task": "Verify Complete",
+          "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+          "commands": [["wait", "id", "submission_complete", 10]]
+        }
+      ]
+    },
+    {
+      "comment": "A logout that returns to the Client: pulsar asks the End-User to confirm, and then redirects to the registered post_logout_redirect_uri. The confirm step is optional, so that a module whose logout redirects at once still runs.",
+      "match": "https://pulsar:9443/logout*",
+      "tasks": [
+        {
+          "task": "Confirm logout",
+          "optional": true,
+          "match": "https://pulsar:9443/logout*",
+          "commands": [
+            ["click", "xpath", "//button[normalize-space()='Sign out']"]
+          ]
+        },
+        {
+          "task": "Verify Complete",
+          "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/post_logout_redirect*",
+          "commands": []
+        }
+      ]
+    }
+  ],
+  "override": {
+    "oidcc-rp-initiated-logout-bad-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "An unregistered post_logout_redirect_uri: pulsar asks the End-User to confirm, naming the Client its hint identifies, and will not redirect (RP-Initiated Logout 1.0 §3, REQ-LOGOUT-9); the confirmation page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Expect the confirmation page",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "asks to sign you out",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-query-added-to-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "The registered post_logout_redirect_uri with a query added does not match it exactly: pulsar asks the End-User to confirm and will not redirect (REQ-LOGOUT-9); the confirmation page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Expect the confirmation page",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "asks to sign you out",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-modified-id-token-hint": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "A hint re-headed alg none, its signature dropped: pulsar answers with the error page, with no confirmation and no redirect (REQ-LOGOUT-2); the page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Expect the id_token_hint error page",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "id_token_hint is not an ID token this OP issued",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-bad-id-token-hint": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "A hint the suite forged and signed HS256 with the client secret: pulsar answers with the error page, with no confirmation and no redirect (REQ-LOGOUT-2); the page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Expect the id_token_hint error page",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "id_token_hint is not an ID token this OP issued",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-id-token-hint": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "A post_logout_redirect_uri with neither a hint nor a client_id identifies no Client: pulsar asks the End-User to confirm and will not redirect (REQ-LOGOUT-9); the confirmation page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Expect the confirmation page",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "asks to sign you out",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "No post_logout_redirect_uri: the End-User confirms, and pulsar shows that they are signed out (REQ-LOGOUT-8); that page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Confirm logout",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Sign out']"]
+              ]
+            },
+            {
+              "task": "Expect the signed-out page",
+              "match": "https://pulsar:9443/logout/confirm*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "You are signed out.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-only-state": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "Only state: the End-User confirms, and pulsar shows that they are signed out (REQ-LOGOUT-8); that page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Confirm logout",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Sign out']"]
+              ]
+            },
+            {
+              "task": "Expect the signed-out page",
+              "match": "https://pulsar:9443/logout/confirm*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "You are signed out.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-params": {
+      "browser": [
+        {
+          "comment": "The same authorization as every module's.",
+          "match": "https://pulsar:9443/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "https://pulsar:9443/login*",
+              "commands": [
+                ["text", "name", "username", "conformance"],
+                ["text", "name", "password", "conformance-password"],
+                ["click", "xpath", "//button[@type='submit']"]
+              ]
+            },
+            {
+              "task": "Consent",
+              "optional": true,
+              "match": "https://pulsar:9443/authorize*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Allow']"]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "https://localhost.emobix.co.uk:8443/test/a/pulsar/callback*",
+              "commands": [["wait", "id", "submission_complete", 10]]
+            }
+          ]
+        },
+        {
+          "comment": "No parameters: the End-User confirms, and pulsar shows that they are signed out (REQ-LOGOUT-8, REQ-LOGOUT-11); that page fills the module's placeholder.",
+          "match": "https://pulsar:9443/logout*",
+          "tasks": [
+            {
+              "task": "Confirm logout",
+              "match": "https://pulsar:9443/logout*",
+              "commands": [
+                ["click", "xpath", "//button[normalize-space()='Sign out']"]
+              ]
+            },
+            {
+              "task": "Expect the signed-out page",
+              "match": "https://pulsar:9443/logout/confirm*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "You are signed out.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
