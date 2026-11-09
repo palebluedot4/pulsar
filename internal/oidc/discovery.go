@@ -17,6 +17,7 @@ const (
 	tokenPath         = "/token"
 	userinfoPath      = "/userinfo"
 	jwksPath          = "/jwks"
+	revocationPath    = "/revoke"
 )
 
 // discoveryCacheControl lets Clients cache the discovery document. It
@@ -41,9 +42,14 @@ type metadata struct {
 	TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported,omitempty"`
 	TokenEndpointAuthSigningAlgValuesSupported []string `json:"token_endpoint_auth_signing_alg_values_supported,omitempty"`
 	CodeChallengeMethodsSupported              []string `json:"code_challenge_methods_supported,omitempty"`
-	ClaimsSupported                            []string `json:"claims_supported,omitempty"`
-	ClaimsParameterSupported                   bool     `json:"claims_parameter_supported"`
-	RequestParameterSupported                  bool     `json:"request_parameter_supported"`
+	RevocationEndpoint                         string   `json:"revocation_endpoint"`
+	// The default is client_secret_basic alone (RFC 8414 §2), so the list
+	// is always sent.
+	RevocationEndpointAuthMethodsSupported          []string `json:"revocation_endpoint_auth_methods_supported"`
+	RevocationEndpointAuthSigningAlgValuesSupported []string `json:"revocation_endpoint_auth_signing_alg_values_supported,omitempty"`
+	ClaimsSupported                                 []string `json:"claims_supported,omitempty"`
+	ClaimsParameterSupported                        bool     `json:"claims_parameter_supported"`
+	RequestParameterSupported                       bool     `json:"request_parameter_supported"`
 	// The default is true (Discovery §3), so false must be sent.
 	RequestURIParameterSupported               bool `json:"request_uri_parameter_supported"`
 	AuthorizationResponseISSParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
@@ -72,6 +78,11 @@ func JWKSPath(issuer *Issuer) string {
 	return issuer.Route(jwksPath)
 }
 
+// clientAuthMethods are the client authentication methods of the token and
+// revocation endpoints, which authenticate Clients alike: the methods a
+// Client may register, none being a public Client's.
+var clientAuthMethods = []string{"client_secret_basic", "client_secret_post", "private_key_jwt", "none"}
+
 // HandleDiscovery serves the discovery document for issuer. The document
 // never changes, so it is encoded once.
 func HandleDiscovery(issuer *Issuer) http.Handler {
@@ -87,11 +98,17 @@ func HandleDiscovery(issuer *Issuer) http.Handler {
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		SubjectTypesSupported:             []string{"public"},
 		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
-		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "private_key_jwt", "none"},
+		TokenEndpointAuthMethodsSupported: clientAuthMethods,
 		// The allow-list the token endpoint verifies client assertions
 		// against, and so never none (Discovery §3).
 		TokenEndpointAuthSigningAlgValuesSupported: assertionAlgorithmNames(),
 		CodeChallengeMethodsSupported:              []string{"S256"},
+		RevocationEndpoint:                         issuer.endpointURL(revocationPath),
+		RevocationEndpointAuthMethodsSupported:     clientAuthMethods,
+		// Required, since private_key_jwt is listed, and never none (RFC
+		// 8414 §2): the same allow-list, since the revocation endpoint
+		// verifies client assertions as the token endpoint does.
+		RevocationEndpointAuthSigningAlgValuesSupported: assertionAlgorithmNames(),
 		// Claims of the ID Token (Core §2), and the Standard Claims (Core
 		// §5.1) that the scopes request and the registry may declare.
 		ClaimsSupported: append(

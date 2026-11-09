@@ -12,8 +12,9 @@ import (
 // REQ-DISC-2, REQ-DISC-3, REQ-DISC-4, REQ-DISC-5, REQ-DISC-6, REQ-DISC-7,
 // REQ-DISC-8, REQ-DISC-9, REQ-DISC-10, REQ-DISC-11, REQ-DISC-12,
 // REQ-DISC-14, REQ-DISC-15, REQ-DISC-16, REQ-DISC-17, REQ-DISC-19,
-// REQ-ISS-1, REQ-BCP-1: the discovery document, at the path derived from
-// the issuer, with the metadata spec #11 lists.
+// REQ-ISS-1, REQ-BCP-1, REQ-ASMETA-1, REQ-ASMETA-2, REQ-ASMETA-3,
+// REQ-REVOKE-3: the discovery document, at the path derived from the
+// issuer, with the metadata specs #11 and #69 list.
 func TestDiscovery(t *testing.T) {
 	t.Parallel()
 
@@ -67,6 +68,11 @@ func TestDiscovery(t *testing.T) {
 				},
 				"token_endpoint_auth_signing_alg_values_supported": []any{"RS256", "PS256", "ES256"},
 				"code_challenge_methods_supported":                 []any{"S256"},
+				"revocation_endpoint":                              tt.issuer + "/revoke",
+				"revocation_endpoint_auth_methods_supported": []any{
+					"client_secret_basic", "client_secret_post", "private_key_jwt", "none",
+				},
+				"revocation_endpoint_auth_signing_alg_values_supported": []any{"RS256", "PS256", "ES256"},
 				"claims_supported": []any{
 					"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
 					"name", "family_name", "given_name", "middle_name", "nickname",

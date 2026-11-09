@@ -41,17 +41,19 @@ func addRoutes(mux *http.ServeMux, logger *slog.Logger, issuer *oidc.Issuer, poo
 	mux.Handle("POST "+consentPath, whenReady(ready, sessions.ConsentHandler(authorizationPath, logger)))
 
 	// The protocol endpoints are not protected against cross-site request
-	// forgery: a Client sends them requests from its own origin. The token
-	// and UserInfo endpoints answer a browser-based Client's cross-origin
-	// requests, and their preflights, which need neither the database nor
-	// the signing keys; the authorization endpoint, to which a Client
-	// redirects the browser, answers none (RFC 9700 §2.6).
+	// forgery: a Client sends them requests from its own origin. The token,
+	// revocation and UserInfo endpoints answer a browser-based Client's
+	// cross-origin requests, and their preflights, which need neither the
+	// database nor the signing keys; the authorization endpoint, to which a
+	// Client redirects the browser, answers none (RFC 9700 §2.6).
 	op := oidc.NewProvider(issuer, reg, sessions, login.NewConsents(pool), keys, pool, logger)
 	authorization := whenReady(ready, op.HandleAuthorization(loginPath, consentPath))
 	mux.Handle("GET "+authorizationPath, authorization)
 	mux.Handle("POST "+authorizationPath, authorization)
 	mux.Handle("POST "+oidc.TokenPath(issuer), whenReady(ready, op.HandleToken()))
 	mux.Handle("OPTIONS "+oidc.TokenPath(issuer), op.HandleTokenPreflight())
+	mux.Handle("POST "+oidc.RevocationPath(issuer), whenReady(ready, op.HandleRevocation()))
+	mux.Handle("OPTIONS "+oidc.RevocationPath(issuer), op.HandleRevocationPreflight())
 	userInfo := whenReady(ready, op.HandleUserInfo())
 	mux.Handle("GET "+oidc.UserInfoPath(issuer), userInfo)
 	mux.Handle("POST "+oidc.UserInfoPath(issuer), userInfo)

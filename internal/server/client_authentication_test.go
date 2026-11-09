@@ -142,21 +142,29 @@ func TestTokenClientSecretPost(t *testing.T) {
 // failing the test unless the response has status and the headers of RFC 6749 §5.2.
 func tokenErrorCode(t *testing.T, resp response, status int) string {
 	t.Helper()
+	return jsonErrorCode(t, tokenPath, resp, status)
+}
+
+// jsonErrorCode returns the error code of an error response in the JSON
+// form of RFC 6749 §5.2 from the endpoint at path, failing the test unless
+// the response has status and the headers of RFC 6749 §5.2.
+func jsonErrorCode(t *testing.T, path string, resp response, status int) string {
+	t.Helper()
 	if resp.status != status {
-		t.Errorf("POST %s status = %d, want %d; body %q", tokenPath, resp.status, status, resp.body)
+		t.Errorf("POST %s status = %d, want %d; body %q", path, resp.status, status, resp.body)
 	}
 	wantHeader := map[string]string{"Content-Type": "application/json", "Cache-Control": "no-store", "Pragma": "no-cache"}
 	if status == http.StatusUnauthorized {
 		wantHeader["WWW-Authenticate"] = `Basic realm="` + loginIssuer + `"`
 	}
 	if diff := cmp.Diff(wantHeader, headers(resp.header, wantHeader)); diff != "" {
-		t.Errorf("POST %s headers mismatch (-want +got):\n%s", tokenPath, diff)
+		t.Errorf("POST %s headers mismatch (-want +got):\n%s", path, diff)
 	}
 	var body struct {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(resp.body), &body); err != nil {
-		t.Fatalf("POST %s body %q is not JSON: %v", tokenPath, resp.body, err)
+		t.Fatalf("POST %s body %q is not JSON: %v", path, resp.body, err)
 	}
 	return body.Error
 }

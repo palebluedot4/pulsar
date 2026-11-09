@@ -124,6 +124,13 @@ func (p *Provider) HandleTokenPreflight() http.Handler {
 	return p.tokenCORS.handlePreflight()
 }
 
+// HandleRevocationPreflight answers OPTIONS requests at the revocation
+// endpoint, by the token endpoint's policy: a Client authenticates at both
+// alike, so only a public Client may send requests from a browser.
+func (p *Provider) HandleRevocationPreflight() http.Handler {
+	return p.tokenCORS.handlePreflight()
+}
+
 // HandleUserInfoPreflight answers OPTIONS requests at the UserInfo
 // endpoint, approving preflights from the origins of every Client.
 func (p *Provider) HandleUserInfoPreflight() http.Handler {

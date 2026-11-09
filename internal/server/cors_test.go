@@ -72,9 +72,10 @@ func fromOrigin(t *testing.T, handler http.Handler, req *http.Request, origin st
 	return b.do(req)
 }
 
-// REQ-BROWSER-1, REQ-DISC-20, REQ-CORE-65: a preflight to the token
-// endpoint is approved for the origin of a public Client's redirect URI,
-// and one to UserInfo for that of any Client's, with the method and
+// REQ-BROWSER-1, REQ-DISC-20, REQ-CORE-65, REQ-REVOKE-13: a preflight to
+// the token or revocation endpoint is approved for the origin of a public
+// Client's redirect URI, and one to UserInfo for that of any Client's,
+// with the method and
 // request headers each endpoint takes; any other origin, or an OPTIONS
 // request that is not a preflight, gets no CORS headers. A preflight
 // needs neither the database nor the signing keys.
@@ -120,6 +121,18 @@ func TestCORSPreflight(t *testing.T) {
 		},
 		{
 			name: "token, not a preflight", path: tokenPath, origin: publicOrigin,
+			wantAllow: "OPTIONS, POST", want: noCORS("Origin"),
+		},
+		{
+			name: "revocation, public Client's origin", path: revocationPath, origin: publicOrigin, method: http.MethodPost,
+			wantAllow: "OPTIONS, POST", want: with(tokenPreflight, publicOrigin),
+		},
+		{
+			name: "revocation, confidential Client's origin", path: revocationPath, origin: rpOrigin, method: http.MethodPost,
+			wantAllow: "OPTIONS, POST", want: noCORS("Origin"),
+		},
+		{
+			name: "revocation, unknown origin", path: revocationPath, origin: unknownOrigin, method: http.MethodPost,
 			wantAllow: "OPTIONS, POST", want: noCORS("Origin"),
 		},
 		{
@@ -277,6 +290,80 @@ func TestTokenCORS(t *testing.T) {
 		tokenResponseOf(t, resp)
 		if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
 			t.Errorf("POST %s by rp without an origin: CORS headers mismatch (-want +got):\n%s", tokenPath, diff)
+		}
+	})
+}
+
+// REQ-REVOKE-13, REQ-BROWSER-1, REQ-DISC-20: a public Client revokes its
+// token from the origin of its redirect URI, and reads the response, an
+// error included. A request from any other origin, or from a confidential
+// Client's origin, gets invalid_request without CORS headers, and revokes
+// nothing, as at the token endpoint: a revocation request is sent without
+// a preflight, so its sender cannot read the response. A request with no
+// origin, as a Client that is not a browser sends, is answered as before.
+func TestRevocationCORS(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	public := withCORS(map[string]string{"Access-Control-Allow-Origin": publicOrigin})
+	send := func(t *testing.T, c pkceClient, token, origin string) response {
+		t.Helper()
+		form := revocationForm(token, "")
+		if c.basic.id == "" {
+			form.Set("client_id", c.clientID)
+		}
+		return fromOrigin(t, handler, newRevocationRequest(t, c.basic.id, c.basic.secret, form), origin)
+	}
+
+	t.Run("public Client", func(t *testing.T) {
+		t.Parallel()
+		tokens := publicPKCE.offlineTokens(t, handler, pkceVerifier, nil)
+		for _, origin := range []string{unknownOrigin, rpOrigin, "null"} {
+			resp := send(t, publicPKCE, tokens.RefreshToken, origin)
+			if got := revocationErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
+				t.Errorf("POST %s from %q error = %q, want %q", revocationPath, origin, got, "invalid_request")
+			}
+			if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
+				t.Errorf("POST %s from %q CORS headers mismatch (-want +got):\n%s", revocationPath, origin, diff)
+			}
+		}
+		// The refused requests revoked nothing.
+		wantAccepted(t, handler, "after refused revocations", claimsOf(), []string{tokens.AccessToken})
+
+		resp := send(t, publicPKCE, tokens.RefreshToken, publicOrigin)
+		wantRevocationOK(t, resp)
+		if diff := cmp.Diff(public, corsHeaders(resp)); diff != "" {
+			t.Errorf("POST %s from %q CORS headers mismatch (-want +got):\n%s", revocationPath, publicOrigin, diff)
+		}
+		publicPKCE.wantRevoked(t, handler, tokens.RefreshToken, []string{tokens.AccessToken})
+
+		// An error the application can read.
+		resp = send(t, publicPKCE, "", publicOrigin)
+		if got := revocationErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
+			t.Errorf("POST %s without token: error = %q, want %q", revocationPath, got, "invalid_request")
+		}
+		if diff := cmp.Diff(public, corsHeaders(resp)); diff != "" {
+			t.Errorf("POST %s from %q, failed: CORS headers mismatch (-want +got):\n%s", revocationPath, publicOrigin, diff)
+		}
+	})
+
+	t.Run("confidential Client", func(t *testing.T) {
+		t.Parallel()
+		tokens := rpNoPKCE.offlineTokens(t, handler, "", nil)
+		resp := send(t, rpNoPKCE, tokens.AccessToken, rpOrigin)
+		if got := revocationErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
+			t.Errorf("POST %s by rp from %q error = %q, want %q", revocationPath, rpOrigin, got, "invalid_request")
+		}
+		if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
+			t.Errorf("POST %s by rp from %q CORS headers mismatch (-want +got):\n%s", revocationPath, rpOrigin, diff)
+		}
+		wantAccepted(t, handler, "after a refused revocation", claimsOf(), []string{tokens.AccessToken})
+
+		// Without an origin, as from rp's server.
+		resp = send(t, rpNoPKCE, tokens.AccessToken, "")
+		wantRevocationOK(t, resp)
+		if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
+			t.Errorf("POST %s by rp without an origin: CORS headers mismatch (-want +got):\n%s", revocationPath, diff)
 		}
 	})
 }
