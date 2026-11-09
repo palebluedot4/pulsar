@@ -215,26 +215,106 @@ func TestRevokeInvalidToken(t *testing.T) {
 	}
 }
 
-// REQ-REVOKE-10: an access token that has expired, and a refresh token
-// whose Refresh Token Family has ended, before and after the family is
-// deleted, each get 200.
+// REQ-REVOKE-7, REQ-REVOKE-10: an access token that has expired, and a
+// refresh token whose Refresh Token Family has ended, before and after the
+// family is deleted, are invalid, and each gets 200, whether the Client
+// they were issued to or another Client presents them: expiry is checked
+// before the Client, so that the answer does not depend on when the
+// periodic deletion runs.
 func TestRevokeExpiredToken(t *testing.T) {
 	t.Parallel()
 
-	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
-	synctest.Test(t, func(t *testing.T) {
-		pool := newBubblePool(t, databaseURL)
-		handler := newFlowHandler(t, pool)
-		tokens := rpNoPKCE.offlineTokens(t, handler, "", nil)
+	tests := []struct {
+		name string
+		auth revocationAuth
+	}{
+		{name: "by its own Client", auth: revocationAuth{basic: credentials{"rp", rpSecret}}},
+		{name: "by another Client", auth: revocationAuth{basic: credentials{"other", otherSecret}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+			synctest.Test(t, func(t *testing.T) {
+				pool := newBubblePool(t, databaseURL)
+				handler := newFlowHandler(t, pool)
+				tokens := rpNoPKCE.offlineTokens(t, handler, "", nil)
 
-		time.Sleep(10 * time.Minute)
-		wantRevocationOK(t, rpNoPKCE.revoke(t, handler, tokens.AccessToken, ""))
+				time.Sleep(10 * time.Minute)
+				wantRevocationOK(t, tt.auth.send(t, handler, tokens.AccessToken))
 
-		time.Sleep(30 * 24 * time.Hour)
-		wantRevocationOK(t, rpNoPKCE.revoke(t, handler, tokens.RefreshToken, ""))
-		deleteDue(t, pool)
-		wantRevocationOK(t, rpNoPKCE.revoke(t, handler, tokens.RefreshToken, ""))
-	})
+				time.Sleep(30 * 24 * time.Hour)
+				wantRevocationOK(t, tt.auth.send(t, handler, tokens.RefreshToken))
+				deleteDue(t, pool)
+				wantRevocationOK(t, tt.auth.send(t, handler, tokens.RefreshToken))
+			})
+		})
+	}
+}
+
+// REQ-REVOKE-7, REQ-REVOKE-10, REQ-AT-3, REQ-AT-7, REQ-AT-8: an access
+// token signed by the OP's key whose claims UserInfo would refuse, for
+// another iss, an aud without the issuer, no jti or no exp, is not one
+// pulsar issued: it gets 200 even when its client_id names another Client,
+// and nothing is revoked. One whose claims are valid is found: another
+// Client's gets 400 and invalid_request, and the Client's own is revoked.
+//
+// Each token is forged from the claims of an access token issued to rp,
+// with its jti, so that revoking it would revoke that one.
+func TestRevokeAccessTokenClaims(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	keys := forger(t, pool)
+	set := func(name string, value any) func(map[string]any) {
+		return func(c map[string]any) {
+			if value == nil {
+				delete(c, name)
+			} else {
+				c[name] = value
+			}
+		}
+	}
+	other := set("client_id", "other")
+	tests := []struct {
+		name    string
+		edits   []func(map[string]any)
+		status  int  // of the revocation
+		revoked bool // whether UserInfo then refuses rp's access token
+	}{
+		{name: "another iss", edits: []func(map[string]any){other, set("iss", "https://op.example")}, status: http.StatusOK},
+		{name: "another aud", edits: []func(map[string]any){other, set("aud", "https://rs.example")}, status: http.StatusOK},
+		{name: "no aud", edits: []func(map[string]any){other, set("aud", nil)}, status: http.StatusOK},
+		{name: "no jti", edits: []func(map[string]any){other, set("jti", nil)}, status: http.StatusOK},
+		{name: "empty jti", edits: []func(map[string]any){other, set("jti", "")}, status: http.StatusOK},
+		{name: "no exp", edits: []func(map[string]any){other, set("exp", nil)}, status: http.StatusOK},
+		{name: "valid, another Client's", edits: []func(map[string]any){other}, status: http.StatusBadRequest},
+		{name: "valid, rp's own", status: http.StatusOK, revoked: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			accessToken := accessTokenOf(t, handler, "rp")
+			claims := maps.Clone(verify(t, handler, accessToken).claims)
+			for _, edit := range tt.edits {
+				edit(claims)
+			}
+			resp := rpNoPKCE.revoke(t, handler, forge(t, keys, "at+jwt", claims), "")
+			if tt.status == http.StatusOK {
+				wantRevocationOK(t, resp)
+			} else if got := revocationErrorCode(t, resp, tt.status); got != "invalid_request" {
+				t.Errorf("POST %s error = %q, want %q", revocationPath, got, "invalid_request")
+			}
+			if tt.revoked {
+				if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
+					t.Errorf("UserInfo with the revoked access token error = %q, want %q", got, "invalid_token")
+				}
+				return
+			}
+			wantAccepted(t, handler, "after the revocation", claimsOf(aliceProfile), []string{accessToken})
+		})
+	}
 }
 
 // revocationAuth is how a revocation request authenticates its Client: the

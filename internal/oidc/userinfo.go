@@ -224,22 +224,33 @@ func (p *Provider) parseAccessToken(token string) (*signedAccessToken, bool) {
 	return &claims, true
 }
 
+// validAccessTokenClaims reports whether claims, those of an access token
+// that parseAccessToken returned, are valid at now, as RFC 9068 §4
+// requires of a resource server, with this OP as the resource: iss is the
+// issuer, aud holds it, it has not expired, and it has a sub and a jti.
+func (p *Provider) validAccessTokenClaims(claims *signedAccessToken, now time.Time) bool {
+	issuer := p.issuer.String()
+	switch {
+	case claims.Issuer != issuer || !claims.Audience.Contains(issuer):
+		return false
+	// "The current time MUST be before" exp, so a token is refused from its
+	// exp on, and one without exp is refused; jwt.Claims.Validate would
+	// accept both.
+	case claims.Expiry == nil || !now.Before(claims.Expiry.Time()):
+		return false
+	case claims.Subject == "" || claims.ID == "":
+		return false
+	}
+	return true
+}
+
 // validateAccessToken validates the claims of an access token that
 // parseAccessToken returned, as RFC 9068 §4 requires of a resource server,
 // with this OP as the resource, and checks that its record is current: it
 // is recorded, and has not expired.
 func (p *Provider) validateAccessToken(ctx context.Context, claims *signedAccessToken) (verifiedAccessToken, error) {
 	now := time.Now()
-	issuer := p.issuer.String()
-	switch {
-	case claims.Issuer != issuer || !claims.Audience.Contains(issuer):
-		return verifiedAccessToken{}, errTokenNotValid
-	// "The current time MUST be before" exp, so a token is refused from its
-	// exp on, and one without exp is refused; jwt.Claims.Validate would
-	// accept both.
-	case claims.Expiry == nil || !now.Before(claims.Expiry.Time()):
-		return verifiedAccessToken{}, errTokenNotValid
-	case claims.Subject == "" || claims.ID == "":
+	if !p.validAccessTokenClaims(claims, now) {
 		return verifiedAccessToken{}, errTokenNotValid
 	}
 	// A token that a second redemption of its code has revoked has no
