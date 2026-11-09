@@ -23,8 +23,9 @@
 // Client, with neither. Each key in jwks names in alg the one algorithm it
 // signs with: RS256 or PS256 for an RSA key of at least 2048 bits, ES256
 // for a P-256 key. Secrets and passwords appear only as Argon2id
-// hashes in the PHC string format, such as the reference implementation's
-// `argon2 <salt> -id -e` prints.
+// hashes in the PHC string format, such as [NewClientSecret] returns for
+// a secret it generates, and the reference implementation's
+// `argon2 <salt> -id -e` prints for a password.
 //
 // The file is decoded strictly: a member pulsar does not know, a member
 // given twice, or one in another case is an error, so that a misspelled
