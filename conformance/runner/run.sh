@@ -1,11 +1,11 @@
 #!/bin/sh
-# Runs the Config OP and Basic OP plans against pulsar through the suite's
-# CI runner, once pulsar reports ready, and exports the results to /results.
-# The runner waits for the suite by itself, and exits non-zero when a module
-# fails to finish, a condition fails or warns without an entry in the
-# expected files, a module is skipped without one, or an entry there
-# matches nothing. Both configurations share an alias, so the plans run one
-# after the other.
+# Runs the Config OP, Basic OP and Form Post Basic plans against pulsar
+# through the suite's CI runner, once pulsar reports ready, and exports the
+# results to /results. The runner waits for the suite by itself, and exits
+# non-zero when a module fails to finish, a condition fails or warns without
+# an entry in the expected files, a module is skipped without one, or an
+# entry there matches nothing. The configurations share an alias, so the
+# plans run one after the other.
 set -eu
 
 ready_url=https://pulsar:9443/readyz
@@ -31,4 +31,5 @@ exec python3 /suite/run-test-plan.py \
 	--expected-skips-file /conformance/expected-skips.json \
 	--export-dir /results \
 	oidcc-config-certification-test-plan /conformance/config-op.json \
-	'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]' /conformance/config-basic.json
+	'oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]' /conformance/config-basic.json \
+	'oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]' /conformance/config-formpost.json

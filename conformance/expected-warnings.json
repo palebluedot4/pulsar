@@ -7,5 +7,14 @@
     "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
     "expected-result": "warning",
     "comment": "pulsar has one authentication level and never returns acr, since claiming one would be untrue (#11, REQ-CORE-26). acr_values requests acr as a Voluntary Claim, and the minimum support OpenID Connect Core 1.0 §15.1 requires is that its use not result in an error, which the module checks first."
+  },
+  {
+    "test-name": "oidcc-ensure-request-with-acr-values-succeeds",
+    "variant": "*",
+    "configuration-filename": "*config-formpost.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
+    "expected-result": "warning",
+    "comment": "As for the Basic OP plan: pulsar has one authentication level and never returns acr, since claiming one would be untrue (#11, REQ-CORE-26). acr_values requests acr as a Voluntary Claim, and the minimum support OpenID Connect Core 1.0 §15.1 requires is that its use not result in an error, which the module checks first."
   }
 ]
