@@ -32,7 +32,8 @@ const nbfLeeway = time.Minute
 
 // authenticateAssertion authenticates a Client registered for
 // private_key_jwt by the JWT in the client_assertion parameter (RFC 7523
-// §3, OpenID Connect Core 1.0 §9), and records its jti so that it
+// §3 as RFC 10070 §4 updates it, OpenID Connect Core 1.0 §9), and records
+// its jti so that it
 // authenticates only once. An assertion that fails any check gets
 // invalid_client (RFC 7521 §4.2.1).
 func (p *Provider) authenticateAssertion(ctx context.Context, params url.Values) (*registry.Client, *tokenError) {
