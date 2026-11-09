@@ -1,7 +1,8 @@
 # Anthropic's code-review plugin on every ready pull request: parallel
 # reviewers, then a separate agent validates each finding before it is posted.
-# The same plugin runs locally today; this workflow stays off until #1 sets
-# the repository variable AGENT_CI_ENABLED.
+# Local review uses the review bundled with Claude Code instead (AGENTS.md);
+# #1 decides which one CI runs. This workflow stays off until #1 sets the
+# repository variable AGENT_CI_ENABLED.
 
 name: Claude review
 

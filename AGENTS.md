@@ -93,7 +93,8 @@ it changes (sandbox settings, for example, in `docs/harness.md`).
 1. Review the diff against its spec with `/mattpocock-skills:code-review`.
 2. Run `/security-review`.
 3. After opening it, review the pull request with
-   `/code-review:code-review --comment`, and resolve every thread it opens.
+   `/code-review high --comment <number>`, the review bundled with Claude
+   Code, and resolve every thread it opens.
 4. Keep a "Reviews" section in the pull request's description: for each of
    the three reviews, how many findings it reported, how many were fixed
    and how many were not changed, and why. Update it after step 3. The

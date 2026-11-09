@@ -311,8 +311,10 @@ security review found nothing to change."
 order, and each later review sees code that the earlier ones already fixed.
 So a tally can show:
 
-- what `code-review@claude-plugins-official` found that survived both
-  earlier reviews, a lower bound on its value given the other two;
+- what the third review found that survived both earlier reviews, a lower
+  bound on its value given the other two (the bundled `/code-review`, not
+  the `code-review` plugin this survey named; see
+  `docs/research/code-review-tools.md`);
 - how often its findings were fixed rather than declined, an addressed rate
   comparable in form with OpenAI's 52.7% and GitHub's addressed rate.
 
