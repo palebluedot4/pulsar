@@ -506,7 +506,7 @@ func TestResourceTokenRequestMalformed(t *testing.T) {
 		want string
 	}{
 		{name: "no grant_type", form: url.Values{"resource": repeated}, want: "invalid_request"},
-		{name: "grant_type client_credentials", form: url.Values{"grant_type": {"client_credentials"}, "resource": repeated}, want: "unsupported_grant_type"},
+		{name: "grant_type token-exchange", form: url.Values{"grant_type": {tokenExchange}, "resource": repeated}, want: "unsupported_grant_type"},
 		{name: "no code", form: url.Values{"grant_type": {"authorization_code"}, "redirect_uri": {rpRedirectURI}, "resource": repeated}, want: "invalid_request"},
 		{name: "no refresh_token", form: url.Values{"grant_type": {"refresh_token"}, "resource": repeated}, want: "invalid_request"},
 	}

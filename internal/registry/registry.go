@@ -45,6 +45,30 @@
 // the Resource Servers it may request access tokens for, each once; it may
 // request none other.
 //
+// A Client may list, in grant_types, the grant types it uses at the token
+// endpoint, with RFC 7591 §2's names. Left out, they are
+// authorization_code and refresh_token, which a Client may also list; a
+// Client that acts for End-Users uses both. A Client that acts for itself,
+// a machine Client, lists client_credentials alone, as RFC 7591 §5 lets an
+// authorization server require, and so never acts for an End-User too. A
+// machine Client is confidential; registers no redirect_uris and no
+// post_logout_redirect_uris, since it is never sent to the authorization
+// or logout endpoint; and lists, in scope, space-separated as RFC 7591 §2
+// gives it, the scopes it may be granted, at least one, each a scope of a
+// Resource Server it lists in resource_servers. Its client_id is the sub
+// of its access tokens (docs/adr/0007-machine-clients-are-their-own-subject.md),
+// so it may not be a UUID in the form of an End-User's Subject, and no
+// End-User's Subject can equal it. No other Client may list scope.
+//
+//	{
+//	  "client_id": "batch",
+//	  "grant_types": ["client_credentials"],
+//	  "token_endpoint_auth_method": "private_key_jwt",
+//	  "jwks": {"keys": [...]},
+//	  "resource_servers": ["https://api.example/orders"],
+//	  "scope": "orders:read"
+//	}
+//
 // A Client authenticates with the token_endpoint_auth_method it registers:
 // client_secret_basic or client_secret_post with a client_secret_hash,
 // private_key_jwt with the public keys in jwks, or none, for a public
@@ -114,6 +138,23 @@ const (
 	None              AuthMethod = "none"
 )
 
+// GrantType is a grant type a Client uses at the token endpoint, as RFC
+// 7591 §2 names it in grant_types.
+type GrantType string
+
+// The grant types pulsar supports.
+const (
+	AuthorizationCode GrantType = "authorization_code"
+	RefreshToken      GrantType = "refresh_token"
+	ClientCredentials GrantType = "client_credentials"
+)
+
+// defaultGrantTypes are the grant types of a Client that lists none: those
+// of a Client that acts for End-Users. RFC 7591 §2's default is
+// authorization_code alone; pulsar's adds refresh_token, which every Client
+// used before grant_types was registered (docs/requirements/rfc7591.md).
+var defaultGrantTypes = []GrantType{AuthorizationCode, RefreshToken}
+
 // Registry is the set of Resource Servers, Clients and End-Users. They
 // never change once loaded, and it is safe for concurrent use.
 type Registry struct {
@@ -156,6 +197,14 @@ type Client struct {
 	// Client may request access tokens for, each registered and listed
 	// once; none if it registered none.
 	ResourceServers []string
+	// GrantTypes are the grant types the Client may use at the token
+	// endpoint: client_credentials alone, for a machine Client, or
+	// authorization_code and refresh_token.
+	GrantTypes []GrantType
+	// Scopes are the scopes a machine Client may be granted, in the order
+	// registered, each once and each a scope of one of its ResourceServers;
+	// none for any other Client.
+	Scopes []string
 
 	// loopbackRedirectURIs are a public Client's loopback IP redirect
 	// URIs without their ports (see withoutLoopbackPort), each once; none
@@ -192,6 +241,18 @@ func (s *ResourceServer) HasScope(value string) bool {
 // method none, with no credentials to authenticate with (RFC 6749 §2.1).
 func (c *Client) Public() bool {
 	return c.AuthMethod == None
+}
+
+// AllowsGrant reports whether c may use the grant type g at the token
+// endpoint.
+func (c *Client) AllowsGrant(g GrantType) bool {
+	return slices.Contains(c.GrantTypes, g)
+}
+
+// machine reports whether c is a machine Client: one registered for
+// client_credentials, which acts for itself.
+func (c *Client) machine() bool {
+	return c.AllowsGrant(ClientCredentials)
 }
 
 // AllowsRedirectURI reports whether requested, an authorization
@@ -320,6 +381,8 @@ type clientEntry struct {
 	RedirectURIs            []string            `json:"redirect_uris"`
 	PostLogoutRedirectURIs  []string            `json:"post_logout_redirect_uris"`
 	ResourceServers         []string            `json:"resource_servers"`
+	GrantTypes              []GrantType         `json:"grant_types"`
+	Scope                   string              `json:"scope"`
 }
 
 type endUserEntry struct {
@@ -381,6 +444,9 @@ func Parse(data []byte) (*Registry, error) {
 		c, err := newClient(e)
 		if err == nil {
 			err = r.checkResourceServers(e.ResourceServers)
+		}
+		if err == nil {
+			err = checkClientScopes(c.Scopes, e.ResourceServers, scopeOwner)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("clients[%d] (client_id %q): %w", i, e.ClientID, err)
@@ -503,8 +569,19 @@ func newClient(e clientEntry) (*Client, error) {
 		c.JWKS = e.JWKS
 	}
 
-	// RFC 6749 §3.1.2.2: every Client registers its redirect URIs, whatever
-	// its type, so that each is compared exactly as registered.
+	if err := checkGrantTypes(c, e); err != nil {
+		return nil, err
+	}
+	if c.machine() {
+		return c, nil
+	}
+	if e.Scope != "" {
+		return nil, fmt.Errorf("scope is allowed only for %s", ClientCredentials)
+	}
+
+	// RFC 6749 §3.1.2.2: every Client sent to the authorization endpoint
+	// registers its redirect URIs, whatever its type, so that each is
+	// compared exactly as registered.
 	if len(e.RedirectURIs) == 0 {
 		return nil, errors.New("redirect_uris must list at least one URI")
 	}
@@ -534,6 +611,81 @@ func newClient(e clientEntry) (*Client, error) {
 	}
 	c.PostLogoutRedirectURIs = e.PostLogoutRedirectURIs
 	return c, nil
+}
+
+// checkGrantTypes checks e's grant_types, and sets c's GrantTypes from
+// them. A Client lists client_credentials alone, or authorization_code and
+// refresh_token, each once, or lists none. A machine Client, one that lists
+// client_credentials, is also checked against what such a Client may
+// register, and its scope is set as c's Scopes.
+func checkGrantTypes(c *Client, e clientEntry) error {
+	if e.GrantTypes == nil {
+		c.GrantTypes = slices.Clone(defaultGrantTypes)
+		return nil
+	}
+	for i, g := range e.GrantTypes {
+		switch {
+		case g != AuthorizationCode && g != RefreshToken && g != ClientCredentials:
+			return fmt.Errorf("grant_types[%d]: %q is not one of %s, %s or %s", i, g, AuthorizationCode, RefreshToken, ClientCredentials)
+		case slices.Contains(e.GrantTypes[:i], g):
+			return fmt.Errorf("grant_types[%d]: %q is listed twice", i, g)
+		}
+	}
+	c.GrantTypes = e.GrantTypes
+	switch {
+	case c.machine() && len(c.GrantTypes) > 1:
+		// RFC 7591 §5 lets an authorization server keep the two apart.
+		return fmt.Errorf("grant_types: %s must be listed alone, so that a Client acts for itself or for End-Users, never both", ClientCredentials)
+	case c.machine():
+		return checkMachineClient(c, e)
+	case len(c.GrantTypes) != len(defaultGrantTypes):
+		return fmt.Errorf("grant_types must list %s alone, or %s and %s", ClientCredentials, AuthorizationCode, RefreshToken)
+	}
+	return nil
+}
+
+// checkMachineClient checks what a machine Client registers, and sets c's
+// Scopes from its scope.
+func checkMachineClient(c *Client, e clientEntry) error {
+	switch {
+	case c.Public():
+		// RFC 6749 §4.4.
+		return fmt.Errorf("%s is allowed only for a confidential Client, not for %s", ClientCredentials, None)
+	case len(e.RedirectURIs) > 0:
+		return fmt.Errorf("redirect_uris is not allowed for %s", ClientCredentials)
+	case len(e.PostLogoutRedirectURIs) > 0:
+		return fmt.Errorf("post_logout_redirect_uris is not allowed for %s", ClientCredentials)
+	case isUUID(e.ClientID):
+		// RFC 9700 §4.15.1, RFC 9068 §5.
+		return fmt.Errorf("client_id %q is in the form of an End-User's Subject, which the sub of its access tokens must never be", e.ClientID)
+	case e.Scope == "":
+		return fmt.Errorf("scope is required for %s", ClientCredentials)
+	}
+	// RFC 7591 §2: a list of scope values separated by spaces.
+	for i, s := range strings.Split(e.Scope, " ") {
+		switch {
+		case s == "":
+			return fmt.Errorf("scope %q must separate its values by single spaces", e.Scope)
+		case strings.IndexFunc(s, notScopeChar) >= 0:
+			return fmt.Errorf("scope: %q is not a scope-token of RFC 6749 §3.3", s)
+		case slices.Contains(c.Scopes[:i], s):
+			return fmt.Errorf("scope: %q is listed twice", s)
+		}
+		c.Scopes = append(c.Scopes, s)
+	}
+	return nil
+}
+
+// checkClientScopes checks that each of scopes, those a machine Client
+// lists, is a scope of one of resourceServers, those it lists, by
+// scopeOwner, the Resource Server whose scope each scope value is.
+func checkClientScopes(scopes, resourceServers []string, scopeOwner map[string]string) error {
+	for _, s := range scopes {
+		if owner, ok := scopeOwner[s]; !ok || !slices.Contains(resourceServers, owner) {
+			return fmt.Errorf("scope: %q is not a scope of a Resource Server listed in resource_servers", s)
+		}
+	}
+	return nil
 }
 
 // openIDScopes are the scope values OpenID Connect Core 1.0 defines: openid

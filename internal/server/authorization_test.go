@@ -43,6 +43,10 @@ const (
 	postSecret         = "post secret"
 )
 
+// tokenExchange is the grant type of RFC 8693's token exchange, which
+// pulsar does not support.
+const tokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" //nolint:gosec // G101: a URN that names a grant type, not a credential.
+
 // The Subjects of alice and bob in flowRegistry.
 const (
 	aliceSubject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
@@ -912,8 +916,8 @@ func TestTokenErrors(t *testing.T) {
 			wantStatus: http.StatusBadRequest, wantError: "unsupported_grant_type",
 		},
 		{
-			name: "grant_type client_credentials", clientID: "rp", secret: rpSecret,
-			edit:       func(v url.Values) { v.Set("grant_type", "client_credentials") },
+			name: "grant_type token-exchange", clientID: "rp", secret: rpSecret,
+			edit:       func(v url.Values) { v.Set("grant_type", tokenExchange) },
 			wantStatus: http.StatusBadRequest, wantError: "unsupported_grant_type",
 		},
 		{
