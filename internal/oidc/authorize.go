@@ -159,6 +159,13 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		p.errorPage(w, "The authorization request names a client_id that is not registered.")
 		return
 	}
+	// A machine Client acts for itself, never for an End-User. It has no
+	// redirect URI to send unauthorized_client to (RFC 6749 §4.1.2.1), so
+	// the End-User is told here.
+	if !client.AllowsGrant(registry.AuthorizationCode) {
+		p.errorPage(w, "The authorization request names a client that is not registered for the authorization code flow.")
+		return
+	}
 	// The URI redirected to, and recorded with the code, is the request's:
 	// one the Client registered, or, for a public Client, a loopback IP
 	// redirect URI it registered with the port the request names.
