@@ -46,7 +46,9 @@ const Path = "/login"
 // Login Session limits.
 const (
 	idleTimeout = 30 * time.Minute
-	lifetime    = 10 * time.Hour
+	// SessionLifetime is the longest a Login Session lasts from when it
+	// starts, however active its End-User.
+	SessionLifetime = 10 * time.Hour
 )
 
 // cookieName is the Login Session cookie's name. The __Host- prefix makes
@@ -200,7 +202,7 @@ func NewSessions(pool *pgxpool.Pool, reg *registry.Registry) *Sessions {
 	*m = *baseSessions
 	m.Store = st
 	m.IdleTimeout = idleTimeout
-	m.Lifetime = lifetime
+	m.Lifetime = SessionLifetime
 	m.HashTokenInStore = true
 	m.Cookie.Name = cookieName
 	m.Cookie.Path = "/"

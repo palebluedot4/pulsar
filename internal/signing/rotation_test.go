@@ -210,6 +210,61 @@ func TestRotatedOutKeyLeavesJWKSAfterItsTokensExpire(t *testing.T) {
 	})
 }
 
+// REQ-LOGOUT-3, REQ-CORE-51: a key that has left the JWK Set still
+// verifies an id_token_hint it signed, and nothing else, until a Login
+// Session's ten-hour lifetime plus a reload interval has passed since the
+// next key started signing: on the replica that published it, and on one
+// that starts once it has left. It signs nothing, and never returns to the
+// JWK Set. Its hints are refused from that time, by each replica's clock,
+// whether or not a reload falls then.
+func TestRetiredKeyVerifiesOnlyIDTokenHints(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		a := startReplica(t, databaseURL)
+		_, token := signedBy(t, a.KeySet)
+		rotated, err := signing.New(a.pool, secret).Rotate(t.Context())
+		if err != nil {
+			t.Fatalf("Rotate() error = %v", err)
+		}
+
+		// The old key leaves the JWK Set eleven minutes after the new key's
+		// time to sign, at a's reload then. b starts half a reload interval
+		// later, so that it reloads half an interval apart from a.
+		sleepUntil(rotated.SignsFrom.Add(11*time.Minute + 30*time.Second))
+		b := startReplica(t, databaseURL)
+		check := func(when string, wantHint bool) {
+			t.Helper()
+			for name, r := range map[string]replica{"first replica": a, "replica started later": b} {
+				if _, _, ok := r.VerifyIDTokenHint(token); ok != wantHint {
+					t.Errorf("%s: VerifyIDTokenHint(the old key's token) on the %s = %t, want %t", when, name, ok, wantHint)
+				}
+				if _, _, ok := r.VerifyJWT(token); ok {
+					t.Errorf("%s: VerifyJWT(the old key's token) on the %s = true, want false", when, name)
+				}
+				if diff := cmp.Diff([]string{rotated.KID}, sortedKids(decodeJWKS(t, getJWKS(t, r.KeySet)))); diff != "" {
+					t.Errorf("%s: GET /jwks on the %s kids mismatch (-want +got):\n%s", when, name, diff)
+				}
+				if kid, _ := signedBy(t, r.KeySet); kid != rotated.KID {
+					t.Errorf("%s: SignJWT() on the %s signed with %q, want the rotated key %q", when, name, kid, rotated.KID)
+				}
+			}
+		}
+		check("once the old key has left the JWK Set", true)
+
+		// The Login Session's lifetime and one reload interval after the new
+		// key's time to sign: a reloads then, and b half an interval later.
+		refusedFrom := rotated.SignsFrom.Add(10*time.Hour + time.Minute)
+		sleepUntil(refusedFrom.Add(-time.Nanosecond))
+		check("1ns before the old key's hints are refused", true)
+		sleepUntil(refusedFrom)
+		check("when the old key's hints are refused", false)
+		sleepUntil(refusedFrom.Add(time.Hour))
+		check("an hour later", false)
+	})
+}
+
 // sleepUntil sleeps until t, by the bubble's clock, and waits for the
 // bubble's goroutines to block.
 func sleepUntil(t time.Time) {

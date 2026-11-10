@@ -388,6 +388,25 @@ browser-based applications differently by default, so none follows OAuth 2.1
 §9.3.2. node-oidc-provider also drops, without an error, a
 `post_logout_redirect_uri` that comes with neither a hint nor a `client_id`.
 
+### `client_id` and hints signed by rotated keys
+
+Added 2026-11-10 for #81, from the same commits.
+
+| Provider           | `client_id` that disagrees with the hint                                                                                                                                                                                                       | Hint signed by a rotated key                                                                                                                                                                          | Source                                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| node-oidc-provider | Refused before the hint is verified: `InvalidRequest('client_id does not match the provided id_token_hint')`.                                                                                                                                  | Verified against the provider's whole keystore, with `ignoreExpiration: true`; a key stays usable for as long as the operator keeps it configured.                                                    | `lib/actions/end_session.js`, `lib/models/id_token.js` (`validate`)                                                   |
+| Keycloak           | An error page, `ErrorPage.error(... BAD_REQUEST, Messages.INVALID_PARAMETER, OIDCLoginProtocol.ID_TOKEN_HINT)`, logged as "Parameter client_id is different than the client for which ID Token was issued." It compares with the hint's `azp`. | Its documentation: "The active key pair is used to create new signatures, while the passive key pair can be used to verify previous signatures", until an operator removes the key.                   | `services/.../protocol/oidc/endpoints/LogoutEndpoint.java`, `docs/documentation/server_admin/topics/realms/keys.adoc` |
+| Ory Hydra          | Not applicable: its logout handler reads `id_token_hint`, `state` and `post_logout_redirect_uri`, and no `client_id`.                                                                                                                          | **UNVERIFIED**: its JWKS documentation describes rotating by creating a key, and says nothing of when the old one stops verifying.                                                                    | `consent/strategy_default.go`; the Ory documentation's `docs/hydra/jwks.mdx` at `master`                              |
+| Spring AS          | Refused: `createException(OAuth2ErrorCodes.INVALID_REQUEST, OAuth2ParameterNames.CLIENT_ID)`.                                                                                                                                                  | No key is involved: the hint is looked up in the authorization store (`findByToken(..., ID_TOKEN_TOKEN_TYPE)`), so it is accepted for as long as its authorization is kept, whatever the signing key. | `oidc/authentication/OidcLogoutAuthenticationProvider.java`                                                           |
+
+Every provider that reads `client_id` at logout refuses one that disagrees
+with the hint, rather than ignoring it. None of the three whose behavior was
+confirmed stops accepting a hint when its signing key leaves the published
+JWK Set.
+
+Sources: as above, and
+<https://github.com/ory/docs/blob/master/docs/hydra/jwks.mdx>.
+
 ### Revocation
 
 | Provider           | Refresh token revoked: its access tokens?                                                                                                                           | Access token revoked: what else?                                                                                                                                                                                                       | Public Clients                                                                                                                           | Another Client's token                                                                                                                                        | Source                                                                                                                           |
@@ -469,6 +488,16 @@ Decided on 2026-11-09.
   `exp` is not checked, as Spring does not check it: this goes beyond §2's
   SHOULD, which asks only that a hint be accepted after its expiry when its
   RP has a current or recent session.
+- Revised on 2026-11-10 for #81: a hint signed by a key that a rotation
+  replaced is accepted until every Login Session in which that key signed
+  could have ended, although the key has left the JWK Set, as
+  node-oidc-provider and Spring
+  [accept such hints](#client_id-and-hints-signed-by-rotated-keys). #73
+  had refused them once the key left the JWK Set.
+- Revised on 2026-11-10 for #81: a `client_id` that disagrees with the hint
+  gets an error page, as §4 allows and every provider that reads it
+  [answers](#client_id-and-hints-signed-by-rotated-keys). #73 had instead
+  ignored it, so that the request identified no Client.
 - The OP redirects only when the Client is identified, by the hint or by
   `client_id`, and the `post_logout_redirect_uri` exactly matches one
   registered for that Client (§3). The redirect echoes `state`, which the

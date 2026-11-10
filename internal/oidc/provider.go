@@ -49,6 +49,10 @@ type JWTKeys interface {
 	// keys signed, and if so returns its header's typ and its claims, as
 	// JSON.
 	VerifyJWT(token string) (typ string, claims []byte, ok bool)
+	// VerifyIDTokenHint is VerifyJWT for an id_token_hint, which a key
+	// that has left the JWK Set also verifies, while a Login Session in
+	// which it signed could still last.
+	VerifyIDTokenHint(token string) (typ string, claims []byte, ok bool)
 }
 
 // Provider serves the authorization, token, UserInfo and revocation
