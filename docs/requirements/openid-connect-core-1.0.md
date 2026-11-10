@@ -36,6 +36,12 @@ that pulsar, as an OP, must or should meet.
   the Redirection URI values for the Client pre-registered at the OpenID
   Provider, with the matching performed as described in Section 6.2.1 of
   [RFC3986] (Simple String Comparison)."
+
+  Departure: the port of a loopback IP redirect URI may differ from the
+  one registered, as RFC 8252 §7.3 requires and RFC 9700 §2.1 allows
+  (REQ-NATIVE-1, REQ-BCP-3), so that a native app can listen on a port the
+  operating system chooses. Everything else is compared exactly.
+
 - REQ-CORE-6 (§3.1.2.2): "Verify that a scope parameter is present and
   contains the openid scope value. (If no openid scope value is present,
   the request may still be a valid OAuth 2.0 request but is not an OpenID

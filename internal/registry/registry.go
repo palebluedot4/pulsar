@@ -33,6 +33,10 @@
 // refuses to start on an identifier that is its issuer, which the registry
 // does not know (see [Registry.HasResourceServer]).
 //
+// A request names one of a Client's redirect_uris exactly, but for the
+// port of a loopback IP redirect URI, such as http://127.0.0.1/callback,
+// which a native app may name with any port (see [Client.RedirectURI]).
+//
 // A Client may list post_logout_redirect_uris, to which pulsar returns
 // the End-User after logout (OpenID Connect RP-Initiated Logout 1.0 §3.1).
 // Each is checked as a redirect URI is, and, as each redirect URI is,
@@ -182,6 +186,65 @@ func (s *ResourceServer) HasScope(value string) bool {
 // method none, with no credentials to authenticate with (RFC 6749 §2.1).
 func (c *Client) Public() bool {
 	return c.AuthMethod == None
+}
+
+// RedirectURI reports whether requested, an authorization request's
+// redirect_uri, is one of c's: equal to one c registered, or to a
+// loopback IP redirect URI c registered but for the port, which RFC 8252
+// §7.3 lets a native app choose at the time of the request. The response
+// goes to requested, port included.
+func (c *Client) RedirectURI(requested string) bool {
+	if slices.Contains(c.RedirectURIs, requested) {
+		return true
+	}
+	want, ok := withoutLoopbackPort(requested)
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(c.RedirectURIs, func(registered string) bool {
+		got, ok := withoutLoopbackPort(registered)
+		return ok && got == want
+	})
+}
+
+// withoutLoopbackPort returns raw without its port, if raw is a loopback
+// IP redirect URI (RFC 8252 §7.3): http, as lowercase, with no userinfo,
+// and with a host that is an IP literal of the loopback interface, without
+// a zone, IPv6 in brackets. A port, if raw has one, must be a number from
+// 1 to 65535. A URI whose host is localhost is not one: RFC 8252 §8.3
+// says its use is NOT RECOMMENDED, and the name may resolve elsewhere.
+//
+// raw is compared as a string, but for the port, so that every other part
+// of it must equal the registered URI's exactly (RFC 9700 §2.1).
+func withoutLoopbackPort(raw string) (string, bool) {
+	rest, ok := strings.CutPrefix(raw, "http://")
+	if !ok {
+		return "", false
+	}
+	end := strings.IndexAny(rest, "/?#")
+	if end < 0 {
+		end = len(rest)
+	}
+	host, tail := rest[:end], rest[end:]
+	// The port follows the last colon, unless that colon is inside an
+	// IPv6 literal's brackets.
+	if i := strings.LastIndexByte(host, ':'); i >= 0 && !strings.Contains(host[i:], "]") {
+		n, err := strconv.ParseUint(host[i+1:], 10, 16)
+		if err != nil || n == 0 {
+			return "", false
+		}
+		host = host[:i]
+	}
+	literal := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	addr, err := netip.ParseAddr(literal)
+	if err != nil || !addr.IsLoopback() || addr.Zone() != "" {
+		return "", false
+	}
+	// An IPv6 literal must be in brackets, and an IPv4 one must not be.
+	if (addr.Is6() && host != "["+literal+"]") || (addr.Is4() && host != literal) {
+		return "", false
+	}
+	return "http://" + host + tail, true
 }
 
 // EndUser is a registered End-User.
