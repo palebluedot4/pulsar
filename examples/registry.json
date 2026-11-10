@@ -1,0 +1,27 @@
+{
+  "resource_servers": [
+    {
+      "identifier": "https://api.example/notes",
+      "scopes": [
+        { "scope": "notes:read", "description": "read your notes" },
+        { "scope": "notes:write", "description": "add to your notes" }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "client_id": "cli",
+      "token_endpoint_auth_method": "none",
+      "redirect_uris": ["http://127.0.0.1/callback"],
+      "resource_servers": ["https://api.example/notes"]
+    }
+  ],
+  "end_users": [
+    {
+      "sub": "6f8909cd-26ca-49d5-bd35-8f34d427aa73",
+      "username": "example",
+      "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$EgP0vIsF1WFOO3a20UDabg$8P6nBOHgu1OQjMDyi6ELnfUJnZlpIlSswNyIlaDp24o",
+      "claims": { "name": "Ada Example", "preferred_username": "example" }
+    }
+  ]
+}

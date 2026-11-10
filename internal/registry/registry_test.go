@@ -99,3 +99,31 @@ func TestClientOrigins(t *testing.T) {
 		})
 	}
 }
+
+// TestCommittedRegistries checks that the registry files the conformance
+// suite and the examples run pulsar with load, and that the example
+// End-User's published password and the CLI example's loopback redirect
+// URI are accepted, since only make conformance and make examples, which
+// need Docker, would otherwise start pulsar with them.
+func TestCommittedRegistries(t *testing.T) {
+	t.Parallel()
+
+	if _, err := registry.Load("../../conformance/registry.json"); err != nil {
+		t.Errorf("Load(conformance/registry.json) error = %v, want nil", err)
+	}
+
+	reg, err := registry.Load("../../examples/registry.json")
+	if err != nil {
+		t.Fatalf("Load(examples/registry.json) error = %v, want nil", err)
+	}
+	if _, ok, err := reg.AuthenticateEndUser(t.Context(), "example", "examples-password", nil); !ok || err != nil {
+		t.Errorf("AuthenticateEndUser(example, the password examples/README.md publishes) = %t, %v; want true, nil", ok, err)
+	}
+	cli, ok := reg.Client("cli")
+	if !ok {
+		t.Fatal(`Client("cli") not found`)
+	}
+	if !cli.RedirectURI("http://127.0.0.1:49152/callback") {
+		t.Error(`cli.RedirectURI("http://127.0.0.1:49152/callback") = false, want true`)
+	}
+}

@@ -25,6 +25,16 @@ secrets and the End-User password in `config-basic.json` and
 suite runs in its development mode, whose API needs no authentication, so
 the stack publishes no port to the host.
 
+## Example credentials
+
+`examples/registry.json` registers an End-User whose password,
+`examples-password`, is published in `examples/README.md` and
+`examples/examples_test.go`, for the throwaway pulsar that `make examples`
+runs. It is for that testing only: never use it, or that registry,
+anywhere else. The `PULSAR_SECRET` of each run is generated for it and
+never committed. The stack publishes pulsar's port on the host's loopback
+interface alone.
+
 ## Supported versions
 
 Only the `main` branch is supported.

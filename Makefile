@@ -30,6 +30,11 @@ ZIZMOR_TARGET := $(patsubst arm64,aarch64,$(ARCH))-$(patsubst darwin,apple-darwi
 # graph stays the server's alone and Dependabot still updates them.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
+# The examples are a module of their own, which must not require pulsar's;
+# the gates lint, tidy, build and scan it as they do pulsar's. Its tests
+# need a running pulsar, so only make examples runs them.
+EXAMPLES := examples
+
 # Node tools are pinned, with their whole dependency tree, by pnpm-lock.yaml;
 # package.json pins pnpm itself and pnpm-workspace.yaml holds its overrides.
 # They are reinstalled when the content of those three files changes, not
@@ -45,7 +50,8 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh conforman
 .DEFAULT_GOAL := help
 .PHONY: help setup tools node-tools check verify fmt lint format-check \
 	markdown-lint shell-lint spell test tidy-check repocheck workflow-check \
-	sqlc sqlc-check dockerfile-check vulncheck build conformance hooks eval
+	sqlc sqlc-check dockerfile-check vulncheck build conformance examples \
+	hooks eval
 
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -69,6 +75,8 @@ fmt: $(GOLANGCI_LINT) $(NODE_TOOLS) ## Format everything in place
 lint: $(GOLANGCI_LINT) ## Lint Go and check its formatting
 	$(GOLANGCI_LINT) fmt --diff ./...
 	$(GOLANGCI_LINT) run ./...
+	cd $(EXAMPLES) && $(CURDIR)/$(GOLANGCI_LINT) fmt --diff ./...
+	cd $(EXAMPLES) && $(CURDIR)/$(GOLANGCI_LINT) run ./...
 
 format-check: $(NODE_TOOLS) ## Check Markdown, YAML and JSON formatting
 	$(PRETTIER) --check --log-level warn .
@@ -93,9 +101,10 @@ shell-lint: $(SHELLCHECK) ## Lint shell scripts and check their formatting
 test: ## Tests with the race detector; needs PostgreSQL at PULSAR_TEST_DATABASE_URL
 	$(GO) test -race -count=1 ./...
 
-tidy-check: ## Fail if go.mod or tools/go.mod is untidy
+tidy-check: ## Fail if go.mod, tools/go.mod or examples/go.mod is untidy
 	$(GO) mod tidy -diff
 	$(GO) -C tools mod tidy -diff
+	$(GO) -C $(EXAMPLES) mod tidy -diff
 
 # sqlc generates each domain package's query code from its queries.sql and
 # the migrations, as sqlc.yaml lists them. The generated code is committed,
@@ -129,11 +138,13 @@ workflow-check: $(ZIZMOR) ## Lint GitHub Actions workflows for errors and securi
 	$(TOOL) actionlint
 	$(ZIZMOR) --strict-collection $(if $(ZIZMOR_GITHUB_TOKEN),,--offline) .
 
-vulncheck: ## Vulnerabilities reachable from this code
+vulncheck: ## Vulnerabilities reachable from this code and the examples
 	$(TOOL) govulncheck ./...
+	$(TOOL) govulncheck -C $(EXAMPLES) ./...
 
-build: ## Build every package
+build: ## Build every package, the examples' too
 	$(GO) build ./...
+	$(GO) -C $(EXAMPLES) build ./...
 
 # The OpenID conformance suite against pulsar, in the Docker Compose stack of
 # conformance/compose.yaml, which says what runs. Every run starts from
@@ -184,6 +195,32 @@ conformance: ## Run the OpenID conformance suite's Config OP, Basic OP, Form Pos
 	trap 'exit 130' INT; trap 'exit 143' TERM; \
 	$(CONFORMANCE_COMPOSE) build; \
 	$(CONFORMANCE_COMPOSE) run --rm runner
+
+# The examples' Go tests against pulsar, in the Docker Compose stack of
+# examples/compose.yaml, which publishes pulsar on the host's loopback
+# interface at EXAMPLES_ISSUER. Every run starts from nothing, with a
+# PULSAR_SECRET generated for it and never committed. The tests reach
+# pulsar by that URL, and rotate its signing key with `pulsar keys rotate`
+# run in its container, as an operator would. If they fail, every service's
+# log is printed; however the run ends, the stack and its volumes are
+# removed, as for make conformance.
+# Needs Docker with Compose v2, openssl and Go; inside the sandbox it cannot
+# reach Docker (docs/harness.md).
+EXAMPLES_COMPOSE := docker compose --file examples/compose.yaml
+EXAMPLES_ISSUER := http://127.0.0.1:9080
+
+examples: ## Run the examples' tests against pulsar in Docker Compose; needs Docker
+	@set -e; \
+	PULSAR_SECRET="$$(openssl rand -base64 32)"; export PULSAR_SECRET; \
+	$(EXAMPLES_COMPOSE) down --volumes --remove-orphans --timeout 0; \
+	trap 'status=$$?; set +e; trap "" INT TERM; \
+		[ "$$status" -eq 0 ] || $(EXAMPLES_COMPOSE) logs --no-color; \
+		$(EXAMPLES_COMPOSE) down --volumes --remove-orphans --timeout 0' EXIT; \
+	trap 'exit 130' INT; trap 'exit 143' TERM; \
+	$(EXAMPLES_COMPOSE) up --build --detach; \
+	PULSAR_EXAMPLES_ISSUER=$(EXAMPLES_ISSUER) \
+	PULSAR_EXAMPLES_ROTATE="docker compose --file '$(CURDIR)/examples/compose.yaml' exec -T pulsar /pulsar keys rotate" \
+		$(GO) -C $(EXAMPLES) test -race -count=1 -timeout 10m ./...
 
 hooks: ## Install the repository's git hooks
 	git config core.hooksPath .githooks

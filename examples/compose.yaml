@@ -1,0 +1,48 @@
+# The stack `make examples` runs: pulsar and its PostgreSQL, with
+# registry.json. pulsar's port is published on the host's loopback
+# interface alone, where the examples' Go tests reach it by its issuer,
+# http on a loopback host as pulsar allows; nothing else is published.
+#
+# Images are pinned by tag and digest: the tag says which release, the
+# digest is what is pulled. They are bumped by hand, with a changelog entry
+# in docs/harness.md.
+#
+# make examples sets PULSAR_SECRET; run the stack through it.
+
+name: pulsar-examples
+
+services:
+  postgres:
+    # The same image as CI's test database.
+    image: postgres:17.11@sha256:653186fe15006c099d2fb3bc1d8461c1dee9d036c43f2e5fdaf4f22e5e601876
+    environment:
+      # Reachable only from this network, and removed with it.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      # Over TCP, as pulsar connects: the image's first start runs a
+      # temporary server on its Unix socket alone, which pg_isready would
+      # otherwise report as ready.
+      test:
+        ["CMD", "pg_isready", "--host", "127.0.0.1", "--username", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # The issuer and the published port are also in the Makefile's
+  # EXAMPLES_ISSUER; change them together.
+  pulsar:
+    build:
+      context: ..
+    environment:
+      PULSAR_ADDR: ":8080"
+      PULSAR_ISSUER: http://127.0.0.1:9080
+      PULSAR_DATABASE_URL: postgres://postgres@postgres:5432/postgres?sslmode=disable
+      PULSAR_SECRET: ${PULSAR_SECRET:?run through make examples}
+      PULSAR_REGISTRY: /examples/registry.json
+    volumes:
+      - ./registry.json:/examples/registry.json:ro
+    ports:
+      - "127.0.0.1:9080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy

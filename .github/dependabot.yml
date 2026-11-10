@@ -29,6 +29,18 @@ updates:
       tools:
         patterns: ["*"]
 
+  - package-ecosystem: gomod
+    directory: /examples
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: build
+    groups:
+      examples:
+        patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

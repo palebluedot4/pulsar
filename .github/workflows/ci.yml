@@ -94,3 +94,23 @@ jobs:
           # Warn, not error: a run that fails before writing any results has
           # already failed the job, with its own message.
           if-no-files-found: warn
+
+  examples:
+    name: make examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The examples' tests run on the runner, against pulsar in Compose.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: examples/go.mod
+          cache-dependency-path: examples/go.sum
+
+      # The same command a developer runs. GitHub's ubuntu-latest image has
+      # Docker Compose and openssl; Compose builds pulsar and pulls the rest.
+      - run: make examples
