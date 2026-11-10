@@ -57,10 +57,10 @@ const (
 	// another site starts (RFC 10017 §6.1.3.2, §6.1.3.3.1).
 	sessionCookie = "__Host-Http-webapp-session"
 	// flowCookie names a sign-in or a logout in progress. The browser comes
-	// back to the web app from pulsar, another site, by a navigation that
-	// a SameSite=Strict cookie would not be sent on, so it is
-	// SameSite=Lax, which is sent on a navigation by GET. It lasts as long
-	// as a flow.
+	// back to the web app from pulsar, which is another site when deployed,
+	// by a navigation that a SameSite=Strict cookie would then not be sent
+	// on, so it is SameSite=Lax, which is sent on a navigation by GET. It
+	// lasts as long as a flow.
 	flowCookie = "__Host-Http-webapp-flow"
 )
 
@@ -71,6 +71,10 @@ const flowLifetime = 10 * time.Minute
 // expiryMargin is how long before its expiry an access token is refreshed,
 // so that it does not expire on its way to the API.
 const expiryMargin = 10 * time.Second
+
+// tokenChangeTimeout bounds a refresh or a revocation at pulsar, which
+// runs to its end even if the browser's request is canceled.
+const tokenChangeTimeout = 30 * time.Second
 
 // Config is the web app's registration with pulsar, and where it finds the
 // API.
@@ -122,16 +126,19 @@ type session struct {
 	// mu is held while the tokens are read, refreshed or revoked, so that
 	// one refresh runs at a time: pulsar rotates the refresh token, and
 	// takes a used one presented again as stolen, revoking them all.
-	mu     sync.Mutex
-	token  *oauth2.Token
-	expiry time.Time // of token's access token, by Config.Now
+	mu sync.Mutex
+	// token always has a refresh token, and its Expiry is by Config.Now,
+	// from setExpiry.
+	token *oauth2.Token
 }
 
 // flow is a sign-in or a logout in progress.
 type flow struct {
 	started time.Time
-	// For a sign-in: its state, nonce and PKCE code_verifier.
+	// For a sign-in: its state, nonce and PKCE code_verifier; and the
+	// session the browser had when it started, which the new one replaces.
 	state, nonce, verifier string
+	replaces               string
 	// For a logout: the state sent to pulsar's logout endpoint.
 	logoutState string
 }
@@ -218,9 +225,12 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 // ServeHTTP serves the web app's routes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// No page the web app serves is to be cached, or to name it in the
-	// Referer of a request to another site.
+	// Referer of a request to another origin (RFC 9700 §4.2.4). Not
+	// no-referrer, under which a browser sends Origin: null on the web
+	// app's own form posts, which CrossOriginProtection refuses when the
+	// browser sends no Sec-Fetch-Site.
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "same-origin")
 	s.handler.ServeHTTP(w, r)
 }
 
@@ -228,6 +238,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // requests, as x/oauth2 and go-oidc read it.
 func (s *Server) withHTTPClient(ctx context.Context) context.Context {
 	return oidc.ClientContext(ctx, s.cfg.HTTPClient)
+}
+
+// forTokenChange returns a context, with the HTTP client, for a refresh
+// or a revocation at pulsar, made for the request whose context is ctx.
+// It is not canceled with that request, so that a browser that leaves
+// cannot make the web app lose the refresh token pulsar rotated, and
+// later present the one it replaced, which pulsar takes as stolen (RFC
+// 9700 §4.14.2); it has a timeout of its own instead.
+func (s *Server) forTokenChange(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), tokenChangeTimeout)
+	return s.withHTTPClient(ctx), cancel
 }
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +271,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	// forgery (RFC 6749 §10.12); and nonce, binding the ID token to this
 	// request (OpenID Connect Core 1.0 §3.1.2.1).
 	f := &flow{state: rand.Text(), nonce: rand.Text(), verifier: oauth2.GenerateVerifier()}
+	// The session the browser has now, if any, is ended when the new one
+	// starts. It is noted here, since the browser sends the SameSite=Strict
+	// session cookie on a navigation from the web app's own page, and,
+	// when pulsar is another site, not on the one that comes back from it.
+	if _, ok := s.session(r); ok {
+		c, _ := r.Cookie(sessionCookie)
+		f.replaces = c.Value
+	}
 	s.startFlow(w, f)
 	authURL := s.oauth.AuthCodeURL(f.state,
 		oauth2.S256ChallengeOption(f.verifier),
@@ -299,6 +328,12 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		errorPage(w, http.StatusBadGateway, "The code could not be redeemed.")
 		return
 	}
+	// Without a refresh token, the session could neither refresh its access
+	// token nor be revoked at logout: the web app needs offline access.
+	if token.RefreshToken == "" {
+		errorPage(w, http.StatusBadGateway, "pulsar issued no refresh token; the web app needs offline access.")
+		return
+	}
 	// The ID token is verified as OpenID Connect Core 1.0 §3.1.3.7 says:
 	// its signature against pulsar's JWK Set, iss, aud, exp, and nonce.
 	rawIDToken, _ := token.Extra("id_token").(string)
@@ -308,15 +343,19 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.setExpiry(token)
 	id := rand.Text()
 	s.mu.Lock()
-	s.sessions[id] = &session{subject: idToken.Subject, idToken: rawIDToken, token: token, expiry: s.expiry(token)}
+	s.sessions[id] = &session{subject: idToken.Subject, idToken: rawIDToken, token: token}
 	s.mu.Unlock()
 	setCookie(w, sessionCookie, id, 0, http.SameSiteStrictMode)
-	// The browser came here from pulsar, another site, so it would not send
-	// the SameSite=Strict session cookie on a redirect that went on from
-	// here; a page that refreshes to the home page is a navigation of the
-	// web app's own, on which it does.
+	if f.replaces != "" {
+		s.replaceSession(r.Context(), f.replaces)
+	}
+	// The browser came here from pulsar. When pulsar is another site, it
+	// would not send the SameSite=Strict session cookie on a redirect that
+	// went on from here; a page that refreshes to the home page is a
+	// navigation of the web app's own, on which it does.
 	render(w, http.StatusOK, signedInPage, nil)
 }
 
@@ -365,10 +404,12 @@ func (s *Server) addNote(w http.ResponseWriter, r *http.Request) {
 // fails, it answers w and reports false.
 func (s *Server) callAPI(w http.ResponseWriter, r *http.Request, sess *session, method string, body []byte, want int, out any) bool {
 	ctx := r.Context()
-	accessToken, err := s.accessToken(s.withHTTPClient(ctx), sess)
+	refreshCtx, cancel := s.forTokenChange(ctx)
+	accessToken, err := s.accessToken(refreshCtx, sess)
+	cancel()
 	if errors.Is(err, errRefreshRefused) {
 		s.endSession(w, r)
-		errorPage(w, http.StatusUnauthorized, "Your session has ended; sign in again.")
+		errorPage(w, http.StatusUnauthorized, "pulsar refused to refresh the access token, so your session has ended; sign in again.")
 		return false
 	}
 	if err != nil {
@@ -402,23 +443,27 @@ func (s *Server) callAPI(w http.ResponseWriter, r *http.Request, sess *session, 
 	return true
 }
 
-// errRefreshRefused is the error of accessToken when pulsar refuses the
-// session's refresh token: the session can get no more access tokens.
-var errRefreshRefused = errors.New("webapp: the refresh token was refused")
+// errRefreshRefused is the error of accessToken when the token endpoint
+// answers the refresh with an error: the session can get no more access
+// tokens.
+var errRefreshRefused = errors.New("webapp: the refresh was refused")
 
 // accessToken returns the session's access token, refreshed first if it
 // has expired, or is about to, by Config.Now. ctx carries the HTTP client.
 func (s *Server) accessToken(ctx context.Context, sess *session) (string, error) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	if s.cfg.Now().Before(sess.expiry.Add(-expiryMargin)) {
+	if s.cfg.Now().Before(sess.token.Expiry.Add(-expiryMargin)) {
 		return sess.token.AccessToken, nil
 	}
 	// A token with no access token makes the token source refresh it, with
 	// the client's credentials (RFC 6749 §6). pulsar keeps the resource of
 	// the sign-in for every refresh, so none is sent (RFC 8707 §2.2).
 	token, err := s.oauth.TokenSource(ctx, &oauth2.Token{RefreshToken: sess.token.RefreshToken}).Token()
-	if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok && re.ErrorCode == "invalid_grant" {
+	// Any error the token endpoint answers, invalid_grant or another such
+	// as invalid_client, leaves the session unable to get an access token
+	// (RFC 6749 §5.2); only a request that got no answer may succeed later.
+	if _, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
 		return "", fmt.Errorf("%w: %w", errRefreshRefused, err)
 	}
 	if err != nil {
@@ -426,15 +471,15 @@ func (s *Server) accessToken(ctx context.Context, sess *session) (string, error)
 	}
 	// The refresh token pulsar returned replaces the one redeemed, which
 	// pulsar will not accept again (RFC 9700 §4.14.2).
-	sess.token, sess.expiry = token, s.expiry(token)
+	s.setExpiry(token)
+	sess.token = token
 	return token.AccessToken, nil
 }
 
-// expiry returns when token's access token expires, by Config.Now, from
-// its expires_in: the Client does not read the access token itself (RFC
-// 6749 §1.4).
-func (s *Server) expiry(token *oauth2.Token) time.Time {
-	return s.cfg.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+// setExpiry sets token's Expiry by Config.Now, from its expires_in: the
+// Client does not read the access token itself (RFC 6749 §1.4).
+func (s *Server) setExpiry(token *oauth2.Token) {
+	token.Expiry = s.cfg.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
 }
 
 // logout revokes the session's refresh token, ends the session, and sends
@@ -446,11 +491,13 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	// Revoking the refresh token revokes its whole grant at pulsar, so no
 	// one can use it once the session ends (RFC 7009 §2.1, RFC 10017
-	// §6.1.2.3). If pulsar cannot be reached, the session is kept, so that
-	// the End-User can try again.
+	// §6.1.2.3). If the revocation fails, the session is kept, so that the
+	// End-User can try again.
+	ctx, cancel := s.forTokenChange(r.Context())
 	sess.mu.Lock()
-	err := s.revoke(s.withHTTPClient(r.Context()), sess.token.RefreshToken)
+	err := s.revoke(ctx, sess.token.RefreshToken)
 	sess.mu.Unlock()
+	cancel()
 	if err != nil {
 		errorPage(w, http.StatusBadGateway, "The refresh token could not be revoked; try again.")
 		return
@@ -532,6 +579,25 @@ func (s *Server) signedIn(w http.ResponseWriter, r *http.Request) (*session, boo
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}
 	return sess, ok
+}
+
+// replaceSession ends the session id, which a new sign-in in the same
+// browser replaces: it forgets it, and revokes its refresh token, so that
+// its grant does not outlive it (RFC 7009 §2.1). The revocation is best
+// effort: the new session starts whether or not pulsar answers.
+func (s *Server) replaceSession(ctx context.Context, id string) {
+	s.mu.Lock()
+	old, ok := s.sessions[id]
+	delete(s.sessions, id)
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	ctx, cancel := s.forTokenChange(ctx)
+	defer cancel()
+	old.mu.Lock()
+	defer old.mu.Unlock()
+	_ = s.revoke(ctx, old.token.RefreshToken)
 }
 
 // endSession forgets the session r's cookie names, and removes the cookie.

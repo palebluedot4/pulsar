@@ -62,10 +62,12 @@ Over the wire, with `x/oauth2` and `go-oidc` on the other side:
   token has expired by its clock, which the test moves forward rather than
   wait ten minutes, it refreshes it, and the API accepts the new one;
   twice, so the second refresh uses the refresh token the first returned.
-  Its logout revokes its refresh token, and sends the browser to pulsar's
-  logout endpoint with the ID token as `id_token_hint`, its
-  `post_logout_redirect_uri` and a `state`. A return with another `state`
-  is refused. The End-User confirms on pulsar's logout page, and pulsar
+  Signing in again in the same browser, on pulsar's consent page alone,
+  replaces the session, and the replaced session's last refresh token then
+  gets `invalid_grant`. Its logout revokes its refresh token, and sends
+  the browser to pulsar's logout endpoint with the ID token as
+  `id_token_hint`, its `post_logout_redirect_uri` and a `state`. A return
+  with another `state` is refused. The End-User confirms on pulsar's logout page, and pulsar
   sends them back with the `state`. Then the web app's last refresh token,
   which it never redeemed, gets `invalid_grant`, and an authorization
   request with `prompt=none` in the same browser gets `login_required`.
@@ -126,3 +128,12 @@ WEBAPP_CLIENT_SECRET=fXVx4UH6F0awyDIESJsM21sLdOr_SDTYmQfHerTUPPY \
 ```
 
 Then open `http://localhost:8082` in a browser, and sign in as `example`.
+
+There, pulsar and the web app are both on `localhost`, so the browser
+sends each one's cookies to the other: "Cookies do not provide isolation
+by port" (RFC 6265 §8.5). They are also one site, since the HTML
+Standard's "same site" compares schemes and hosts, not ports; so
+`SameSite` does not keep requests from pulsar's pages from carrying the
+web app's session cookie, as it does when the two are different sites.
+[The web app's README](webapp/README.md#what-it-does-and-why) says which
+of its checks rely on that.

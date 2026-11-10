@@ -393,10 +393,10 @@ func (r *recorder) received() []page {
 	return slices.Clone(r.pages)
 }
 
-// signInMu is held while a browser signs in, so that sign-ins happen one
-// at a time: pulsar makes more than five logins at once as one End-User
-// wait (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
-var signInMu sync.Mutex
+// loginMu is held while a browser submits pulsar's login form, so that
+// logins happen one at a time: pulsar makes more than five logins at once
+// as one End-User wait (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
+var loginMu sync.Mutex
 
 // The forms of pulsar's consent and logout pages, as a browser reads them.
 var (
@@ -412,11 +412,15 @@ const (
 )
 
 // open opens url and answers each of pulsar's pages, until the browser
-// reaches the redirect URI's page, which must answer 200.
+// reaches the page of the CLI's redirect URI, whose path is /callback,
+// which must answer 200.
 func (b *browser) open(ctx context.Context, rawURL string) error {
 	p, _, err := b.visit(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
+	}
+	if p.url.Path != "/callback" {
+		return fmt.Errorf("the browser ended at %s, not the redirect URI", p.url)
 	}
 	if p.status != http.StatusOK {
 		return fmt.Errorf("the redirect URI answered %d: %s", p.status, p.body)
@@ -430,9 +434,6 @@ func (b *browser) open(ctx context.Context, rawURL string) error {
 // page it signs out. It returns the first page pulsar does not serve, and
 // the pages of pulsar's it answered, in order.
 func (b *browser) visit(ctx context.Context, method, rawURL string, form url.Values) (page, []string, error) {
-	signInMu.Lock()
-	defer signInMu.Unlock()
-
 	pulsar, err := url.Parse(issuer)
 	if err != nil {
 		return page{}, nil, err
@@ -448,7 +449,9 @@ func (b *browser) visit(ctx context.Context, method, rawURL string, form url.Val
 		case strings.Contains(p.body, `name="password"`):
 			// The login form posts to the page's own URL.
 			answered = append(answered, loginPage)
+			loginMu.Lock()
 			p, err = send(ctx, b.client, http.MethodPost, p.url.String(), url.Values{"username": {username}, "password": {password}})
+			loginMu.Unlock()
 		case strings.Contains(p.body, `name="decision" value="allow"`):
 			answered = append(answered, consentPage)
 			p, err = b.submit(ctx, p, "allow")

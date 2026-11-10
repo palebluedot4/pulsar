@@ -31,15 +31,16 @@ const (
 // TestWebApp drives the web app as the End-User's browser would: sign-in,
 // on pulsar's login and consent pages, and calls to the API; two
 // refreshes, each once the access token has expired by the web app's
-// clock; and a logout, which the End-User confirms on pulsar's logout
-// page, back to the web app with its state.
+// clock; a second sign-in, which replaces the session; and a logout,
+// which the End-User confirms on pulsar's logout page, back to the web
+// app with its state.
 //
 // pulsar issues a refresh token for offline_access (REQ-CORE-52), and
 // rotates it on each refresh (REQ-BCP-9), with an access token the API
-// accepts, for the Resource Server of the sign-in (REQ-BCP-8). The web
-// app's logout revokes its refresh token, which pulsar then refuses
-// (REQ-REVOKE-1, REQ-REVOKE-8), and sends the End-User to pulsar's logout
-// endpoint with id_token_hint (REQ-LOGOUT-2). pulsar asks them to confirm
+// accepts, for the Resource Server of the sign-in (REQ-BCP-8). The second
+// sign-in, and the logout, each revoke the session's refresh token, which
+// pulsar then refuses (REQ-REVOKE-1, REQ-REVOKE-8). The logout sends the
+// End-User to pulsar's logout endpoint with id_token_hint (REQ-LOGOUT-2). pulsar asks them to confirm
 // (REQ-LOGOUT-8), ends their Login Session, so that prompt=none gets
 // login_required (REQ-CORE-14, REQ-CORE-29), and returns them to the
 // registered post_logout_redirect_uri with the state (REQ-LOGOUT-5,
@@ -178,6 +179,37 @@ func TestWebApp(t *testing.T) {
 	}
 	refreshed := issued[len(issued)-1]
 
+	// Signing in again in the same browser replaces the session: the web
+	// app revokes the refresh token of the one it had (REQ-REVOKE-1). The
+	// Login Session at pulsar remains, so only the consent page is shown.
+	// The web app's clock is set back first, since it checks the new ID
+	// token's exp by it.
+	ahead.Store(0)
+	callback, answered, err = b.visit(ctx, http.MethodGet, webAppURL+"/login", nil)
+	if err != nil {
+		t.Fatalf("sign in again: error = %v, want nil", err)
+	}
+	if want := []string{consentPage}; !slices.Equal(answered, want) {
+		t.Errorf("sign in again: answered pages %q, want %q", answered, want)
+	}
+	if callback.url.Path != "/callback" || callback.status != http.StatusOK {
+		t.Fatalf("sign in again: ended at %s, status %d: %s; want %s/callback, %d", callback.url, callback.status, callback.body, webAppURL, http.StatusOK)
+	}
+	issued = tokens.responses()
+	if len(issued) != 4 {
+		t.Fatalf("after signing in again, the web app's token responses = %d, want 4", len(issued))
+	}
+	again := issued[3]
+	if got := redeemRefreshToken(t, meta.TokenEndpoint, refreshed.RefreshToken); got != "invalid_grant" {
+		t.Errorf("redeemRefreshToken(the replaced session's last refresh token) = %q, want %q", got, "invalid_grant")
+	}
+	if listed := get(t, b, webAppURL+"/notes"); !strings.Contains(listed.body, "buy milk") {
+		t.Errorf("GET /notes in the new session: body = %s, want it to list buy milk", listed.body)
+	}
+	if got := b.client.Jar.Cookies(home.url); len(got) != 1 {
+		t.Errorf("after signing in again, the browser's cookies for the web app = %v, want its one session cookie", got)
+	}
+
 	// Logout: the web app sends the browser to pulsar's logout endpoint.
 	toPulsar, err := b.fetch(ctx, http.MethodPost, webAppURL+"/logout", url.Values{})
 	if err != nil {
@@ -194,8 +226,8 @@ func TestWebApp(t *testing.T) {
 		t.Errorf("POST /logout redirects to %s, want %s", got, meta.EndSessionEndpoint)
 	}
 	lq := logoutReq.Query()
-	if lq.Get("id_token_hint") != signIn.IDToken {
-		t.Errorf("POST /logout logout request id_token_hint = %q, want the ID token from sign-in, %q", lq.Get("id_token_hint"), signIn.IDToken)
+	if lq.Get("id_token_hint") != again.IDToken {
+		t.Errorf("POST /logout logout request id_token_hint = %q, want the ID token of the session's sign-in, %q", lq.Get("id_token_hint"), again.IDToken)
 	}
 	if got, want := lq.Get("post_logout_redirect_uri"), webAppURL+"/signed-out"; got != want {
 		t.Errorf("POST /logout logout request post_logout_redirect_uri = %q, want %q", got, want)
@@ -231,7 +263,7 @@ func TestWebApp(t *testing.T) {
 
 	// The refresh token the web app held when it logged out, never
 	// redeemed, is refused: it was revoked.
-	if got := redeemRefreshToken(t, meta.TokenEndpoint, refreshed.RefreshToken); got != "invalid_grant" {
+	if got := redeemRefreshToken(t, meta.TokenEndpoint, again.RefreshToken); got != "invalid_grant" {
 		t.Errorf("redeemRefreshToken(the web app's last refresh token, after logout) = %q, want %q", got, "invalid_grant")
 	}
 
@@ -266,7 +298,7 @@ func TestWebApp(t *testing.T) {
 		for _, tr := range issued {
 			for name, token := range map[string]string{"access token": tr.AccessToken, "refresh token": tr.RefreshToken, "ID token": tr.IDToken} {
 				rest := p
-				if token == signIn.IDToken {
+				if token == again.IDToken {
 					rest = withoutHint(p, token, meta.EndSessionEndpoint)
 				}
 				if token != "" && rest.holds(token) {
