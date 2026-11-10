@@ -63,7 +63,7 @@ func TestDiscovery(t *testing.T) {
 				"scopes_supported":                      []any{"openid", "profile", "email", "address", "phone", "offline_access"},
 				"response_types_supported":              []any{"code"},
 				"response_modes_supported":              []any{"query", "form_post"},
-				"grant_types_supported":                 []any{"authorization_code", "refresh_token"},
+				"grant_types_supported":                 []any{"authorization_code", "refresh_token", "client_credentials"},
 				"subject_types_supported":               []any{"public"},
 				"id_token_signing_alg_values_supported": []any{"RS256"},
 				"token_endpoint_auth_methods_supported": []any{

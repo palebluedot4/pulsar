@@ -42,7 +42,8 @@ that pulsar, as an OP, must or should meet. Issuer discovery by WebFinger
   containing a list of the OAuth 2.0 Grant Type values that this OP
   supports."
 
-  pulsar lists `authorization_code` and `refresh_token`. It is not a
+  pulsar lists `authorization_code`, `refresh_token` and
+  `client_credentials`. It is not a
   Dynamic OpenID Provider, so the requirement of that clause to support
   `implicit` does not apply.
 

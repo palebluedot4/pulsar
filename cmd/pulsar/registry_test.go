@@ -96,6 +96,19 @@ func ordersServer() entry {
 	}
 }
 
+// machineClient returns a Client in a registry file registered for
+// client_credentials alone, for ordersServer's scope.
+func machineClient() entry {
+	return entry{
+		"client_id":                  "batch",
+		"grant_types":                []string{"client_credentials"},
+		"token_endpoint_auth_method": "client_secret_basic",
+		"client_secret_hash":         testHash,
+		"resource_servers":           []string{"https://api.example/orders"},
+		"scope":                      "orders:read",
+	}
+}
+
 // registryWithResourceServers encodes a registry file of resourceServers
 // and clients, and no End-User.
 func registryWithResourceServers(t *testing.T, resourceServers, clients []entry) string {
@@ -137,6 +150,15 @@ func with(e entry, key string, value any) entry {
 // only Resource Servers registered, each once.
 // REQ-AT-5, REQ-BCP-15: no Resource Server's identifier is the issuer,
 // the default resource, whose access tokens UserInfo accepts.
+// REQ-CLIENTMETA-1, REQ-CLIENTMETA-2, REQ-CLIENTMETA-3, REQ-OAUTH-47:
+// grant_types lists client_credentials alone, or authorization_code and
+// refresh_token, each once; a machine Client, which lists
+// client_credentials, is confidential, registers no redirect or
+// post-logout redirect URIs, and lists in scope, by single spaces, scopes
+// of the Resource Servers it may request, at least one and each once; no
+// other Client lists scope.
+// REQ-AT-16, REQ-BCP-17: a machine Client's client_id, the sub of its
+// access tokens, is not a UUID, the form of every End-User's Subject.
 func TestRunRefusesRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -172,6 +194,12 @@ func TestRunRefusesRegistry(t *testing.T) {
 	billingServer := with(with(ordersServer(), "identifier", "https://api.example/billing"), "scopes", []entry{{"scope": "billing:read", "description": "read your invoices"}})
 	permitting := func(identifiers ...string) string {
 		return registryWithResourceServers(t, []entry{ordersServer()}, []entry{with(secretClient(), "resource_servers", identifiers)})
+	}
+	withMachine := func(key string, value any) string {
+		return registryWithResourceServers(t, []entry{ordersServer(), billingServer}, []entry{with(machineClient(), key, value)})
+	}
+	withGrantTypes := func(grantTypes ...string) string {
+		return registryJSON(t, []entry{with(secretClient(), "grant_types", grantTypes)}, nil)
 	}
 
 	tests := []struct {
@@ -278,6 +306,28 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "scope of another Resource Server", registry: registryWithResourceServers(t, []entry{ordersServer(), with(billingServer, "scopes", []entry{{"scope": "orders:read", "description": "x"}})}, nil), problem: "https://api.example/orders"},
 		{name: "client naming an unknown Resource Server", registry: permitting("https://api.example/billing"), problem: "resource_servers[0]"},
 		{name: "client naming a Resource Server twice", registry: permitting("https://api.example/orders", "https://api.example/orders"), problem: "resource_servers[1]"},
+		{name: "unknown grant type", registry: withGrantTypes("password"), problem: "grant_types[0]"},
+		{name: "grant type listed twice", registry: withGrantTypes("authorization_code", "authorization_code"), problem: "grant_types[1]"},
+		{name: "empty grant types", registry: withGrantTypes([]string{}...), problem: "grant_types"},
+		{name: "authorization_code alone", registry: withGrantTypes("authorization_code"), problem: "grant_types"},
+		{name: "refresh_token alone", registry: withGrantTypes("refresh_token"), problem: "grant_types"},
+		{name: "scope on a Client of the code flow", registry: registryWithResourceServers(t, []entry{ordersServer()}, []entry{with(with(secretClient(), "resource_servers", []string{"https://api.example/orders"}), "scope", "orders:read")}), problem: "scope is allowed only for client_credentials"},
+		{name: "machine client also for authorization_code", registry: withMachine("grant_types", []string{"client_credentials", "authorization_code"}), problem: "alone"},
+		{name: "machine client also for refresh_token", registry: withMachine("grant_types", []string{"refresh_token", "client_credentials"}), problem: "alone"},
+		{name: "public machine client", registry: registryWithResourceServers(t, []entry{ordersServer()}, []entry{with(with(machineClient(), "client_secret_hash", nil), "token_endpoint_auth_method", "none")}), problem: "confidential"},
+		{name: "machine client with redirect URIs", registry: withMachine("redirect_uris", []string{"https://rp.example/callback"}), problem: "redirect_uris is not allowed"},
+		{name: "machine client with post-logout redirect URIs", registry: withMachine("post_logout_redirect_uris", []string{"https://rp.example/signed-out"}), problem: "post_logout_redirect_uris is not allowed"},
+		{name: "machine client whose client_id is a Subject", registry: withMachine("client_id", "7c9e6679-7425-40de-944b-e07fc1f90ae7"), problem: "Subject"},
+		{name: "machine client without scope", registry: withMachine("scope", nil), problem: "scope is required"},
+		{name: "machine client with empty scope", registry: withMachine("scope", ""), problem: "scope is required"},
+		{name: "machine client with a scope of a Resource Server not listed", registry: withMachine("scope", "orders:read billing:read"), problem: `"billing:read"`},
+		{name: "machine client with an unknown scope", registry: withMachine("scope", "orders:write"), problem: `"orders:write"`},
+		{name: "machine client with openid", registry: withMachine("scope", "openid"), problem: `"openid"`},
+		{name: "machine client with a scope listed twice", registry: withMachine("scope", "orders:read orders:read"), problem: "listed twice"},
+		{name: "machine client with scopes separated by two spaces", registry: withMachine("scope", "orders:read  orders:read"), problem: "single spaces"},
+		{name: "machine client with a leading space", registry: withMachine("scope", " orders:read"), problem: "single spaces"},
+		{name: "machine client with a scope that is not a scope-token", registry: withMachine("scope", `orders"read`), problem: "RFC 6749"},
+		{name: "machine client without Resource Servers", registry: withMachine("resource_servers", nil), problem: `"orders:read"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -331,6 +381,12 @@ func TestRunRequiresRegistry(t *testing.T) {
 // URN, or have a query, which RFC 8707 §2 discourages without forbidding.
 // It may differ from the issuer by a trailing slash alone, since UserInfo
 // compares aud with the issuer as strings, and refuses its tokens.
+// REQ-CLIENTMETA-1, REQ-CLIENTMETA-2: a Client may list
+// authorization_code and refresh_token, in either order, as it may leave
+// grant_types out; a machine Client, by any confidential method, lists
+// scopes of each Resource Server it may request. Its client_id may be a
+// UUID in another form than a Subject's, since Subjects are compared as
+// case-sensitive strings and so can never equal it.
 func TestRunAcceptsRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -364,6 +420,9 @@ func TestRunAcceptsRegistry(t *testing.T) {
 				"https://rp.example/signed-out?tenant=a",
 				"com.example.app:/signed-out",
 			}),
+			with(with(secretClient(), "client_id", "listed"), "grant_types", []string{"refresh_token", "authorization_code"}),
+			with(with(machineClient(), "resource_servers", []string{"https://api.example/orders", "urn:example:billing"}), "scope", "orders:read https://api.example/billing.write"),
+			with(with(with(with(machineClient(), "client_id", "7C9E6679-7425-40DE-944B-E07FC1F90AE7"), "client_secret_hash", nil), "token_endpoint_auth_method", "private_key_jwt"), "jwks", jwks(t, &ecKey.PublicKey)),
 		},
 		"end_users": []entry{
 			with(endUser(), "claims", map[string]any{

@@ -35,6 +35,7 @@ var tokenParams = []string{
 const (
 	errInvalidClient        = "invalid_client"
 	errInvalidGrant         = "invalid_grant"
+	errUnauthorizedClient   = "unauthorized_client"
 	errUnsupportedGrantType = "unsupported_grant_type"
 )
 
@@ -44,7 +45,9 @@ type tokenResponse struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int64  `json:"expires_in"`
-	IDToken     string `json:"id_token"`
+	// Sent for every grant but client_credentials, which has no End-User
+	// for an ID token to be about (OpenID Connect Core 1.0 §2).
+	IDToken string `json:"id_token,omitempty"`
 	// Sent for a code issued with offline access, from which a Refresh
 	// Token Family starts (RFC 6749 §1.5), and for every refresh token of
 	// the family redeemed, replacing it.
@@ -70,7 +73,10 @@ type tokenError struct {
 // redeemed only with its code_verifier (RFC 7636 §4.6). A code issued with
 // offline access is redeemed for a refresh token too, and a refresh token
 // for new tokens of each kind (RFC 6749 §6), with the same Client
-// authentication. A public Client running in a browser may send its
+// authentication. A machine Client, one registered for client_credentials
+// alone, gets an access token of its own for a Resource Server (RFC 6749
+// §4.4). Each grant is refused with unauthorized_client to a Client not
+// registered for it. A public Client running in a browser may send its
 // requests from the origin of one of its redirect URIs (corsPolicy).
 func (p *Provider) HandleToken() http.Handler {
 	return http.HandlerFunc(p.token)
@@ -129,11 +135,27 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 		return p.exchangeCode(r, params)
 	case "refresh_token":
 		return p.exchangeRefreshToken(r, params)
+	case "client_credentials":
+		return p.exchangeClientCredentials(r, params)
 	case "":
 		return nil, badRequest(errInvalidRequest, "The parameter grant_type is required.")
 	default:
-		return nil, badRequest(errUnsupportedGrantType, "Only the grant_types authorization_code and refresh_token are supported.")
+		return nil, badRequest(errUnsupportedGrantType, "Only the grant_types authorization_code, refresh_token and client_credentials are supported.")
 	}
+}
+
+// authenticateFor authenticates the Client of a token request for grant,
+// as authenticateClient does, and refuses one not registered for grant
+// (RFC 6749 §5.2), a public Client included.
+func (p *Provider) authenticateFor(r *http.Request, params url.Values, grant registry.GrantType) (*registry.Client, *tokenError) {
+	client, tokErr := p.authenticateClient(r, params)
+	if tokErr != nil {
+		return nil, tokErr
+	}
+	if !client.AllowsGrant(grant) {
+		return nil, badRequest(errUnauthorizedClient, "The client is not registered for the grant_type "+string(grant)+".")
+	}
+	return client, nil
 }
 
 // readClientRequest returns the parameters of r, a request to the token or
@@ -182,7 +204,7 @@ func (p *Provider) exchangeCode(r *http.Request, params url.Values) (*tokenRespo
 		return nil, tokErr
 	}
 
-	client, tokErr := p.authenticateClient(r, params)
+	client, tokErr := p.authenticateFor(r, params, registry.AuthorizationCode)
 	if tokErr != nil {
 		return nil, tokErr
 	}
@@ -553,16 +575,9 @@ func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*to
 	if tokErr := resourceOnce(params); tokErr != nil {
 		return nil, tokErr
 	}
-	// Each scope value adds an access range (RFC 6749 §3.3), so one given
-	// twice is asked for once.
-	var scopes []string
-	for s := range strings.FieldsSeq(params.Get("scope")) {
-		if !slices.Contains(scopes, s) {
-			scopes = append(scopes, s)
-		}
-	}
+	scopes := requestedScopes(params)
 
-	client, tokErr := p.authenticateClient(r, params)
+	client, tokErr := p.authenticateFor(r, params, registry.RefreshToken)
 	if tokErr != nil {
 		return nil, tokErr
 	}
@@ -578,6 +593,89 @@ func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*to
 		return nil, p.serverError(r.Context(), err)
 	}
 	return resp, nil
+}
+
+// requestedScopes returns the values of a token request's scope, in the
+// order sent. Each scope value adds an access range (RFC 6749 §3.3), so
+// one given twice is asked for once.
+func requestedScopes(params url.Values) []string {
+	var scopes []string
+	for s := range strings.FieldsSeq(params.Get("scope")) {
+		if !slices.Contains(scopes, s) {
+			scopes = append(scopes, s)
+		}
+	}
+	return scopes
+}
+
+// exchangeClientCredentials authenticates the Client of a token request
+// for the client_credentials grant and issues it an access token of its
+// own (RFC 6749 §4.4), for the one Resource Server its resource names and
+// for scopes of that Resource Server it is registered for. Neither has a
+// default: a request without resource gets invalid_target (RFC 8707 §2),
+// and one without scope invalid_scope (RFC 6749 §3.3), so that a Client
+// gets only the access it asks for (RFC 9700 §2.3), as an authorization
+// request with resource does.
+//
+// The form is checked before the Client authenticates, as for the other
+// grants; then, in turn, that the Client is registered for the grant, the
+// resource, and the scope. A scope the Client is not registered for, openid
+// included, gets invalid_scope; one it is registered for, of another
+// Resource Server than resource names, invalid_target, an invalid
+// combination of resource and scope (RFC 8707 §2).
+func (p *Provider) exchangeClientCredentials(r *http.Request, params url.Values) (*tokenResponse, *tokenError) {
+	if tokErr := resourceOnce(params); tokErr != nil {
+		return nil, tokErr
+	}
+	resource := params.Get("resource")
+	if resource == "" {
+		return nil, badRequest(errInvalidTarget, "The parameter resource is required.")
+	}
+	scopes := requestedScopes(params)
+	if len(scopes) == 0 {
+		return nil, badRequest(errInvalidScope, "The parameter scope is required.")
+	}
+
+	client, tokErr := p.authenticateFor(r, params, registry.ClientCredentials)
+	if tokErr != nil {
+		return nil, tokErr
+	}
+	server, ok := p.registry.ResourceServer(client, resource)
+	switch {
+	case !ok:
+		return nil, badRequest(errInvalidTarget, "The resource must be one Resource Server registered for this client, named by its identifier.")
+	case !isSubset(scopes, client.Scopes):
+		return nil, badRequest(errInvalidScope, "The scope must include only scopes registered for this client.")
+	case slices.ContainsFunc(scopes, func(s string) bool { return !server.HasScope(s) }):
+		return nil, badRequest(errInvalidTarget, "The scope must include only scopes of the Resource Server the resource names.")
+	}
+	return p.issueClientToken(r.Context(), client, server, scopes)
+}
+
+// issueClientToken returns the token response to a machine Client's
+// request for an access token for server and scopes: an access token
+// whose sub is the Client's client_id, as RFC 9068 §2.2 says it SHOULD be
+// for this grant, and which the registry keeps from equaling any End-User's
+// Subject (docs/adr/0007-machine-clients-are-their-own-subject.md). It
+// carries no refresh token (RFC 6749 §4.4.3) and no ID token, since there
+// is no End-User. The access token is not recorded: none is looked up at
+// UserInfo, which refuses it for its aud, or at the revocation endpoint,
+// which answers it as any access token for a Resource Server, with 200 and
+// nothing revoked, so it lives until it expires, as RFC 7009 §3 has a
+// self-contained token do.
+func (p *Provider) issueClientToken(ctx context.Context, client *registry.Client, server *registry.ResourceServer, scopes []string) (*tokenResponse, *tokenError) {
+	now := time.Now()
+	exp := now.Add(TokenLifetime)
+	accessToken, err := p.signAccessToken(client, client.ID, server.Identifier, scopes, rand.Text(), now, exp)
+	if err != nil {
+		return nil, p.serverError(ctx, err)
+	}
+	return &tokenResponse{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   int64(exp.Sub(now) / time.Second),
+		Scope:       strings.Join(scopes, " "),
+	}, nil
 }
 
 // errRefreshTokenNotRedeemable is returned by refresh for a refresh token
@@ -818,17 +916,7 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 		audience = t.resource.Identifier
 		scopes = slices.DeleteFunc(slices.Clone(scopes), func(s string) bool { return !t.resource.HasScope(s) })
 	}
-	scope := strings.Join(scopes, " ")
-	accessToken, err := p.keys.SignJWT("at+jwt", accessTokenClaims{
-		Issuer:   p.issuer.String(),
-		Expiry:   exp.Unix(),
-		Audience: audience,
-		Subject:  t.subject,
-		ClientID: client.ID,
-		IssuedAt: now.Unix(),
-		JTI:      t.jti,
-		Scope:    scope,
-	})
+	accessToken, err := p.signAccessToken(client, t.subject, audience, scopes, t.jti, now, exp)
 	if err != nil {
 		return nil, err
 	}
@@ -869,8 +957,24 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 		ExpiresIn:    int64(exp.Sub(now) / time.Second),
 		IDToken:      idToken,
 		RefreshToken: t.refreshToken,
-		Scope:        scope,
+		Scope:        strings.Join(scopes, " "),
 	}, nil
+}
+
+// signAccessToken returns a JWT access token (RFC 9068 §2) issued to
+// client at now, until exp, for subject, with audience as its aud, scopes
+// as its scope, and jti.
+func (p *Provider) signAccessToken(client *registry.Client, subject, audience string, scopes []string, jti string, now, exp time.Time) (string, error) {
+	return p.keys.SignJWT("at+jwt", accessTokenClaims{
+		Issuer:   p.issuer.String(),
+		Expiry:   exp.Unix(),
+		Audience: audience,
+		Subject:  subject,
+		ClientID: client.ID,
+		IssuedAt: now.Unix(),
+		JTI:      jti,
+		Scope:    strings.Join(scopes, " "),
+	})
 }
 
 // accessTokenClaims are the claims of a JWT access token (RFC 9068 §2.2).
