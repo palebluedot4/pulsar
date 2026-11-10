@@ -56,9 +56,17 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh conforman
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
+# Every plugin enabled in .claude/settings.json is installed at project
+# scope; without an install record, right-sizing did not load at session
+# start (#68). Each install rewrites that file with the same content in
+# another order, which Prettier rejects, so it is put back byte for byte.
 setup: tools hooks ## Once per clone: tools, git hooks, and the enabled Claude Code plugins
-	claude plugin install mattpocock-skills@claude-plugins-official --scope project
-	claude plugin install right-sizing@pulsar --scope project
+	@set -e; saved=$$(mktemp "$${TMPDIR:-/tmp}/settings.json.XXXXXX"); cp .claude/settings.json "$$saved"; \
+	trap 'cp "$$saved" .claude/settings.json; rm -f "$$saved"' EXIT; \
+	for plugin in $$(jq -r '.enabledPlugins | to_entries[] | select(.value) | .key' .claude/settings.json); do \
+		echo "claude plugin install $$plugin --scope project"; \
+		claude plugin install "$$plugin" --scope project; \
+	done
 
 tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(ZIZMOR) $(NODE_TOOLS) ## Install every pinned tool
 	$(GO) -C tools mod download

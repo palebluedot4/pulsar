@@ -172,7 +172,7 @@ machine.
   `right-sizing:right-sizing` at start.
 - The install also rewrote `.claude/settings.json`, reordering its keys and
   reformatting its arrays. `jq -S` shows the content unchanged, but Prettier
-  then fails `make check` until the file is restored with `git checkout`.
+  then fails `make check` until the file is restored.
 
 This is consistent with the hypothesis above, tested on one plugin: the
 install added a record and removed the `.orphaned_at` marker, and either
@@ -180,8 +180,9 @@ could be what made it load. The marker is not the original cause, since it
 postdates the first sessions without the plugin. Why a relative-path plugin
 needed a record, against the documentation's "needs no install record", is
 **UNVERIFIED**, and so is whether the install succeeds on a fresh clone
-whose `pulsar` marketplace is not yet cloned. `make setup` now installs both
-enabled plugins at project scope.
+whose `pulsar` marketplace is not yet cloned. `make setup` now installs
+every enabled plugin at project scope and restores `.claude/settings.json`
+afterwards.
 
 Sources: <https://code.claude.com/docs/en/plugins/loading>,
 <https://code.claude.com/docs/en/plugins/org>,
