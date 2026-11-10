@@ -107,9 +107,9 @@ func TestClientOrigins(t *testing.T) {
 // suite and the examples run pulsar with load, and that the example
 // End-User's published password, the web app example's published secret,
 // the CLI example's loopback redirect URI and the worker example's
-// published private key are accepted, since only
-// make conformance and make examples, which need Docker, would otherwise
-// start pulsar with them.
+// published private key are accepted, since only make conformance and
+// make examples, which need Docker, would otherwise start pulsar with
+// them.
 func TestCommittedRegistries(t *testing.T) {
 	t.Parallel()
 

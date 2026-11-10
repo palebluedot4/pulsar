@@ -168,7 +168,7 @@ func TestWorkerCallsAPI(t *testing.T) {
 	if err := cli.AddNote(t.Context(), srv.URL, endUser.AccessToken, "the End-User's note"); err != nil {
 		t.Fatalf("cli.AddNote() error = %v, want nil", err)
 	}
-	got, err := worker.Run(t.Context(), ts, srv.URL, "the worker's note")
+	got, err := worker.Run(t.Context(), oauth2.ReuseTokenSource(nil, ts), srv.URL, "the worker's note")
 	if err != nil {
 		t.Fatalf("worker.Run() error = %v, want nil", err)
 	}

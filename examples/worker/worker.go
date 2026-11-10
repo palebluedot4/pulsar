@@ -10,13 +10,15 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -54,12 +56,10 @@ const jwtBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" //nol
 // refuses one used a second time before its exp in any case.
 const assertionLifetime = time.Minute
 
-// assertionAlgorithms are the algorithms pulsar's registry accepts for a
-// Client's key, and so the ones ParseKey accepts.
-var assertionAlgorithms = []jose.SignatureAlgorithm{jose.ES256, jose.PS256, jose.RS256}
-
 // ParseKey parses data, a private key as a JWK (RFC 7517), with the alg it
-// signs with and, if pulsar's registry gives one, its kid.
+// signs with and, if pulsar's registry gives one, its kid. The alg is one
+// pulsar's registry accepts for a Client's key: ES256, with a P-256 key,
+// or RS256 or PS256, with an RSA key.
 func ParseKey(data []byte) (*jose.JSONWebKey, error) {
 	var key jose.JSONWebKey
 	if err := key.UnmarshalJSON(data); err != nil {
@@ -68,8 +68,21 @@ func ParseKey(data []byte) (*jose.JSONWebKey, error) {
 	if !key.Valid() || key.IsPublic() {
 		return nil, errors.New("worker: the key is not a private key")
 	}
-	if !slices.Contains(assertionAlgorithms, jose.SignatureAlgorithm(key.Algorithm)) {
-		return nil, fmt.Errorf("worker: the key's alg %q is not one of %s", key.Algorithm, assertionAlgorithms)
+	// The key is of the type its alg takes, as pulsar's registry requires
+	// of its public half.
+	//
+	//exhaustive:ignore
+	switch alg := jose.SignatureAlgorithm(key.Algorithm); alg {
+	case jose.ES256:
+		if k, ok := key.Key.(*ecdsa.PrivateKey); !ok || k.Curve != elliptic.P256() {
+			return nil, fmt.Errorf("worker: alg %s takes a P-256 key", alg)
+		}
+	case jose.RS256, jose.PS256:
+		if _, ok := key.Key.(*rsa.PrivateKey); !ok {
+			return nil, fmt.Errorf("worker: alg %s takes an RSA key", alg)
+		}
+	default:
+		return nil, fmt.Errorf("worker: the key's alg %q is not one of %s, %s or %s", alg, jose.ES256, jose.PS256, jose.RS256)
 	}
 	return &key, nil
 }
@@ -78,8 +91,9 @@ func ParseKey(data []byte) (*jose.JSONWebKey, error) {
 // document at cfg.Issuer, and returns a TokenSource whose every call to
 // Token requests a new access token by the client credentials grant, with
 // a new client assertion. Wrap it in oauth2.ReuseTokenSource to use each
-// token until it expires, as Run does. ctx is used for discovery and for
-// every token request.
+// token until it expires, as cmd/worker does. ctx is used for discovery
+// and for every token request, since oauth2.TokenSource's Token takes
+// none, as with clientcredentials.Config's TokenSource: it bounds them.
 func NewTokenSource(ctx context.Context, cfg Config) (oauth2.TokenSource, error) {
 	if cfg.Key == nil {
 		return nil, errors.New("worker: the key is required")
@@ -161,12 +175,13 @@ func (s *tokenSource) assertion(now time.Time) (string, error) {
 
 // Run is one run of the job: it records a note with text in the API at
 // apiURL, then returns the notes the API keeps for the worker. It calls
-// the API with an access token from ts, which it gets once and reuses.
+// the API with an access token from ts for each request; ts should reuse
+// a token until it expires, as oauth2.ReuseTokenSource does, and then get
+// a new one, since this grant issues no refresh token (RFC 6749 §4.4.3).
 func Run(ctx context.Context, ts oauth2.TokenSource, apiURL, text string) ([]string, error) {
 	// The client sends the access token in the Authorization header (RFC
-	// 6750 §2.1), and gets a new one from ts when it expires: this grant
-	// issues no refresh token (RFC 6749 §4.4.3).
-	client := oauth2.NewClient(ctx, oauth2.ReuseTokenSource(nil, ts))
+	// 6750 §2.1).
+	client := oauth2.NewClient(ctx, ts)
 
 	b, err := json.Marshal(struct {
 		Text string `json:"text"`
