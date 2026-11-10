@@ -23,23 +23,23 @@ sandbox; if one is missing, say so rather than installing it.
 
 ## Where things live
 
-| Path                           | Contents                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------ |
-| `cmd/pulsar/`                  | `main` and `run`; wiring, signals, shutdown. Tests drive `run`.                            |
-| `internal/`                    | Packages split by domain, never by layer, never `util`.                                    |
-| `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                        |
-| `internal/harness/`            | Tests for the harness scripts that have failed before: the Stop hook and the commit check. |
-| `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                     |
-| `conformance/`                 | The conformance suite's stack, configuration and expected results; see its README.         |
-| `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                    |
-| `examples/`                    | Consumers, a separate Go module that must not require pulsar; they reach it over the wire. |
-| `docs/research/`               | Dated surveys with sources. Decisions cite them.                                           |
-| `docs/adr/`                    | Decisions, written through `/grill-with-docs`; created with the first one.                 |
-| `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                    |
-| `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                           |
-| `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                            |
-| `evals/`                       | How evals are run. Skill evals live with each plugin.                                      |
-| `docs/agents/`                 | Configuration read by the engineering skills.                                              |
+| Path                           | Contents                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `cmd/pulsar/`                  | `main` and `run`; wiring, signals, shutdown. Tests drive `run`.                                              |
+| `internal/`                    | Packages split by domain, never by layer, never `util`.                                                      |
+| `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                                          |
+| `internal/harness/`            | Tests for the harness scripts that have failed before: the Stop hook, the commit check and the plugin setup. |
+| `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                                       |
+| `conformance/`                 | The conformance suite's stack, configuration and expected results; see its README.                           |
+| `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                                      |
+| `examples/`                    | Consumers, a separate Go module that must not require pulsar; they reach it over the wire.                   |
+| `docs/research/`               | Dated surveys with sources. Decisions cite them.                                                             |
+| `docs/adr/`                    | Decisions, written through `/grill-with-docs`; created with the first one.                                   |
+| `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                                      |
+| `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                                             |
+| `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                                              |
+| `evals/`                       | How evals are run. Skill evals live with each plugin.                                                        |
+| `docs/agents/`                 | Configuration read by the engineering skills.                                                                |
 
 ## Requirements and tests
 

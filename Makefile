@@ -56,29 +56,10 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh conforman
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-# Every plugin enabled in .claude/settings.json is installed at project
-# scope; without an install record, right-sizing did not load at session
-# start (#68). The claude plugin commands do not clone the marketplaces it
-# declares, so each is added first (#92). Installs run with
-# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1, without which an install
-# refreshes the frozen official marketplace (#92). Each command rewrites
-# that file in another order, which Prettier rejects, and adding a
-# marketplace drops its autoUpdate, so the file is put back byte for byte.
-# Evidence: docs/research/code-review-tools.md.
+# The plugins .claude/settings.json enables, and the marketplaces it
+# declares, are set up by a script, which internal/harness tests (#68, #92).
 setup: tools hooks ## Once per clone: tools, git hooks, and the enabled Claude Code plugins
-	@set -e; saved=$$(mktemp "$${TMPDIR:-/tmp}/settings.json.XXXXXX"); cp .claude/settings.json "$$saved"; \
-	trap 'cp "$$saved" .claude/settings.json; rm -f "$$saved"' EXIT; \
-	export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1; \
-	repos=$$(jq -r '.extraKnownMarketplaces[].source | if .source == "github" and keys == ["repo", "source"] and (.repo | test("^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$$")) then .repo else error("make setup adds only GitHub marketplaces named by owner/repo alone") end' .claude/settings.json); \
-	plugins=$$(jq -r '.enabledPlugins | to_entries[] | select(.value) | .key' .claude/settings.json); \
-	for repo in $$repos; do \
-		echo "claude plugin marketplace add $$repo --scope project"; \
-		claude plugin marketplace add "$$repo" --scope project; \
-	done; \
-	for plugin in $$plugins; do \
-		echo "claude plugin install $$plugin --scope project"; \
-		claude plugin install "$$plugin" --scope project; \
-	done
+	scripts/setup-plugins.sh
 
 tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(ZIZMOR) $(NODE_TOOLS) ## Install every pinned tool
 	$(GO) -C tools mod download
