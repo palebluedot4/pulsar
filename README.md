@@ -206,7 +206,7 @@ whose URL, for a role that may create databases, is in
 `PULSAR_TEST_DATABASE_URL`:
 
 ```sh
-make setup     # once per clone: pinned tools, git hooks, Claude Code plugin
+make setup     # once per clone: pinned tools, git hooks, Claude Code plugins
 make verify    # what CI runs
 ```
 

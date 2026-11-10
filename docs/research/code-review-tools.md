@@ -152,6 +152,37 @@ The same applies to `right-sizing@pulsar`, which `docs/harness.md` lists as
 enabled from `main`: it has been missing from every session's initial
 listing on this machine too.
 
+**Checked on 2026-11-10 (#68), with Claude Code 2.1.319:** after an install
+at project scope, `right-sizing@pulsar` loaded at session start on this
+machine.
+
+- Before the install, `right-sizing:right-sizing` was still missing from
+  each new session's initial listing. Its cache directory, listed on
+  2026-11-10 before the install, held an `.orphaned_at` marker of
+  2026-11-09T10:39:56Z and an `.in_use` directory last modified at 10:23Z
+  that day. A marker rewritten while the plugin was in use is consistent
+  with a cleanup pass that treats a cached plugin with no install record as
+  orphaned; what rewrote it is still **UNVERIFIED**. Either way the removal
+  around 2026-11-20 that this survey expected no longer applies: the
+  install removed the marker.
+- At 06:25:36Z the maintainer ran `claude plugin install right-sizing@pulsar
+--scope project`. `installed_plugins.json` gained a project-scope record
+  for version 0.2.0 at `gitCommitSha` `c6bc31f`. The cache directory was
+  rewritten with no `.orphaned_at` marker, and the next new session listed
+  `right-sizing:right-sizing` at start.
+- The install also rewrote `.claude/settings.json`, reordering its keys and
+  reformatting its arrays. `jq -S` shows the content unchanged, but Prettier
+  then fails `make check` until the file is restored with `git checkout`.
+
+This is consistent with the hypothesis above, tested on one plugin: the
+install added a record and removed the `.orphaned_at` marker, and either
+could be what made it load. The marker is not the original cause, since it
+postdates the first sessions without the plugin. Why a relative-path plugin
+needed a record, against the documentation's "needs no install record", is
+**UNVERIFIED**, and so is whether the install succeeds on a fresh clone
+whose `pulsar` marketplace is not yet cloned. `make setup` now installs both
+enabled plugins at project scope.
+
 Sources: <https://code.claude.com/docs/en/plugins/loading>,
 <https://code.claude.com/docs/en/plugins/org>,
 <https://code.claude.com/docs/en/plugins/install>,

@@ -56,8 +56,9 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh conforman
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-setup: tools hooks ## Once per clone: tools, git hooks, and the plugin that needs an install
+setup: tools hooks ## Once per clone: tools, git hooks, and the enabled Claude Code plugins
 	claude plugin install mattpocock-skills@claude-plugins-official --scope project
+	claude plugin install right-sizing@pulsar --scope project
 
 tools: $(GOLANGCI_LINT) $(SHELLCHECK) $(ZIZMOR) $(NODE_TOOLS) ## Install every pinned tool
 	$(GO) -C tools mod download
