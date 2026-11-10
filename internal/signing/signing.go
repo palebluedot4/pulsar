@@ -136,8 +136,8 @@ type snapshot struct {
 // hintKey is the public half of a key that verifies an id_token_hint, and
 // the time from which it no longer does; zero if there is none yet.
 type hintKey struct {
-	*rsa.PublicKey
-	until time.Time
+	public *rsa.PublicKey
+	until  time.Time
 }
 
 // signer is a published key and when it starts signing.
@@ -309,10 +309,10 @@ func (s *KeySet) VerifyIDTokenHint(token string) (typ string, claims []byte, ok 
 	now := time.Now()
 	return verify(token, func(kid string) *rsa.PublicKey {
 		key, ok := snap.hints[kid]
-		if !ok || !key.until.IsZero() && !now.Before(key.until) {
+		if !ok || (!key.until.IsZero() && !now.Before(key.until)) {
 			return nil
 		}
-		return key.PublicKey
+		return key.public
 	})
 }
 
@@ -468,7 +468,7 @@ func (s *KeySet) reload(ctx context.Context) error {
 			published = now.Before(next.Add(retention))
 		}
 		if !published {
-			public := previous.hints[row.Kid].PublicKey
+			public := previous.hints[row.Kid].public
 			if public == nil {
 				key, err := s.open(row.Kid, row.SealedPrivateKey)
 				if err != nil {
@@ -476,7 +476,7 @@ func (s *KeySet) reload(ctx context.Context) error {
 				}
 				public = &key.PublicKey
 			}
-			hints[row.Kid] = hintKey{PublicKey: public, until: until}
+			hints[row.Kid] = hintKey{public: public, until: until}
 			continue
 		}
 		key, ok := previous.keys[row.Kid]
@@ -487,7 +487,7 @@ func (s *KeySet) reload(ctx context.Context) error {
 			}
 		}
 		keys[row.Kid] = key
-		hints[row.Kid] = hintKey{PublicKey: &key.PublicKey, until: until}
+		hints[row.Kid] = hintKey{public: &key.PublicKey, until: until}
 		signers = append(signers, signer{KID: row.Kid, Signer: key, from: row.ActivatesAt})
 		set.Keys = append(set.Keys, jose.JSONWebKey{
 			Key:       &key.PublicKey,
