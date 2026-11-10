@@ -648,7 +648,7 @@ func parseGrantTypes(c *Client, e clientEntry) error {
 		return fmt.Errorf("grant_types: %s must be listed alone, so that a Client acts for itself or for End-Users, never both", ClientCredentials)
 	case c.machine():
 		return parseMachineClient(c, e)
-	case len(c.GrantTypes) != len(defaultGrantTypes):
+	case !c.AllowsGrant(AuthorizationCode) || !c.AllowsGrant(RefreshToken):
 		return fmt.Errorf("grant_types must list %s alone, or %s and %s", ClientCredentials, AuthorizationCode, RefreshToken)
 	}
 	return nil

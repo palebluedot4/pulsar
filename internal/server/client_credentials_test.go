@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/go-jose/go-jose/v4"
@@ -304,6 +305,26 @@ func TestClientCredentialsErrors(t *testing.T) {
 			t.Parallel()
 			if got := tokenErrorCode(t, tokenRequest(t, handler, tt.basic.id, tt.basic.secret, tt.form), tt.wantStatus); got != tt.wantError {
 				t.Errorf("POST %s error = %q, want %q", tokenPath, got, tt.wantError)
+			}
+		})
+	}
+}
+
+// REQ-OAUTH-10, REQ-OAUTH-50: a machine Client never acts for an End-User,
+// so an authorization request naming one gets the error page, which says
+// so, and is never redirected, by GET or POST.
+func TestClientCredentialsClientAtAuthorization(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandlerWithoutDatabaseFor(t, machineRegistry(t))
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			b := &browser{t: t, handler: handler}
+			resp := b.authorize(method, clientParams("batch", rpRedirectURI))
+			wantErrorPage(t, resp, "authorization request from a machine Client")
+			if want := "not registered for the authorization code flow"; !strings.Contains(resp.body, want) {
+				t.Errorf("error page body %q, want one that contains %q", resp.body, want)
 			}
 		})
 	}

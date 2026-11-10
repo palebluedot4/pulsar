@@ -666,15 +666,16 @@ func (p *Provider) exchangeClientCredentials(r *http.Request, params url.Values)
 func (p *Provider) issueClientToken(ctx context.Context, client *registry.Client, server *registry.ResourceServer, scopes []string) (*tokenResponse, *tokenError) {
 	now := time.Now()
 	exp := now.Add(TokenLifetime)
-	accessToken, err := p.signAccessToken(client.ID, client.ID, server.Identifier, scopes, rand.Text(), now, exp)
+	scope := strings.Join(scopes, " ")
+	accessToken, err := p.signAccessToken(client.ID, client.ID, server.Identifier, scope, rand.Text(), now, exp)
 	if err != nil {
 		return nil, p.serverError(ctx, err)
 	}
 	return &tokenResponse{
 		AccessToken: accessToken,
 		TokenType:   "Bearer",
-		ExpiresIn:   int64(exp.Sub(now) / time.Second),
-		Scope:       strings.Join(scopes, " "),
+		ExpiresIn:   int64(TokenLifetime / time.Second),
+		Scope:       scope,
 	}, nil
 }
 
@@ -916,7 +917,8 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 		audience = t.resource.Identifier
 		scopes = slices.DeleteFunc(slices.Clone(scopes), func(s string) bool { return !t.resource.HasScope(s) })
 	}
-	accessToken, err := p.signAccessToken(client.ID, t.subject, audience, scopes, t.jti, now, exp)
+	scope := strings.Join(scopes, " ")
+	accessToken, err := p.signAccessToken(client.ID, t.subject, audience, scope, t.jti, now, exp)
 	if err != nil {
 		return nil, err
 	}
@@ -957,14 +959,14 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 		ExpiresIn:    int64(exp.Sub(now) / time.Second),
 		IDToken:      idToken,
 		RefreshToken: t.refreshToken,
-		Scope:        strings.Join(scopes, " "),
+		Scope:        scope,
 	}, nil
 }
 
 // signAccessToken returns a JWT access token (RFC 9068 §2) issued to
 // the Client whose client_id is clientID at now, until exp, for subject,
-// with audience as its aud, scopes as its scope, and jti.
-func (p *Provider) signAccessToken(clientID, subject, audience string, scopes []string, jti string, now, exp time.Time) (string, error) {
+// with audience as its aud, scope as its scope, and jti.
+func (p *Provider) signAccessToken(clientID, subject, audience, scope, jti string, now, exp time.Time) (string, error) {
 	return p.keys.SignJWT("at+jwt", accessTokenClaims{
 		Issuer:   p.issuer.String(),
 		Expiry:   exp.Unix(),
@@ -973,7 +975,7 @@ func (p *Provider) signAccessToken(clientID, subject, audience string, scopes []
 		ClientID: clientID,
 		IssuedAt: now.Unix(),
 		JTI:      jti,
-		Scope:    strings.Join(scopes, " "),
+		Scope:    scope,
 	})
 }
 
