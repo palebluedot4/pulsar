@@ -74,8 +74,9 @@ minutes after the bundled run started.
 ### What each entry does
 
 Someone clones pulsar, installs Claude Code, accepts the workspace trust
-dialog and runs `make setup`, which runs `claude plugin install
-mattpocock-skills@claude-plugins-official --scope project`.
+dialog and runs `make setup`, which then ran `claude plugin install
+mattpocock-skills@claude-plugins-official --scope project`. What it runs
+now, and why, is under "Checked on 2026-11-10 (#92)" below.
 
 | Entry                                                                   | Source in its marketplace                                      | What the documentation says happens                                                                                                                                                                                                                                                                                                                                  |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -185,6 +186,84 @@ the install fails with `Plugin "right-sizing" not found in marketplace
 marketplace has been cloned yet (#92). `make setup` now installs
 every enabled plugin at project scope and restores `.claude/settings.json`
 afterwards.
+
+**Checked on 2026-11-10 (#92), with Claude Code 2.1.319,** in fresh clones
+of pulsar with an empty `HOME` standing in for a fresh machine, outside any
+session. Where a marketplace had to be behind its source, its clone was
+reset one commit back.
+
+- **Trust alone does not register the marketplaces.** With the clone
+  recorded as trusted (`hasTrustDialogAccepted` in `~/.claude.json`),
+  `claude plugin marketplace list` still listed only the built-in
+  `anthropic-plugin-directory`, and the install failed as before. Neither
+  command acted on `extraKnownMarketplaces`. Whether
+  opening a session first, as the documentation describes, makes the
+  installs succeed is **UNVERIFIED**; no interactive session was run.
+- **`claude plugin marketplace add <owner/repo> --scope project` clones a
+  declared marketplace without a session.** It reported `Successfully added
+marketplace: pulsar (declared in project settings)`, after which both
+  installs succeeded. On a machine where the marketplace is already cloned
+  it reports `already on disk` and changes nothing: neither the copy, even
+  one behind its source, nor its `autoUpdate` in `known_marketplaces.json`.
+  It rewrites `.claude/settings.json`, reordered as an install does, and
+  drops both `autoUpdate` keys, so `make setup` still puts the file back.
+  On a fresh machine it records no `autoUpdate` in
+  `known_marketplaces.json`. A headless session in the trusted clone, run
+  afterwards and stopped at "Not logged in", wrote `autoUpdate: false` and
+  `true` there from `.claude/settings.json`, and left the official copy
+  where it was.
+- **`claude plugin install --marketplace <source>`**, by its `--help`, adds
+  "A marketplace not added yet … first, in user settings", which would be
+  a second declaration beside the project's. It was not needed, so it was
+  not tried, and what it does is **UNVERIFIED**.
+- **An install refreshes the marketplace it installs from, `autoUpdate`
+  notwithstanding.** With the official marketplace's copy one commit
+  behind and `autoUpdate: false` recorded, `claude plugin install
+mattpocock-skills@claude-plugins-official --scope project` moved the copy
+  to the head of `main` (`dceb15d`), whether the plugin was new or already
+  installed, when it only printed `is already installed`. Its debug log
+  shows "Successfully refreshed marketplace: claude-plugins-official", or,
+  when the copy had been refreshed moments before, "Skipping refresh …
+  refreshed 0s ago". So `make setup`, which has run an install since
+  `f5cdf21` (2026-11-05), moved the frozen marketplace on any machine
+  where it was behind, by this behavior; a run on such a machine before
+  this change was not observed. On the maintainer's machine its copy is at `dceb15d`, last
+  updated 2026-11-10T06:41Z; whether `make setup` moved it there is
+  **UNVERIFIED**.
+- **Of the three variables above that turn the background pass off, only
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` stops that refresh.** With
+  `lastUpdated` set to a week earlier, so that no throttle applied, the
+  install still refreshed the copy under `DISABLE_AUTOUPDATER=1` and
+  `DISABLE_UPDATES=1`, and did not under
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. The documentation describes
+  these variables only for the background pass, so this is observed
+  behavior of 2.1.319, not a documented contract. An earlier run that
+  seemed to show `DISABLE_UPDATES=1` holding fell inside that throttle.
+
+`make setup` now sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, adds
+every marketplace in `extraKnownMarketplaces` with `claude plugin
+marketplace add <owner/repo> --scope project`, read with jq, and then
+installs the enabled plugins. It accepts only GitHub sources named by
+`repo` alone, in `owner/repo` form, the only kind declared, and stops with
+an error on any other, including one that pins a `ref` it would not pass
+on. Run with its prerequisites
+already built (`make -o tools -o hooks setup`):
+
+| Machine                                                                                  | Result                                                                                                                           |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Fresh clone, empty `HOME`                                                                | Exit 0; both marketplaces cloned, both plugins installed at project scope, `.claude/settings.json` unchanged                     |
+| Both installed, the official copy one commit behind, `lastUpdated` a week old; run twice | Exit 0 both times; the copy stayed at `c131608`                                                                                  |
+| `mattpocock-skills` uninstalled, the official copy behind, `lastUpdated` a week old      | Exit 0; `mattpocock-skills` installed, the copy stayed at `c131608`                                                              |
+| A declared marketplace with a `url` source, or a GitHub one with a `ref`                 | Exit 2 with `make setup adds only GitHub marketplaces named by owner/repo alone`; `.claude/settings.json` restored byte for byte |
+
+Two consequences follow from the behavior above but were not run
+(**UNVERIFIED**). A plugin newly enabled from the official marketplace that
+a frozen copy does not yet list would fail to install, as `right-sizing`
+did before its marketplace was cloned, until that marketplace is updated
+on purpose (`claude plugin marketplace update claude-plugins-official`),
+which is what the freeze in `docs/harness.md` (Versions) asks for. And
+`make setup` would not refresh the `pulsar` marketplace either, leaving
+that to a session's background pass, which `autoUpdate: true` turns on.
 
 Sources: <https://code.claude.com/docs/en/plugins/loading>,
 <https://code.claude.com/docs/en/plugins/org>,
