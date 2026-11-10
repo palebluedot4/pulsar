@@ -465,6 +465,6 @@ None yet.
   because `internal/oidc` is tested over HTTP from `internal/server`, and
   one worker runs at a time, because two runs of the suite can exhaust the
   test database's connections. Go's coverage profile has no block for the
-  conditions of a `case` clause, so gremlins never mutates them; the first
-  run left 111 such mutants out of its scores, many of them PKCE, client
-  assertion and redirect URI checks.
+  conditions of a `case` clause, so gremlins never runs their mutants; the
+  first run counted 111 of them as not covered, leaving them out of test
+  efficacy, many of them PKCE, client assertion and redirect URI checks.
