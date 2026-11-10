@@ -31,8 +31,9 @@ func NewConsents(pool *pgxpool.Pool) *Consents {
 }
 
 // Covers reports whether the End-User whose Subject is subject has allowed
-// the Client clientID every one of scopes.
-func (c *Consents) Covers(ctx context.Context, subject, clientID string, scopes []string) (bool, error) {
+// the Client clientID every one of scopes, and access to the Resource
+// Server whose identifier is resourceServer, unless it is "".
+func (c *Consents) Covers(ctx context.Context, subject, clientID string, scopes []string, resourceServer string) (bool, error) {
 	allowed, err := c.queries.FindConsent(ctx, queries.FindConsentParams{Subject: subject, ClientID: clientID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -40,8 +41,11 @@ func (c *Consents) Covers(ctx context.Context, subject, clientID string, scopes 
 	if err != nil {
 		return false, fmt.Errorf("find the Consent: %w", err)
 	}
+	if resourceServer != "" && !slices.Contains(allowed.ResourceServers, resourceServer) {
+		return false, nil
+	}
 	for _, s := range scopes {
-		if !slices.Contains(allowed, s) {
+		if !slices.Contains(allowed.Scopes, s) {
 			return false, nil
 		}
 	}
@@ -53,11 +57,17 @@ func (c *Consents) Covers(ctx context.Context, subject, clientID string, scopes 
 // every request for it asks the End-User.
 const OfflineAccess = "offline_access"
 
-// Allow adds scopes, except [OfflineAccess], to what the End-User whose
-// Subject is subject has allowed the Client clientID.
-func (c *Consents) Allow(ctx context.Context, subject, clientID string, scopes []string) error {
+// Allow adds scopes, except [OfflineAccess], and access to the Resource
+// Server whose identifier is resourceServer, unless it is "", to what the
+// End-User whose Subject is subject has allowed the Client clientID.
+func (c *Consents) Allow(ctx context.Context, subject, clientID string, scopes []string, resourceServer string) error {
 	scopes = slices.DeleteFunc(slices.Clone(scopes), func(s string) bool { return s == OfflineAccess })
-	if err := c.queries.AddToConsent(ctx, queries.AddToConsentParams{Subject: subject, ClientID: clientID, Scopes: scopes}); err != nil {
+	resourceServers := []string{}
+	if resourceServer != "" {
+		resourceServers = append(resourceServers, resourceServer)
+	}
+	params := queries.AddToConsentParams{Subject: subject, ClientID: clientID, Scopes: scopes, ResourceServers: resourceServers}
+	if err := c.queries.AddToConsent(ctx, params); err != nil {
 		return fmt.Errorf("add to the Consent: %w", err)
 	}
 	return nil

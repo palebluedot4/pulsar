@@ -23,8 +23,8 @@ import (
 
 // tokenParams are the parameters of a token request that pulsar reads,
 // besides resource, which RFC 8707 §2 lets a Client repeat, and which is
-// checked apart, with its own error code (exchange). Every other parameter
-// is ignored (RFC 6749 §3.2).
+// checked apart, with its own error code (resourceOnce). Every other
+// parameter is ignored (RFC 6749 §3.2).
 var tokenParams = []string{
 	"grant_type", "code", "redirect_uri", "code_verifier", "refresh_token", "scope",
 	"client_id", "client_secret", "client_assertion_type", "client_assertion",
@@ -123,11 +123,7 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 
 	// Each grant checks the request's form before its Client
 	// authenticates, so that a malformed request does not use up a client
-	// assertion, which authenticates once. A resource may be sent once, as
-	// at the authorization endpoint (parseResource).
-	if len(params["resource"]) > 1 {
-		return nil, badRequest(errInvalidTarget, "The resource must be sent once.")
-	}
+	// assertion, which authenticates once.
 	switch params.Get("grant_type") {
 	case "authorization_code":
 		return p.exchangeCode(r, params)
@@ -181,6 +177,9 @@ func (p *Provider) exchangeCode(r *http.Request, params url.Values) (*tokenRespo
 	verifier := params.Get("code_verifier")
 	if verifier != "" && !validPKCEValue(verifier) {
 		return nil, badRequest(errInvalidGrant, "The code_verifier must be 43 to 128 unreserved characters.")
+	}
+	if tokErr := resourceOnce(params); tokErr != nil {
+		return nil, tokErr
 	}
 
 	client, tokErr := p.authenticateClient(r, params)
@@ -344,6 +343,17 @@ func (p *Provider) authenticateSecret(ctx context.Context, method registry.AuthM
 // longer in the registry.
 var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed")
 
+// resourceOnce refuses a token request that sends resource more than
+// once, as the authorization endpoint does (parseResource). Each grant
+// calls it once its other parameters are known to be well formed, so that
+// a request missing one is told so first.
+func resourceOnce(params url.Values) *tokenError {
+	if len(params["resource"]) > 1 {
+		return badRequest(errInvalidTarget, "The resource must be sent once.")
+	}
+	return nil
+}
+
 // errResourceNotGranted is returned by issueTokens and refresh for a token
 // request whose resource grantedResource refuses. resourceNotGranted
 // describes it to the Client.
@@ -476,17 +486,18 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			refused = true
 			return nil
 		}
+		// A code whose End-User has been removed from the registry is
+		// refused, as a refresh token is, and is not used up: refusing rolls
+		// back marking it redeemed, so it is redeemed if they are back
+		// within its lifetime. That comes before the resource, as in a
+		// refresh, since no resource would do.
+		if _, ok := p.registry.EndUser(row.Subject); !ok {
+			return errCodeNotRedeemable
+		}
 		// Refusing rolls back marking the code redeemed.
 		var granted bool
 		if server, granted = p.grantedResource(client, row.Resource, resource, row.Scopes); !granted {
 			return errResourceNotGranted
-		}
-		// A code whose End-User has been removed from the registry is
-		// refused, as a refresh token is, and is not used up: refusing rolls
-		// back marking it redeemed, so it is redeemed if they are back
-		// within its lifetime.
-		if _, ok := p.registry.EndUser(row.Subject); !ok {
-			return errCodeNotRedeemable
 		}
 		var userInfoClaims []byte
 		if claims, userInfoClaims, err = decodeStoredClaims(row.Claims); err != nil {
@@ -538,6 +549,9 @@ func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*to
 	refreshToken := params.Get("refresh_token")
 	if refreshToken == "" {
 		return nil, badRequest(errInvalidRequest, "The parameter refresh_token is required.")
+	}
+	if tokErr := resourceOnce(params); tokErr != nil {
+		return nil, tokErr
 	}
 	// Each scope value adds an access range (RFC 6749 §3.3), so one given
 	// twice is asked for once.

@@ -194,12 +194,14 @@ func TestResourceServerFlow(t *testing.T) {
 }
 
 // REQ-RESOURCE-3, REQ-RESOURCE-7, REQ-RESOURCE-8, REQ-AT-5, REQ-AT-13,
-// REQ-AT-14, REQ-BCP-14: the scopes a request may be granted are OpenID
-// Connect's, and those of the Resource Server its resource names; any
-// other is ignored, as a scope pulsar does not know is. So without
-// resource, a Resource Server's scope is ignored, and the access token is
-// for pulsar's UserInfo, as it is without that scope. With resource,
-// another Resource Server's scope is ignored.
+// REQ-AT-14, REQ-BCP-14, REQ-CORE-45: the scopes a request may be granted
+// are OpenID Connect's, and those of the Resource Server its resource
+// names; any other is ignored, as a scope pulsar does not know is. So
+// without resource, a Resource Server's scope is ignored, and the access
+// token is for pulsar's UserInfo, as it is without that scope. With
+// resource, another Resource Server's scope is ignored, and so are the
+// claims the claims parameter requests from UserInfo, which refuses that
+// access token: the End-User is not asked for scopes nothing can release.
 func TestResourceScopes(t *testing.T) {
 	t.Parallel()
 
@@ -208,6 +210,7 @@ func TestResourceScopes(t *testing.T) {
 		name       string
 		resource   string
 		scope      string
+		claims     string              // the claims parameter, if any
 		wantPage   []string            // the scopes the consent page lists
 		wantServer shownResourceServer // the Resource Server the consent page shows
 		want       issuedFor
@@ -223,6 +226,13 @@ func TestResourceScopes(t *testing.T) {
 			wantServer: shownResourceServer{Identifier: ordersServer, Scopes: map[string]string{"orders:read": "read your orders"}},
 			want:       issuedFor{Aud: ordersServer, Scope: "orders:read", ResponseScope: "orders:read"},
 		},
+		{
+			name: "claims requested from UserInfo", resource: ordersServer, scope: "openid orders:read",
+			claims:     `{"userinfo": {"email": null}}`,
+			wantPage:   []string{"openid", "orders:read"},
+			wantServer: shownResourceServer{Identifier: ordersServer, Scopes: map[string]string{"orders:read": "read your orders"}},
+			want:       issuedFor{Aud: ordersServer, Scope: "orders:read", ResponseScope: "orders:read"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -230,6 +240,9 @@ func TestResourceScopes(t *testing.T) {
 			params := requestWith(url.Values{"scope": {tt.scope}, "prompt": {"consent"}})
 			if tt.resource != "" {
 				params.Set("resource", tt.resource)
+			}
+			if tt.claims != "" {
+				params.Set("claims", tt.claims)
 			}
 			b := &browser{t: t, handler: handler}
 			resp := b.signIn(b.authorize(http.MethodGet, params))
@@ -248,27 +261,65 @@ func TestResourceScopes(t *testing.T) {
 	}
 }
 
+// editedRegistry returns flowRegistry with its file changed by edit, as a
+// deployment's registry is once its file is edited.
+func editedRegistry(t *testing.T, edit func(file map[string]any)) *registry.Registry {
+	t.Helper()
+	var file map[string]any
+	if err := json.Unmarshal(flowRegistryFile(t), &file); err != nil {
+		t.Fatal(err)
+	}
+	edit(file)
+	b, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := registry.Parse(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
 // REQ-CORE-16, REQ-CORE-28: a Consent covers a Resource Server's scopes as
-// it covers OpenID Connect's. A request for scopes the End-User allowed
-// skips the consent page; one for a scope of the Resource Server not yet
-// allowed shows it again.
+// it covers OpenID Connect's, for that Resource Server. A request for
+// scopes the End-User allowed skips the consent page; one for a scope of
+// the Resource Server not yet allowed shows it again, and so does one for
+// the same scopes once they belong to a Resource Server of another
+// identifier, which the End-User has not allowed.
 func TestResourceConsentRemembered(t *testing.T) {
 	t.Parallel()
 
-	b := &browser{t: t, handler: newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))}
-	request := func(scope string) url.Values {
-		return requestWith(url.Values{"scope": {scope}, "resource": {ordersServer}})
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	b := &browser{t: t, handler: newFlowHandler(t, pool)}
+	request := func(resource, scope string) url.Values {
+		return requestWith(url.Values{"scope": {scope}, "resource": {resource}})
 	}
-	wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, request("openid orders:read"))), "allow"), "first request, allowed")
-	wantCode(t, b.authorize(http.MethodGet, request("openid orders:read")), "request for the scopes allowed")
+	wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, request(ordersServer, "openid orders:read"))), "allow"), "first request, allowed")
+	wantCode(t, b.authorize(http.MethodGet, request(ordersServer, "openid orders:read")), "request for the scopes allowed")
 
-	resp := b.authorize(http.MethodGet, request("openid orders:read orders:write"))
+	resp := b.authorize(http.MethodGet, request(ordersServer, "openid orders:read orders:write"))
 	want := shownResourceServer{
 		Identifier: ordersServer,
 		Scopes:     map[string]string{"orders:read": "read your orders", "orders:write": "place orders for you"},
 	}
 	if diff := cmp.Diff(want, resourceServerOnPage(t, resp)); diff != "" {
 		t.Errorf("request for a scope not yet allowed: consent page's Resource Server mismatch (-want +got):\n%s", diff)
+	}
+
+	const renamed = "https://api.example/orders/v2"
+	b.handler = newFlowHandlerFor(t, pool, editedRegistry(t, func(file map[string]any) {
+		file["resource_servers"].([]any)[0].(map[string]any)["identifier"] = renamed
+		for _, c := range file["clients"].([]any) {
+			if client := c.(map[string]any); client["client_id"] == "rp" || client["client_id"] == "public" {
+				client["resource_servers"] = []string{renamed}
+			}
+		}
+	}))
+	resp = b.authorize(http.MethodGet, request(renamed, "openid orders:read"))
+	want = shownResourceServer{Identifier: renamed, Scopes: map[string]string{"orders:read": "read your orders"}}
+	if diff := cmp.Diff(want, resourceServerOnPage(t, resp)); diff != "" {
+		t.Errorf("request for the scopes allowed, at another identifier: consent page's Resource Server mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -285,24 +336,13 @@ func TestResourceServerNoLongerPermitted(t *testing.T) {
 	refreshToken := rpNoPKCE.offlineTokens(t, handler, "", set).RefreshToken
 	code := rpNoPKCE.offlineCode(t, handler, set)
 
-	var file map[string]any
-	if err := json.Unmarshal(flowRegistryFile(t), &file); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range file["clients"].([]any) {
-		if client := c.(map[string]any); client["client_id"] == "rp" {
-			client["resource_servers"] = []string{billingServer}
+	withdrawn := newFlowHandlerFor(t, pool, editedRegistry(t, func(file map[string]any) {
+		for _, c := range file["clients"].([]any) {
+			if client := c.(map[string]any); client["client_id"] == "rp" {
+				client["resource_servers"] = []string{billingServer}
+			}
 		}
-	}
-	b, err := json.Marshal(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reg, err := registry.Parse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	withdrawn := newFlowHandlerFor(t, pool, reg)
+	}))
 
 	tests := []struct {
 		name string
@@ -446,6 +486,67 @@ func TestResourceAuthorizationErrors(t *testing.T) {
 			}
 			if diff := cmp.Diff(want, page.params); diff != "" {
 				t.Errorf("resource %q: form-post error response mismatch (-want +got):\n%s", tt.resource, diff)
+			}
+		})
+	}
+}
+
+// REQ-OAUTH-15, REQ-OAUTH-20, REQ-RESOURCE-9: a token request's more basic
+// faults are answered before a repeated resource: a missing or unsupported
+// grant_type, or a missing code or refresh_token, gets the error it gets
+// without resource.
+func TestResourceTokenRequestMalformed(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandlerWithoutDatabase(t)
+	repeated := []string{ordersServer, billingServer}
+	tests := []struct {
+		name string
+		form url.Values
+		want string
+	}{
+		{name: "no grant_type", form: url.Values{"resource": repeated}, want: "invalid_request"},
+		{name: "grant_type client_credentials", form: url.Values{"grant_type": {"client_credentials"}, "resource": repeated}, want: "unsupported_grant_type"},
+		{name: "no code", form: url.Values{"grant_type": {"authorization_code"}, "redirect_uri": {rpRedirectURI}, "resource": repeated}, want: "invalid_request"},
+		{name: "no refresh_token", form: url.Values{"grant_type": {"refresh_token"}, "resource": repeated}, want: "invalid_request"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tokenErrorCode(t, tokenRequest(t, handler, "rp", rpSecret, tt.form), http.StatusBadRequest); got != tt.want {
+				t.Errorf("POST %s with %s and resource twice: error = %q, want %q", tokenPath, tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// REQ-OAUTH-19, REQ-RESOURCE-6: a code or refresh token whose End-User is
+// out of the registry gets invalid_grant, whatever its resource, as a
+// Client could not obtain tokens with any other.
+func TestResourceTokenEndUserRemoved(t *testing.T) {
+	t.Parallel()
+
+	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
+	handler := newFlowHandler(t, pool)
+	set := url.Values{"scope": {"openid orders:read offline_access"}, "resource": {ordersServer}}
+	refreshToken := rpNoPKCE.offlineTokens(t, handler, "", set).RefreshToken
+	code := rpNoPKCE.offlineCode(t, handler, set)
+	withoutAlice := newFlowHandlerFor(t, pool, flowRegistryWithout(t, aliceSubject))
+
+	tests := []struct {
+		name string
+		form url.Values
+	}{
+		{name: "code", form: rpNoPKCE.form(code, "")},
+		{name: "refresh token", form: refreshForm(refreshToken, "")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			form := maps.Clone(tt.form)
+			form.Set("resource", billingServer)
+			if got := tokenErrorCode(t, rpNoPKCE.redeem(t, withoutAlice, form), http.StatusBadRequest); got != "invalid_grant" {
+				t.Errorf("POST %s for a %s of an End-User removed, with another resource: error = %q, want %q", tokenPath, tt.name, got, "invalid_grant")
 			}
 		})
 	}
