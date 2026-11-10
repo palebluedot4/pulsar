@@ -36,7 +36,9 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   Authorization Server does not
   ([research](../research/logout-revocation-resources.md#rp-initiated-logout)).
 
-  Nor does a rotation end a hint early. After `pulsar keys rotate`, the
+  Nor does a rotation end a hint while a Login Session in which its key
+  signed could still last. Signing in again starts a new Login Session,
+  under the key signing then. After `pulsar keys rotate`, the
   replaced key leaves the JWK Set eleven minutes after the new key starts
   signing, but its public half still verifies a hint, and nothing else,
   until ten hours and a minute after the new key started signing. That is
