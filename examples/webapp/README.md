@@ -1,0 +1,77 @@
+# The web app example
+
+A confidential Client that runs on the server: the backend-for-frontend
+RFC 10017 §6.1 recommends for browser-based apps. It signs the End-User in
+with pulsar, keeps their tokens on the server, and gives the browser only
+cookies of its own. With the access token it gets for the API example, it
+lists and adds the End-User's notes there, and refreshes the token when it
+expires. Its logout revokes its refresh token, and sends the End-User to
+pulsar to sign out there too.
+
+| Route             | What it does                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `GET /`           | Says who is signed in, by their `sub`, or links to sign in                         |
+| `GET /login`      | Starts a sign-in, with a redirect to pulsar                                        |
+| `GET /callback`   | The redirect URI: redeems the code and starts the session                          |
+| `GET /notes`      | Lists the End-User's notes, from the API                                           |
+| `POST /notes`     | Adds a note through the API                                                        |
+| `POST /logout`    | Revokes the refresh token, ends the session, and redirects to pulsar's logout page |
+| `GET /signed-out` | The post-logout redirect URI                                                       |
+
+[`webapp.go`](webapp.go) is the code; [`cmd/webapp`](../cmd/webapp/main.go)
+serves it.
+
+## What it does, and why
+
+| Step                                                                                                                                              | Why                                                                                                                                                                                                                   | Clause                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Authenticates to pulsar with its secret, by HTTP Basic, at the token and revocation endpoints                                                     | A backend-for-frontend is a confidential Client: it can keep a secret, which a browser cannot. HTTP Basic is the method every authorization server must support                                                       | RFC 10017 §6.1.3.1; RFC 6749 §2.3.1; RFC 7009 §2.1 |
+| Sends a PKCE `code_challenge` by `S256`, and the `code_verifier` with the code                                                                    | A code injected into the web app's callback cannot be redeemed without the verifier of the request that got it                                                                                                        | RFC 9700 §2.1.1; RFC 7636 §4                       |
+| Sends a random `state`, kept on the server for this browser, and refuses a response without it, leaving the sign-in to finish                     | Another site cannot make the web app redeem a code it did not ask for                                                                                                                                                 | RFC 6749 §10.12                                    |
+| Requires `iss` in the response to be pulsar's issuer                                                                                              | pulsar's discovery document says it sends `iss`, so a response without it, or from another authorization server, is refused                                                                                           | RFC 9207 §2.4                                      |
+| Verifies the ID token with go-oidc: its signature against pulsar's JWK Set, `iss`, `aud`, `exp`; and the `nonce` it sent                          | The End-User the session is for is the one pulsar signed in for this request                                                                                                                                          | OpenID Connect Core 1.0 §3.1.2.1, §3.1.3.7         |
+| Asks for `offline_access`, with `prompt=consent`                                                                                                  | For a refresh token. pulsar ignores `offline_access` without `prompt=consent`                                                                                                                                         | OpenID Connect Core 1.0 §11                        |
+| Sends `resource`, the API's identifier, at the authorization and token endpoints, with the API's scopes                                           | The access token is then for the API, and the API accepts it                                                                                                                                                          | RFC 8707 §2.1, §2.2                                |
+| Keeps the tokens on the server. The browser holds a cookie with a random session ID, and, during a sign-in or logout, one with a random flow ID   | No token is in the browser for script, or anyone who controls the browser, to take                                                                                                                                    | RFC 10017 §6.1, §6.1.4.2                           |
+| Makes its cookies `Secure`, `HttpOnly`, `Path=/`, without `Domain`, and names them with the `__Host-Http-` prefix                                 | Sent only over a secure channel, never to script, nor to a subdomain; the prefix says it was set by HTTP, with those attributes, and a browser refuses one named so without them                                      | RFC 10017 §6.1.3.2                                 |
+| Makes its session cookie `SameSite=Strict`, and its flow cookie `SameSite=Lax`                                                                    | No other site can send a request with the session. The browser comes back from pulsar by a navigation another site started, on which only a `Lax` cookie is sent, so only the flow cookie, which holds no session, is | RFC 10017 §6.1.3.2, §6.1.3.3.1                     |
+| After the callback, refreshes to the home page with a page of its own, rather than a redirect                                                     | A redirect would continue the navigation pulsar started, which carries no `Strict` cookie; a navigation the web app's page starts does                                                                                | RFC 10017 §6.1.3.2                                 |
+| Refuses a request that is not `GET` or `HEAD` that the browser says another origin sent, with Go's `http.CrossOriginProtection`                   | The CSRF defense a backend-for-frontend must have. `SameSite` alone lets a request from another origin of the same site through                                                                                       | RFC 10017 §6.1.3.3, §6.1.3.3.1                     |
+| Calls the API with the access token in the `Authorization` header                                                                                 | The method every Resource Server must support                                                                                                                                                                         | RFC 6750 §2.1                                      |
+| Refreshes the access token when its `expires_in` has passed, by its clock, or will in ten seconds                                                 | The Client does not read the access token, which is the API's to read                                                                                                                                                 | RFC 6749 §1.4, §5.1, §6                            |
+| Stores the refresh token each refresh returns, and lets one refresh run at a time per session                                                     | pulsar rotates refresh tokens. One presented again after its replacement is taken as stolen, and revokes them all                                                                                                     | RFC 9700 §4.14.2                                   |
+| Ends the session when pulsar refuses its refresh token with `invalid_grant`                                                                       | No access token can be had without a new sign-in, so the session is of no more use                                                                                                                                    | RFC 10017 §6.1.2.2                                 |
+| Logs out only by `POST`                                                                                                                           | A link on another site cannot sign the End-User out                                                                                                                                                                   | RFC 10017 §6.1.3.3                                 |
+| At logout, revokes its refresh token at pulsar's revocation endpoint before it ends the session; keeps the session if pulsar cannot be reached    | pulsar then refuses that refresh token, and every other of its grant, so no one can use them once the session ends                                                                                                    | RFC 7009 §2.1; RFC 10017 §6.1.2.3                  |
+| Sends the End-User to pulsar's `end_session_endpoint` with `id_token_hint`, its registered `post_logout_redirect_uri` and a random `state`        | The hint tells pulsar which Client and End-User this is, so that it may redirect back; `state` is returned unchanged                                                                                                  | RP-Initiated Logout 1.0 §2, §3                     |
+| Accepts the return at its post-logout redirect URI only with the `state` it sent, from this browser, and leaves the logout to finish on any other | Only the logout it started ends there                                                                                                                                                                                 | RP-Initiated Logout 1.0 §2                         |
+| Answers every page with `Referrer-Policy: no-referrer`                                                                                            | The callback's URL, with its code, is sent to no other site in a `Referer` header                                                                                                                                     | RFC 9700 §4.2.4                                    |
+
+Every page also has `Cache-Control: no-store`, so that no page about the
+End-User is cached.
+
+The ID token passes through the browser once, by design: RP-Initiated
+Logout 1.0 §2 sends `id_token_hint` in the logout request, which the web
+app makes by redirecting the browser to pulsar. pulsar then carries it in
+the body of its own confirmation form, not in a URL. No access or refresh
+token ever reaches the browser.
+
+The home page names the End-User by their `sub`. A name would come from
+UserInfo, which accepts only access tokens for pulsar, and the web app
+holds one for the API alone.
+
+## What it does not do
+
+- It keeps sessions and their tokens in memory, without limit, until
+  logout, and loses them when it stops; a session it no longer has is
+  signed out. RFC 10017 §6.1.2.3 recommends server-side sessions only in
+  small-scale scenarios.
+- It ignores the ID token a refresh may return, and keeps the one from
+  sign-in for `id_token_hint`, which pulsar accepts after it expires.
+- It serves plain `http`, for `localhost` alone, where a browser keeps
+  `Secure` cookies: deployed, it would be `https`.
+- It does not learn that pulsar ended the End-User's Login Session
+  elsewhere: Back-Channel Logout is one of the things pulsar does not do.
+- The API accepts an access token the web app revoked until it expires, at
+  most ten minutes later: pulsar's refresh token revocation reaches no
+  Resource Server that verifies tokens itself.

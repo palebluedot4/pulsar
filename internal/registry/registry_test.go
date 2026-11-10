@@ -102,8 +102,9 @@ func TestClientOrigins(t *testing.T) {
 
 // TestCommittedRegistries checks that the registry files the conformance
 // suite and the examples run pulsar with load, and that the example
-// End-User's published password and the CLI example's loopback redirect
-// URI are accepted, since only make conformance and make examples, which
+// End-User's published password, the web app example's published secret
+// and the CLI example's loopback redirect URI are accepted, since only
+// make conformance and make examples, which
 // need Docker, would otherwise start pulsar with them.
 func TestCommittedRegistries(t *testing.T) {
 	t.Parallel()
@@ -125,6 +126,10 @@ func TestCommittedRegistries(t *testing.T) {
 	}
 	if !cli.AllowsRedirectURI("http://127.0.0.1:49152/callback") {
 		t.Error(`cli.AllowsRedirectURI("http://127.0.0.1:49152/callback") = false, want true`)
+	}
+	const webAppSecret = "fXVx4UH6F0awyDIESJsM21sLdOr_SDTYmQfHerTUPPY" //nolint:gosec // G101: published deliberately, for make examples only (SECURITY.md).
+	if _, ok, err := reg.AuthenticateClientSecret(t.Context(), registry.ClientSecretBasic, "webapp", webAppSecret); !ok || err != nil {
+		t.Errorf("AuthenticateClientSecret(client_secret_basic, webapp, the secret examples/README.md publishes) = %t, %v; want true, nil", ok, err)
 	}
 }
 
