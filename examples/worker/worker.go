@@ -125,9 +125,9 @@ func (s *tokenSource) Token() (*oauth2.Token, error) {
 		},
 		// The client_id goes in the body beside the assertion (RFC 7521
 		// §4.2), and no secret, since there is none. Left to auto-detect,
-		// x/oauth2 would first send an empty secret by HTTP Basic, and on
-		// its refusal send the same assertion again, which pulsar refuses,
-		// having seen its jti.
+		// x/oauth2 would first send an empty secret by HTTP Basic beside
+		// the assertion, which pulsar refuses as two methods at once (RFC
+		// 7521 §4.2.1), and only then try again with the body alone.
 		AuthStyle: oauth2.AuthStyleInParams,
 	}
 	tok, err := cc.Token(s.ctx)
@@ -172,24 +172,24 @@ func Run(ctx context.Context, ts oauth2.TokenSource, apiURL, text string) ([]str
 		Text string `json:"text"`
 	}{text})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("worker: %w", err)
 	}
 	if err := call(ctx, client, http.MethodPost, apiURL+"/notes", b, http.StatusCreated, nil); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("worker: record a note: %w", err)
 	}
 	var body struct {
 		Notes []string `json:"notes"`
 	}
 	if err := call(ctx, client, http.MethodGet, apiURL+"/notes", nil, http.StatusOK, &body); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("worker: list its notes: %w", err)
 	}
 	return body.Notes, nil
 }
 
 // call sends a request to the API by client, and decodes the response's
 // body into out, unless it is nil.
-func call(ctx context.Context, client *http.Client, method, url string, body []byte, want int, out any) error {
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+func call(ctx context.Context, client *http.Client, method, rawURL string, body []byte, want int, out any) error {
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -203,9 +203,9 @@ func call(ctx context.Context, client *http.Client, method, url string, body []b
 	defer resp.Body.Close() //nolint:errcheck // Closing a response body reports nothing to act on.
 	if resp.StatusCode != want {
 		if c := resp.Header.Get("WWW-Authenticate"); c != "" {
-			return fmt.Errorf("%s %s: the API answered %d: %s", method, url, resp.StatusCode, c)
+			return fmt.Errorf("the API answered %d: %s", resp.StatusCode, c)
 		}
-		return fmt.Errorf("%s %s: the API answered %d", method, url, resp.StatusCode)
+		return fmt.Errorf("the API answered %d", resp.StatusCode)
 	}
 	if out == nil {
 		return nil
