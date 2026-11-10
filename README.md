@@ -264,10 +264,9 @@ their own, which does not require pulsar's: a web app, a confidential
 Client on the server that keeps tokens from the browser; an API, a
 Resource Server that verifies pulsar's access tokens itself; and a
 command-line public Client that signs in through a loopback redirect. Both
-Clients call the API. They use only
-`golang.org/x/oauth2`, `github.com/coreos/go-oidc` and
-`github.com/go-jose/go-jose`. With Docker (and Compose v2), openssl and Go
-installed:
+Clients call the API. They use only `golang.org/x/oauth2`,
+`github.com/coreos/go-oidc` and `github.com/go-jose/go-jose`. With Docker
+(and Compose v2), openssl and Go installed:
 
 ```sh
 make examples
@@ -278,15 +277,18 @@ examples' tests against it, over the network. They show that those
 libraries work with pulsar: the web app signs in with its secret, calls
 the API, refreshes its access token twice, and at logout revokes its
 refresh token, which pulsar then refuses, and signs out at pulsar's logout
-endpoint, which returns it its `state`; no access or refresh token reaches
-the browser, and the ID token only as `id_token_hint`. The CLI signs in
-with PKCE through a loopback redirect on a port the operating system
-chose, gets an access token for the
-API with `resource`, and calls the API, which accepts it. The API refuses no
-token, a token for UserInfo, a token at its `exp` by the API's clock, a
-changed or unsigned token and an ID token with 401, and a token without the route's scope with 403; and after
-`pulsar keys rotate` it accepts tokens signed with the new key. No browser
-runs: the tests act as one with Go's HTTP client.
+endpoint, which asks the End-User to confirm and returns them with the
+web app's `state`. No response the browser receives holds an access or
+refresh token, and the ID token appears only as `id_token_hint`: in the
+`Location` of the web app's redirect to pulsar's logout endpoint, and in
+the form of pulsar's logout page. The CLI signs in with PKCE through a
+loopback redirect on a port the operating system chose, gets an access
+token for the API with `resource`, and calls the API, which accepts it.
+The API refuses no token, a token for UserInfo, a token at its `exp` by
+the API's clock, a changed or unsigned token and an ID token with 401,
+and a token without the route's scope with 403; and after `pulsar keys
+rotate` it accepts tokens signed with the new key. No browser runs: the
+tests act as one with Go's HTTP client.
 [examples/README.md](examples/README.md#what-the-tests-prove) lists what
 they do not prove. CI runs the same target on every pull request.
 

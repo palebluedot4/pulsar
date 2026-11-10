@@ -327,12 +327,39 @@ func newBrowser(t *testing.T) *browser {
 	return &browser{client: &http.Client{Jar: jar, Transport: rec, Timeout: 30 * time.Second}, recorder: rec}
 }
 
-// response is a response as it was received, with its body read.
-type response struct {
+// page is a response the browser received, with its body read.
+type page struct {
 	url    *url.URL
 	status int
 	header http.Header
 	body   string
+}
+
+// holds reports whether s appears in p's headers or body.
+func (p page) holds(s string) bool {
+	if strings.Contains(p.body, s) {
+		return true
+	}
+	for _, values := range p.header {
+		for _, v := range values {
+			if strings.Contains(v, s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readBody reads resp's body, and puts back one that reads the same bytes,
+// so that an http.RoundTripper can look at a response and pass it on.
+func readBody(resp *http.Response) ([]byte, error) {
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
 }
 
 // recorder is an http.RoundTripper that records every response next
@@ -340,8 +367,8 @@ type response struct {
 type recorder struct {
 	next http.RoundTripper
 
-	mu        sync.Mutex
-	responses []response
+	mu    sync.Mutex
+	pages []page
 }
 
 func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -349,23 +376,21 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	body, err := readBody(resp)
 	if err != nil {
 		return nil, err
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.responses = append(r.responses, response{url: req.URL, status: resp.StatusCode, header: resp.Header.Clone(), body: string(body)})
+	r.pages = append(r.pages, page{url: req.URL, status: resp.StatusCode, header: resp.Header.Clone(), body: string(body)})
 	return resp, nil
 }
 
 // received returns the responses recorded so far.
-func (r *recorder) received() []response {
+func (r *recorder) received() []page {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(r.responses)
+	return slices.Clone(r.pages)
 }
 
 // signInMu is held while a browser signs in, so that sign-ins happen one
@@ -379,10 +404,17 @@ var (
 	hiddenInput = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
 )
 
+// The pages of pulsar's that visit answers, as it reports them.
+const (
+	loginPage   = "login"
+	consentPage = "consent"
+	logoutPage  = "logout"
+)
+
 // open opens url and answers each of pulsar's pages, until the browser
 // reaches the redirect URI's page, which must answer 200.
 func (b *browser) open(ctx context.Context, rawURL string) error {
-	p, err := b.visit(ctx, http.MethodGet, rawURL, nil)
+	p, _, err := b.visit(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
@@ -392,36 +424,50 @@ func (b *browser) open(ctx context.Context, rawURL string) error {
 	return nil
 }
 
-// visit sends a request, a POST with form as its body, and answers each
-// of pulsar's pages it is led to, until it reaches a page pulsar does not
-// serve, which it returns.
-func (b *browser) visit(ctx context.Context, method, rawURL string, form url.Values) (page, error) {
+// visit sends a request, a POST with form as its body, follows redirects,
+// and answers each of pulsar's pages it is led to: on the login page it
+// signs in, on the consent page it allows the request, and on the logout
+// page it signs out. It returns the first page pulsar does not serve, and
+// the pages of pulsar's it answered, in order.
+func (b *browser) visit(ctx context.Context, method, rawURL string, form url.Values) (page, []string, error) {
 	signInMu.Lock()
 	defer signInMu.Unlock()
 
 	pulsar, err := url.Parse(issuer)
 	if err != nil {
-		return page{}, err
+		return page{}, nil, err
 	}
-	p, err := b.send(ctx, method, rawURL, form)
+	var answered []string
+	p, err := send(ctx, b.client, method, rawURL, form)
 	for range 4 {
 		switch {
 		case err != nil:
-			return page{}, err
+			return page{}, answered, err
 		case p.url.Host != pulsar.Host:
-			return p, nil
+			return p, answered, nil
 		case strings.Contains(p.body, `name="password"`):
 			// The login form posts to the page's own URL.
-			p, err = b.send(ctx, http.MethodPost, p.url.String(), url.Values{"username": {username}, "password": {password}})
+			answered = append(answered, loginPage)
+			p, err = send(ctx, b.client, http.MethodPost, p.url.String(), url.Values{"username": {username}, "password": {password}})
 		case strings.Contains(p.body, `name="decision" value="allow"`):
+			answered = append(answered, consentPage)
 			p, err = b.submit(ctx, p, "allow")
 		case strings.Contains(p.body, `name="decision" value="logout"`):
+			answered = append(answered, logoutPage)
 			p, err = b.submit(ctx, p, "logout")
 		default:
-			return page{}, fmt.Errorf("unexpected page at %s, status %d: %s", p.url, p.status, p.body)
+			return page{}, answered, fmt.Errorf("unexpected page at %s, status %d: %s", p.url, p.status, p.body)
 		}
 	}
-	return page{}, errors.New("the browser did not leave pulsar's pages")
+	return page{}, answered, errors.New("the browser did not leave pulsar's pages")
+}
+
+// fetch sends a request, a POST with form as its body, and returns its
+// response as it is: it follows no redirect, and answers no page.
+func (b *browser) fetch(ctx context.Context, method, rawURL string, form url.Values) (page, error) {
+	c := *b.client
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return send(ctx, &c, method, rawURL, form)
 }
 
 // submit submits the form of p, one of pulsar's consent or logout pages,
@@ -439,32 +485,12 @@ func (b *browser) submit(ctx context.Context, p page, decision string) (page, er
 	for _, h := range hiddenInput.FindAllStringSubmatch(p.body, -1) {
 		form.Add(html.UnescapeString(h[1]), html.UnescapeString(h[2]))
 	}
-	return b.send(ctx, http.MethodPost, action.String(), form)
+	return send(ctx, b.client, http.MethodPost, action.String(), form)
 }
 
-// page is a page the browser ended at.
-type page struct {
-	url    *url.URL
-	status int
-	header http.Header
-	body   string
-}
-
-// send sends a request, a POST with form as its body, and follows
-// redirects, returning the page it ends at.
-func (b *browser) send(ctx context.Context, method, rawURL string, form url.Values) (page, error) {
-	return b.do(ctx, b.client, method, rawURL, form)
-}
-
-// step sends a request as send does, but follows no redirect: it returns
-// the response itself.
-func (b *browser) step(ctx context.Context, method, rawURL string, form url.Values) (page, error) {
-	c := *b.client
-	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return b.do(ctx, &c, method, rawURL, form)
-}
-
-func (b *browser) do(ctx context.Context, client *http.Client, method, rawURL string, form url.Values) (page, error) {
+// send sends a request by client, a POST with form as its body, and
+// returns the page it ends at, after the redirects client follows.
+func send(ctx context.Context, client *http.Client, method, rawURL string, form url.Values) (page, error) {
 	var body io.Reader = http.NoBody
 	if form != nil {
 		body = strings.NewReader(form.Encode())

@@ -1,12 +1,11 @@
 package examples_test
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,9 +29,10 @@ const (
 )
 
 // TestWebApp drives the web app as the End-User's browser would: sign-in,
-// consent and calls to the API; two refreshes, each once the access token
-// has expired by the web app's clock; and a logout, which the End-User
-// confirms on pulsar's page, back to the web app with its state.
+// on pulsar's login and consent pages, and calls to the API; two
+// refreshes, each once the access token has expired by the web app's
+// clock; and a logout, which the End-User confirms on pulsar's logout
+// page, back to the web app with its state.
 //
 // pulsar issues a refresh token for offline_access (REQ-CORE-52), and
 // rotates it on each refresh (REQ-BCP-9), with an access token the API
@@ -45,9 +45,10 @@ const (
 // registered post_logout_redirect_uri with the state (REQ-LOGOUT-5,
 // REQ-LOGOUT-6).
 //
-// Throughout, the browser receives no access or refresh token, and the ID
-// token only as the id_token_hint of the logout request, in the web app's
-// redirect to pulsar and in pulsar's own logout page.
+// No response the browser receives holds an access or refresh token, and
+// the ID token appears only as id_token_hint: in the Location of the web
+// app's redirect to pulsar's logout endpoint, and in the form of pulsar's
+// logout page.
 func TestWebApp(t *testing.T) {
 	t.Parallel()
 
@@ -71,43 +72,85 @@ func TestWebApp(t *testing.T) {
 	b := newBrowser(t)
 	ctx := t.Context()
 
-	// Sign-in and consent, then a note added and listed through the API.
-	toAuthorize, err := b.step(ctx, http.MethodGet, webAppURL+"/login", nil)
-	if err != nil || toAuthorize.status != http.StatusSeeOther {
-		t.Fatalf("GET /login: status %d, error %v; want 303 to pulsar", toAuthorize.status, err)
+	// The authorization request: PKCE by S256, state, nonce,
+	// offline_access with prompt=consent, and resource.
+	toAuthorize, err := b.fetch(ctx, http.MethodGet, webAppURL+"/login", nil)
+	if err != nil {
+		t.Fatalf("GET /login error = %v, want nil", err)
 	}
+	if toAuthorize.status != http.StatusSeeOther {
+		t.Fatalf("GET /login status = %d, want %d", toAuthorize.status, http.StatusSeeOther)
+	}
+	authReq, err := url.Parse(toAuthorize.header.Get("Location"))
+	if err != nil {
+		t.Fatalf("GET /login Location = %q: %v", toAuthorize.header.Get("Location"), err)
+	}
+	if got := withoutQuery(authReq); got != meta.AuthorizationEndpoint {
+		t.Errorf("GET /login redirects to %s, want %s", got, meta.AuthorizationEndpoint)
+	}
+	aq := authReq.Query()
+	for name, want := range map[string]string{"code_challenge_method": "S256", "prompt": "consent", "resource": identifier} {
+		if got := aq.Get(name); got != want {
+			t.Errorf("GET /login authorization request %s = %q, want %q", name, got, want)
+		}
+	}
+	for _, name := range []string{"code_challenge", "state", "nonce"} {
+		if aq.Get(name) == "" {
+			t.Errorf("GET /login authorization request %s = \"\", want one", name)
+		}
+	}
+	if scopes := strings.Fields(aq.Get("scope")); !slices.Contains(scopes, "offline_access") {
+		t.Errorf("GET /login authorization request scope = %q, want it to hold offline_access", aq.Get("scope"))
+	}
+
 	// A response with another state is refused, and leaves the sign-in to
 	// finish.
-	forgedCallback, err := b.step(ctx, http.MethodGet, webAppURL+"/callback?code=forged&state=forged", nil)
-	if err != nil || forgedCallback.status != http.StatusBadRequest {
-		t.Errorf("GET /callback with another state: status %d, error %v; want 400", forgedCallback.status, err)
-	}
-	callback, err := b.visit(ctx, http.MethodGet, toAuthorize.header.Get("Location"), nil)
+	forgedCallback, err := b.fetch(ctx, http.MethodGet, webAppURL+"/callback?code=forged&state=forged", nil)
 	if err != nil {
-		t.Fatalf("sign in: error = %v, want nil", err)
+		t.Fatalf("GET /callback with another state: error = %v, want nil", err)
 	}
-	if callback.url.Path != "/callback" || callback.status != http.StatusOK || !strings.Contains(callback.body, `<meta http-equiv="refresh" content="0; url=/">`) {
-		t.Fatalf("sign in: ended at %s, status %d: %s; want the redirect URI, 200, refreshing to /", callback.url, callback.status, callback.body)
+	if forgedCallback.status != http.StatusBadRequest {
+		t.Errorf("GET /callback with another state: status = %d, want %d", forgedCallback.status, http.StatusBadRequest)
+	}
+
+	// Sign-in, on pulsar's login and consent pages.
+	callback, answered, err := b.visit(ctx, http.MethodGet, authReq.String(), nil)
+	if err != nil {
+		t.Fatalf("sign in at pulsar: error = %v, want nil", err)
+	}
+	if want := []string{loginPage, consentPage}; !slices.Equal(answered, want) {
+		t.Errorf("sign in at pulsar: answered pages %q, want %q", answered, want)
+	}
+	if callback.url.Path != "/callback" || callback.status != http.StatusOK {
+		t.Fatalf("sign in at pulsar: ended at %s, status %d; want %s/callback, %d", callback.url, callback.status, webAppURL, http.StatusOK)
+	}
+	if refresh := `<meta http-equiv="refresh" content="0; url=/">`; !strings.Contains(callback.body, refresh) {
+		t.Errorf("GET /callback body = %s, want it to hold %s", callback.body, refresh)
 	}
 	// The page's refresh, a navigation from the web app's own page.
-	home, err := b.send(ctx, http.MethodGet, webAppURL+"/", nil)
-	if err != nil || home.status != http.StatusOK || !strings.Contains(home.body, "Signed in as "+subject) {
-		t.Fatalf("GET / after sign-in: status %d, error %v: %s; want 200, naming %s", home.status, err, home.body, subject)
+	home := get(t, b, webAppURL+"/")
+	if want := "Signed in as " + subject; !strings.Contains(home.body, want) {
+		t.Fatalf("GET / after sign-in: body = %s, want it to hold %q", home.body, want)
 	}
 	if got := b.client.Jar.Cookies(home.url); len(got) != 1 {
-		t.Errorf("after sign-in, the browser holds cookies %v for the web app, want its one session cookie", got)
+		t.Errorf("after sign-in, the browser's cookies for the web app = %v, want its one session cookie", got)
 	}
-	notes, err := b.visit(ctx, http.MethodPost, webAppURL+"/notes", url.Values{"text": {"buy milk"}})
-	if err != nil || notes.status != http.StatusOK || !strings.Contains(notes.body, "buy milk") {
-		t.Fatalf("POST /notes: status %d, error %v: %s; want 200, listing buy milk", notes.status, err, notes.body)
+
+	// A note added and listed through the API.
+	notes, _, err := b.visit(ctx, http.MethodPost, webAppURL+"/notes", url.Values{"text": {"buy milk"}})
+	if err != nil {
+		t.Fatalf("POST /notes error = %v, want nil", err)
+	}
+	if notes.status != http.StatusOK || !strings.Contains(notes.body, "buy milk") {
+		t.Fatalf("POST /notes, then its redirect: status = %d, body = %s; want %d, listing buy milk", notes.status, notes.body, http.StatusOK)
 	}
 	issued := tokens.responses()
 	if len(issued) != 1 {
-		t.Fatalf("after sign-in, the web app got %d token responses, want 1", len(issued))
+		t.Fatalf("after sign-in, the web app's token responses = %d, want 1", len(issued))
 	}
 	signIn := issued[0]
 	if signIn.RefreshToken == "" {
-		t.Error("the token response to sign-in has no refresh_token, want one for offline_access")
+		t.Error(`the token response to sign-in: refresh_token = "", want one for offline_access`)
 	}
 
 	// The access token expires by the web app's clock; listing the notes
@@ -117,64 +160,79 @@ func TestWebApp(t *testing.T) {
 	// again, as stolen.
 	for i := range 2 {
 		ahead.Add(int64(time.Duration(signIn.ExpiresIn) * time.Second))
-		notes, err = b.visit(ctx, http.MethodGet, webAppURL+"/notes", nil)
-		if err != nil || notes.status != http.StatusOK || !strings.Contains(notes.body, "buy milk") {
-			t.Fatalf("GET /notes after the access token expired, refresh %d: status %d, error %v: %s; want 200, listing buy milk", i+1, notes.status, err, notes.body)
+		listed := get(t, b, webAppURL+"/notes")
+		if !strings.Contains(listed.body, "buy milk") {
+			t.Fatalf("GET /notes after the access token expired, refresh %d: body = %s, want it to list buy milk", i+1, listed.body)
 		}
 		issued = tokens.responses()
 		if len(issued) != i+2 {
-			t.Fatalf("after the access token expired, refresh %d: the web app got %d token responses, want %d", i+1, len(issued), i+2)
+			t.Fatalf("after the access token expired, refresh %d: the web app's token responses = %d, want %d", i+1, len(issued), i+2)
 		}
 		before, after := issued[i], issued[i+1]
 		if after.RefreshToken == "" || after.RefreshToken == before.RefreshToken {
 			t.Errorf("refresh %d: refresh_token = %q, want a new one, not %q", i+1, after.RefreshToken, before.RefreshToken)
 		}
 		if after.AccessToken == before.AccessToken {
-			t.Errorf("refresh %d: access_token is the one before, want a new one", i+1)
+			t.Errorf("refresh %d: access_token = the one before, want a new one", i+1)
 		}
 	}
 	refreshed := issued[len(issued)-1]
 
 	// Logout: the web app sends the browser to pulsar's logout endpoint.
-	toPulsar, err := b.step(ctx, http.MethodPost, webAppURL+"/logout", url.Values{})
+	toPulsar, err := b.fetch(ctx, http.MethodPost, webAppURL+"/logout", url.Values{})
 	if err != nil {
 		t.Fatalf("POST /logout error = %v, want nil", err)
 	}
-	logoutReq, err := url.Parse(toPulsar.header.Get("Location"))
-	if toPulsar.status != http.StatusSeeOther || err != nil {
-		t.Fatalf("POST /logout = %d, Location %q; want 303 to pulsar's end_session_endpoint", toPulsar.status, toPulsar.header.Get("Location"))
+	if toPulsar.status != http.StatusSeeOther {
+		t.Fatalf("POST /logout status = %d, want %d", toPulsar.status, http.StatusSeeOther)
 	}
-	q := logoutReq.Query()
-	state := q.Get("state")
-	endpoint := *logoutReq
-	endpoint.RawQuery = ""
-	if endpoint.String() != meta.EndSessionEndpoint ||
-		q.Get("id_token_hint") != signIn.IDToken || q.Get("post_logout_redirect_uri") != webAppURL+"/signed-out" || state == "" {
-		t.Errorf("POST /logout redirects to %s, want %s with the ID token from sign-in as id_token_hint, post_logout_redirect_uri %s/signed-out, and a state",
-			logoutReq, meta.EndSessionEndpoint, webAppURL)
+	logoutReq, err := url.Parse(toPulsar.header.Get("Location"))
+	if err != nil {
+		t.Fatalf("POST /logout Location = %q: %v", toPulsar.header.Get("Location"), err)
+	}
+	if got := withoutQuery(logoutReq); got != meta.EndSessionEndpoint {
+		t.Errorf("POST /logout redirects to %s, want %s", got, meta.EndSessionEndpoint)
+	}
+	lq := logoutReq.Query()
+	if lq.Get("id_token_hint") != signIn.IDToken {
+		t.Errorf("POST /logout logout request id_token_hint = %q, want the ID token from sign-in, %q", lq.Get("id_token_hint"), signIn.IDToken)
+	}
+	if got, want := lq.Get("post_logout_redirect_uri"), webAppURL+"/signed-out"; got != want {
+		t.Errorf("POST /logout logout request post_logout_redirect_uri = %q, want %q", got, want)
+	}
+	state := lq.Get("state")
+	if state == "" {
+		t.Error(`POST /logout logout request state = "", want one`)
 	}
 
 	// A return with another state is refused, and leaves the logout to
 	// finish.
-	forged, err := b.step(ctx, http.MethodGet, webAppURL+"/signed-out?state=forged", nil)
-	if err != nil || forged.status != http.StatusBadRequest {
-		t.Errorf("GET /signed-out with another state: status %d, error %v; want 400", forged.status, err)
+	forged, err := b.fetch(ctx, http.MethodGet, webAppURL+"/signed-out?state=forged", nil)
+	if err != nil {
+		t.Fatalf("GET /signed-out with another state: error = %v, want nil", err)
+	}
+	if forged.status != http.StatusBadRequest {
+		t.Errorf("GET /signed-out with another state: status = %d, want %d", forged.status, http.StatusBadRequest)
 	}
 
-	// The End-User confirms on pulsar's page, and returns with the state.
-	signedOut, err := b.visit(ctx, http.MethodGet, logoutReq.String(), nil)
+	// The End-User confirms on pulsar's logout page, and returns with the
+	// state.
+	signedOut, answered, err := b.visit(ctx, http.MethodGet, logoutReq.String(), nil)
 	if err != nil {
 		t.Fatalf("log out at pulsar: error = %v, want nil", err)
 	}
+	if want := []string{logoutPage}; !slices.Equal(answered, want) {
+		t.Errorf("log out at pulsar: answered pages %q, want %q", answered, want)
+	}
 	want := webAppURL + "/signed-out?" + url.Values{"state": {state}}.Encode()
 	if signedOut.url.String() != want || signedOut.status != http.StatusOK {
-		t.Errorf("log out at pulsar: ended at %s, status %d; want %s, 200", signedOut.url, signedOut.status, want)
+		t.Errorf("log out at pulsar: ended at %s, status %d; want %s, %d", signedOut.url, signedOut.status, want, http.StatusOK)
 	}
 
 	// The refresh token the web app held when it logged out, never
 	// redeemed, is refused: it was revoked.
 	if got := redeemRefreshToken(t, meta.TokenEndpoint, refreshed.RefreshToken); got != "invalid_grant" {
-		t.Errorf("the web app's refresh token, after logout: error = %q, want invalid_grant", got)
+		t.Errorf("redeemRefreshToken(the web app's last refresh token, after logout) = %q, want %q", got, "invalid_grant")
 	}
 
 	// The browser's Login Session at pulsar has ended.
@@ -184,31 +242,88 @@ func TestWebApp(t *testing.T) {
 		RedirectURL: webAppURL + "/callback",
 		Scopes:      []string{"openid"},
 	}
-	silent, err := b.step(ctx, http.MethodGet, authorize.AuthCodeURL("silent", oauth2.S256ChallengeOption(oauth2.GenerateVerifier()), oauth2.SetAuthURLParam("prompt", "none")), nil)
+	silent, err := b.fetch(ctx, http.MethodGet, authorize.AuthCodeURL("silent", oauth2.S256ChallengeOption(oauth2.GenerateVerifier()), oauth2.SetAuthURLParam("prompt", "none")), nil)
 	if err != nil {
 		t.Fatalf("prompt=none after logout: error = %v, want nil", err)
 	}
 	back, err := url.Parse(silent.header.Get("Location"))
-	if err != nil || !strings.HasPrefix(back.String(), webAppURL+"/callback?") || back.Query().Get("error") != "login_required" || back.Query().Get("state") != "silent" {
-		t.Errorf("prompt=none after logout: %d, Location %q; want a redirect to %s/callback with error login_required and state silent",
-			silent.status, silent.header.Get("Location"), webAppURL)
+	if err != nil {
+		t.Fatalf("prompt=none after logout: Location = %q: %v", silent.header.Get("Location"), err)
+	}
+	if got := withoutQuery(back); got != webAppURL+"/callback" {
+		t.Errorf("prompt=none after logout: redirects to %s, want %s/callback", got, webAppURL)
+	}
+	if got := back.Query().Get("error"); got != "login_required" {
+		t.Errorf("prompt=none after logout: error = %q, want %q", got, "login_required")
+	}
+	if got := back.Query().Get("state"); got != "silent" {
+		t.Errorf("prompt=none after logout: state = %q, want %q", got, "silent")
 	}
 
-	// No token reached the browser, but for the ID token as id_token_hint.
-	for _, resp := range b.recorder.received() {
+	// No token reached the browser, but for the ID token as id_token_hint,
+	// where the logout request carries it.
+	for _, p := range b.recorder.received() {
 		for _, tr := range issued {
 			for name, token := range map[string]string{"access token": tr.AccessToken, "refresh token": tr.RefreshToken, "ID token": tr.IDToken} {
-				if token == "" || !resp.holds(token) {
-					continue
+				rest := p
+				if token == signIn.IDToken {
+					rest = withoutHint(p, token, meta.EndSessionEndpoint)
 				}
-				asHint := token == signIn.IDToken &&
-					(resp.url.String() == webAppURL+"/logout" || strings.HasPrefix(resp.url.String(), meta.EndSessionEndpoint))
-				if !asHint {
-					t.Errorf("the browser received an %s in the response %d from %s", name, resp.status, resp.url)
+				if token != "" && rest.holds(token) {
+					t.Errorf("the response %d from %s holds an %s", p.status, p.url, name)
 				}
 			}
 		}
 	}
+}
+
+// get gets rawURL in b, following redirects but answering none of
+// pulsar's pages, and returns the page, which must answer 200.
+func get(t *testing.T, b *browser, rawURL string) page {
+	t.Helper()
+	p, answered, err := b.visit(t.Context(), http.MethodGet, rawURL, nil)
+	if err != nil {
+		t.Fatalf("GET %s error = %v, want nil", rawURL, err)
+	}
+	if len(answered) != 0 {
+		t.Fatalf("GET %s: answered pages %q, want none", rawURL, answered)
+	}
+	if p.status != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want %d; body: %s", rawURL, p.status, http.StatusOK, p.body)
+	}
+	return p
+}
+
+// withoutHint returns p without the places the logout request carries
+// idToken as id_token_hint: the parameter of the Location of the web app's
+// redirect to endSession, the logout endpoint, and the hidden field of
+// the form of pulsar's logout page there. Anything else of p is as it was.
+func withoutHint(p page, idToken, endSession string) page {
+	switch withoutQuery(p.url) {
+	case webAppURL + "/logout":
+		u, err := url.Parse(p.header.Get("Location"))
+		if err != nil || withoutQuery(u) != endSession {
+			return p
+		}
+		q := u.Query()
+		if q.Get("id_token_hint") != idToken {
+			return p
+		}
+		q.Del("id_token_hint")
+		u.RawQuery = q.Encode()
+		p.header = p.header.Clone()
+		p.header.Set("Location", u.String())
+	case endSession:
+		p.body = strings.ReplaceAll(p.body, `<input type="hidden" name="id_token_hint" value="`+idToken+`">`, "")
+	}
+	return p
+}
+
+// withoutQuery returns u as a string, without its query.
+func withoutQuery(u *url.URL) string {
+	v := *u
+	v.RawQuery = ""
+	return v.String()
 }
 
 // serve serves handler at addr until the test ends.
@@ -234,67 +349,49 @@ type metadata struct {
 // discover returns pulsar's discovery document.
 func discover(t *testing.T) metadata {
 	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, issuer+"/.well-known/openid-configuration", http.NoBody)
+	if err != nil {
+		t.Fatalf("http.NewRequestWithContext() error = %v, want nil", err)
+	}
 	var meta metadata
-	if status := pulsarJSON(t, http.MethodGet, issuer+"/.well-known/openid-configuration", nil, &meta); status != http.StatusOK {
-		t.Fatalf("pulsar's discovery document: status %d, want 200", status)
+	if status := doJSON(t, req, &meta); status != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want %d", req.URL, status, http.StatusOK)
 	}
 	return meta
 }
 
-// redeemRefreshToken sends refreshToken to the token endpoint, as the web
-// app would, and returns the error code of the response; "" if there is
-// none.
+// redeemRefreshToken sends refreshToken to the token endpoint with the web
+// app's credentials, as the web app would, and returns the error code of
+// the response; "" if there is none.
 func redeemRefreshToken(t *testing.T, tokenEndpoint, refreshToken string) string {
 	t.Helper()
-	var body struct {
-		Error string `json:"error"`
-	}
 	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}}
-	pulsarJSON(t, http.MethodPost, tokenEndpoint, form, &body)
-	return body.Error
-}
-
-// pulsarJSON sends a request to pulsar, a POST with form as its body and the
-// web app's credentials, and decodes the response's JSON body into out. It
-// returns the response's status.
-func pulsarJSON(t *testing.T, method, rawURL string, form url.Values, out any) int {
-	t.Helper()
-	var body io.Reader = http.NoBody
-	if form != nil {
-		body = strings.NewReader(form.Encode())
-	}
-	req, err := http.NewRequestWithContext(t.Context(), method, rawURL, body)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, tokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatalf("http.NewRequestWithContext() error = %v, want nil", err)
 	}
-	if form != nil {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.SetBasicAuth(url.QueryEscape(webAppClientID), url.QueryEscape(webAppSecret))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(url.QueryEscape(webAppClientID), url.QueryEscape(webAppSecret))
+	var body struct {
+		Error string `json:"error"`
 	}
+	doJSON(t, req, &body)
+	return body.Error
+}
+
+// doJSON sends req, and decodes the response's JSON body into out. It
+// returns the response's status.
+func doJSON(t *testing.T, req *http.Request, out any) int {
+	t.Helper()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("%s %s error = %v, want nil", method, rawURL, err)
+		t.Fatalf("%s %s error = %v, want nil", req.Method, req.URL, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // Closing a response body reports nothing to act on.
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		t.Fatalf("%s %s: the body is not JSON: %v", method, rawURL, err)
+		t.Fatalf("%s %s: decoding the body as JSON: error = %v, want nil", req.Method, req.URL, err)
 	}
 	return resp.StatusCode
-}
-
-// holds reports whether s appears in r's headers or body.
-func (r response) holds(s string) bool {
-	if strings.Contains(r.body, s) {
-		return true
-	}
-	for _, values := range r.header {
-		for _, v := range values {
-			if strings.Contains(v, s) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // tokenResponse is a successful token response, as the web app received
@@ -320,12 +417,10 @@ func (r *tokenRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	body, err := readBody(resp)
 	if err != nil {
 		return nil, err
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
 	var tr tokenResponse
 	if json.Unmarshal(body, &tr) == nil && tr.AccessToken != "" {
 		r.mu.Lock()
@@ -339,5 +434,5 @@ func (r *tokenRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
 func (r *tokenRecorder) responses() []tokenResponse {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]tokenResponse(nil), r.tokens...)
+	return slices.Clone(r.tokens)
 }

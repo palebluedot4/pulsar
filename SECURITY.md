@@ -34,8 +34,8 @@ secret is published in `examples/README.md`, `examples/webapp_test.go` and
 `internal/registry/registry_test.go`, with its Argon2id hash in the
 registry. They are for the throwaway pulsar that `make examples` runs, and
 for that testing only: never use them, or that registry, anywhere else.
-The `PULSAR_SECRET` of each run is generated for it and never committed. The stack publishes pulsar's port on the host's loopback
-interface alone.
+The `PULSAR_SECRET` of each run is generated for it and never committed.
+The stack publishes pulsar's port on the host's loopback interface alone.
 
 ## Supported versions
 
