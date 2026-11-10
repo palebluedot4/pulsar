@@ -407,11 +407,14 @@ are those of `private_key_jwt`.
   the End-User is not present (not logged in)."
 
   When the End-User allows it, the token response that redeems the code
-  carries a refresh token (REQ-OAUTH-30) and `offline_access` in its
-  `scope`. Public Clients receive one under the same rules as
-  confidential ones. The refresh token is redeemed with the
-  `refresh_token` grant (§12), for an access token that UserInfo accepts
-  whether or not the End-User has a Login Session. Discovery lists
+  carries a refresh token (REQ-OAUTH-30). Without `resource`, its `scope`
+  holds `offline_access`; with one, it holds only the Resource Server's
+  scopes, as the access token's does (REQ-RESOURCE-7, REQ-RESOURCE-8).
+  Public Clients receive one under the same rules as confidential ones.
+  The refresh token is redeemed with the `refresh_token` grant (§12), for
+  an access token for the same audience whether or not the End-User has a
+  Login Session: without `resource`, one that UserInfo accepts; with one,
+  one for that Resource Server (REQ-RESOURCE-6). Discovery lists
   `offline_access` in `scopes_supported` (REQ-DISC-6).
 
 - REQ-CORE-53 (§11): "The OP MUST always obtain consent to returning a
