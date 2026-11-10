@@ -159,17 +159,15 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		p.errorPage(w, "The authorization request names a client_id that is not registered.")
 		return
 	}
-	i := -1
-	if v := params["redirect_uri"]; len(v) == 1 {
-		i = slices.Index(client.RedirectURIs, v[0])
-	}
-	if i < 0 {
+	// The URI redirected to, and recorded with the code, is the request's:
+	// one the Client registered, or a loopback IP redirect URI it
+	// registered with the port the request names.
+	v := params["redirect_uri"]
+	if len(v) != 1 || !client.RedirectURI(v[0]) {
 		p.errorPage(w, "The authorization request's redirect_uri is not one the client registered.")
 		return
 	}
-	// The registered URI, which the request's equals, is the one
-	// redirected to.
-	redirectURI := client.RedirectURIs[i]
+	redirectURI := v[0]
 
 	// The Response Mode is read before any other parameter, so that every
 	// error from here on goes by the one requested (OpenID Connect Core 1.0

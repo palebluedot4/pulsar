@@ -66,8 +66,9 @@ const aliceClaims = `{
 // flowRegistry returns a registry of five Clients and the End-Users alice,
 // with aliceClaims, and bob: rp and other authenticate with
 // client_secret_basic, post with client_secret_post, and jwt with
-// private_key_jwt, by the public keys of jwtKeys; public is a public
-// Client. Only rp and other register post-logout redirect URIs. It has the
+// private_key_jwt, by the public keys of jwtKeys; public and loopback are
+// public Clients, loopback with loopback redirect URIs. Only rp and other
+// register post-logout redirect URIs. It has the
 // Resource Servers of resource_test.go too: rp may request ordersServer and
 // billingServer, public ordersServer, and other adminServer.
 func flowRegistry(tb testing.TB) *registry.Registry {
@@ -130,7 +131,8 @@ func flowRegistryFile(tb testing.TB) []byte {
 			{"client_id": "jwt", "token_endpoint_auth_method": "private_key_jwt", "jwks": ` + jwtJWKS(tb) + `,
 			 "redirect_uris": ["` + jwtRedirectURI + `"]},
 			{"client_id": "public", "token_endpoint_auth_method": "none", "redirect_uris": ["` + publicRedirectURI + `"],
-			 "resource_servers": ["` + ordersServer + `"]}
+			 "resource_servers": ["` + ordersServer + `"]},
+			{"client_id": "loopback", "token_endpoint_auth_method": "none", "redirect_uris": ["` + loopbackRedirectURI + `", "` + loopbackIPv6RedirectURI + `"]}
 		],
 		"end_users": [
 			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `",
@@ -566,10 +568,13 @@ func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
 	}
 }
 
-// REQ-OAUTH-5, REQ-OAUTH-10, REQ-CORE-5, REQ-BCP-2, REQ-BCP-3: a request
-// whose Client is missing or unknown, or whose redirect URI is missing or
-// differs in any character from every one the Client registered, gets an
-// error page, which may not be framed, and is never redirected.
+// REQ-OAUTH-5, REQ-OAUTH-10, REQ-CORE-5, REQ-BCP-2, REQ-BCP-3,
+// REQ-NATIVE-1: a request whose Client is missing or
+// unknown, or whose redirect URI is missing or differs in any character
+// from every one the Client registered, gets an error page, which may not
+// be framed, and is never redirected. The one exception is the port of a
+// loopback IP redirect URI (TestLoopbackRedirectURIAnyPort); a URI that
+// differs from one in anything else, or names localhost, gets the page.
 func TestAuthorizationErrorPage(t *testing.T) {
 	t.Parallel()
 
@@ -594,6 +599,26 @@ func TestAuthorizationErrorPage(t *testing.T) {
 		{name: "added query", edit: func(v url.Values) { v.Set("redirect_uri", rpRedirectURI+"?x=1") }},
 		{name: "fragment", edit: func(v url.Values) { v.Set("redirect_uri", rpRedirectURI+"#x") }},
 		{name: "different query", edit: func(v url.Values) { v.Set("redirect_uri", "https://rp.example/cb?tenant=b") }},
+		{name: "port on a redirect URI not loopback", edit: func(v url.Values) { v.Set("redirect_uri", "https://rp.example:8443/callback") }},
+		{name: "loopback, localhost", edit: asLoopback("http://localhost:49152/callback")},
+		{name: "loopback, https", edit: asLoopback("https://127.0.0.1:49152/callback")},
+		{name: "loopback, scheme in another case", edit: asLoopback("HTTP://127.0.0.1:49152/callback")},
+		{name: "loopback, another address", edit: asLoopback("http://127.0.0.2:49152/callback")},
+		{name: "loopback, IPv6 for IPv4", edit: asLoopback("http://[::1]:49152/callback")},
+		{name: "loopback, IPv4 for IPv6", edit: asLoopback("http://127.0.0.1:8000/v6/callback")},
+		{name: "loopback, IPv6 in another form", edit: asLoopback("http://[0:0:0:0:0:0:0:1]:8000/v6/callback")},
+		{name: "loopback, IPv6 with a zone", edit: asLoopback("http://[::1%25lo0]:8000/v6/callback")},
+		{name: "loopback, IPv6 unbracketed", edit: asLoopback("http://::1:8000/v6/callback")},
+		{name: "loopback, userinfo", edit: asLoopback("http://u@127.0.0.1:49152/callback")},
+		{name: "loopback, empty port", edit: asLoopback("http://127.0.0.1:/callback")},
+		{name: "loopback, port 0", edit: asLoopback("http://127.0.0.1:0/callback")},
+		{name: "loopback, port out of range", edit: asLoopback("http://127.0.0.1:65536/callback")},
+		{name: "loopback, port not a number", edit: asLoopback("http://127.0.0.1:+80/callback")},
+		{name: "loopback, another path", edit: asLoopback("http://127.0.0.1:49152/callbac")},
+		{name: "loopback, trailing slash", edit: asLoopback("http://127.0.0.1:49152/callback/")},
+		{name: "loopback, added query", edit: asLoopback("http://127.0.0.1:49152/callback?x=1")},
+		{name: "loopback, fragment", edit: asLoopback("http://127.0.0.1:49152/callback#x")},
+		{name: "loopback, another Client's", edit: func(v url.Values) { v.Set("redirect_uri", "http://127.0.0.1:49152/callback") }},
 	}
 	for _, tt := range tests {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {

@@ -9,6 +9,10 @@ remembers the scopes an End-User allows each Client, and the authorization
 code flow, with `prompt` and `max_age`, to an ID token and access token for
 Clients that authenticate with `client_secret_basic`, `client_secret_post` or
 `private_key_jwt`, and for public Clients, which must use PKCE with `S256`. A
+redirect URI must equal one the Client registered, character for character,
+but for the port of a loopback IP redirect URI such as
+`http://127.0.0.1/callback`, which a native app may name with any port, as
+RFC 8252 §7.3 requires; a `localhost` URI gets no such exception. A
 Client may send `response_mode=form_post` once, with an `http` or `https`
 redirect URI: every response pulsar sends to that URI, the code or an error,
 then arrives in the body of a POST, from a page that submits itself by a
