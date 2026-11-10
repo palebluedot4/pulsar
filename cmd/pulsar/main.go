@@ -135,6 +135,15 @@ func run(ctx context.Context, args []string, getenv func(string) string, _ io.Re
 	if err != nil {
 		return fmt.Errorf("load the registry at PULSAR_REGISTRY: %w", err)
 	}
+	// The issuer is the default resource, for UserInfo (RFC 9068 §3). An
+	// access token for a Resource Server of that identifier would name the
+	// issuer in aud and pass at UserInfo, which no access token for a
+	// Resource Server may (RFC 9700 §2.3). UserInfo compares aud with the
+	// issuer as this string, exactly, so the registry is checked the same
+	// way.
+	if issuer := cfg.Issuer.String(); reg.HasResourceServer(issuer) {
+		return fmt.Errorf("load the registry at PULSAR_REGISTRY: a Resource Server's identifier is PULSAR_ISSUER, %q, which only UserInfo's access tokens may name in aud", issuer)
+	}
 	var tlsConfig *tls.Config
 	if cfg.TLSCertFile != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)

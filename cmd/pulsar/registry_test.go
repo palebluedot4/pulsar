@@ -135,6 +135,8 @@ func with(e entry, key string, value any) entry {
 // without a fragment, registered once, and its scopes are its own: none
 // is one of OpenID Connect's or another Resource Server's. A Client lists
 // only Resource Servers registered, each once.
+// REQ-AT-5, REQ-BCP-15: no Resource Server's identifier is the issuer,
+// the default resource, whose access tokens UserInfo accepts.
 func TestRunRefusesRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +260,7 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "https identifier without host", registry: withIdentifier("https:///orders"), problem: "no host"},
 		{name: "duplicate identifier", registry: registryWithResourceServers(t, []entry{ordersServer(), with(billingServer, "identifier", "https://api.example/orders")}, nil), problem: "identifier \"https://api.example/orders\" is not unique"},
 		{name: "misspelled Resource Server member", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scope", []string{"orders:read"})}, nil), problem: "scope"},
+		{name: "identifier that is the issuer", registry: withIdentifier(loopbackIssuer), problem: "PULSAR_ISSUER"},
 		{name: "Resource Server without scopes", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", nil)}, nil), problem: "at least one scope"},
 		{name: "Resource Server with empty scopes", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", []entry{})}, nil), problem: "at least one scope"},
 		{name: "scope without value", registry: withScope(entry{"description": "read your orders"}), problem: "scope is required"},
@@ -323,9 +326,11 @@ func TestRunRequiresRegistry(t *testing.T) {
 // pulsar starts with a registry of each kind of Client and an End-User
 // with claims.
 //
-// REQ-OAUTH-1, REQ-CORE-1, REQ-LOGOUT-10, REQ-RESOURCE-1: the forms the
-// refusals above allow. A Resource Server's identifier may be a URN, or
-// have a query, which RFC 8707 §2 discourages without forbidding.
+// REQ-OAUTH-1, REQ-CORE-1, REQ-LOGOUT-10, REQ-RESOURCE-1, REQ-AT-5: the
+// forms the refusals above allow. A Resource Server's identifier may be a
+// URN, or have a query, which RFC 8707 §2 discourages without forbidding.
+// It may differ from the issuer by a trailing slash alone, since UserInfo
+// compares aud with the issuer as strings, and refuses its tokens.
 func TestRunAcceptsRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -344,6 +349,7 @@ func TestRunAcceptsRegistry(t *testing.T) {
 				{"scope": "https://api.example/billing.write", "description": "pay your invoices"},
 			}},
 			{"identifier": "https://api.example/reports?tenant=a", "scopes": []entry{{"scope": "reports", "description": "read your reports"}}},
+			{"identifier": loopbackIssuer + "/", "scopes": []entry{{"scope": "local", "description": "use the local service"}}},
 		},
 		"clients": []entry{
 			with(secretClient(), "resource_servers", []string{"https://api.example/orders", "urn:example:billing"}),
