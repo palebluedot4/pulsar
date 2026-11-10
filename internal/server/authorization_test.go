@@ -63,14 +63,14 @@ const aliceClaims = `{
 	"updated_at": 1700000000
 }`
 
-// flowRegistry returns a registry of five Clients and the End-Users alice,
+// flowRegistry returns a registry of six Clients and the End-Users alice,
 // with aliceClaims, and bob: rp and other authenticate with
 // client_secret_basic, post with client_secret_post, and jwt with
 // private_key_jwt, by the public keys of jwtKeys; public and loopback are
 // public Clients, loopback with loopback redirect URIs. Only rp and other
-// register post-logout redirect URIs. It has the
-// Resource Servers of resource_test.go too: rp may request ordersServer and
-// billingServer, public ordersServer, and other adminServer.
+// register post-logout redirect URIs. It has the Resource Servers of
+// resource_test.go too: rp may request ordersServer and billingServer,
+// public ordersServer, and other adminServer.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
 	reg, err := registry.Parse(flowRegistryFile(tb))
@@ -569,10 +569,10 @@ func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
 }
 
 // REQ-OAUTH-5, REQ-OAUTH-10, REQ-CORE-5, REQ-BCP-2, REQ-BCP-3,
-// REQ-NATIVE-1: a request whose Client is missing or
-// unknown, or whose redirect URI is missing or differs in any character
-// from every one the Client registered, gets an error page, which may not
-// be framed, and is never redirected. The one exception is the port of a
+// REQ-NATIVE-1: a request whose Client is missing or unknown, or whose
+// redirect URI is missing or differs in any character from every one the
+// Client registered, gets an error page, which may not be framed, and is
+// never redirected. The one exception is the port of a public Client's
 // loopback IP redirect URI (TestLoopbackRedirectURIAnyPort); a URI that
 // differs from one in anything else, or names localhost, gets the page.
 func TestAuthorizationErrorPage(t *testing.T) {

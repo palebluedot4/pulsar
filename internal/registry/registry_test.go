@@ -123,7 +123,46 @@ func TestCommittedRegistries(t *testing.T) {
 	if !ok {
 		t.Fatal(`Client("cli") not found`)
 	}
-	if !cli.RedirectURI("http://127.0.0.1:49152/callback") {
-		t.Error(`cli.RedirectURI("http://127.0.0.1:49152/callback") = false, want true`)
+	if !cli.AllowsRedirectURI("http://127.0.0.1:49152/callback") {
+		t.Error(`cli.AllowsRedirectURI("http://127.0.0.1:49152/callback") = false, want true`)
+	}
+}
+
+// REQ-NATIVE-1: a public Client's loopback IP redirect URI is allowed with
+// any port, and a confidential Client's only exactly as registered.
+func TestAllowsRedirectURI(t *testing.T) {
+	t.Parallel()
+
+	const hash = "$argon2id$v=19$m=64,t=1,p=1$cHVsc2FyLXRlc3Qtc2FsdA$uyPucYpBTL3QggLzn0NmC8SoC4Vzjt3c7gsjLiRHGWc"
+	reg, err := registry.Parse([]byte(`{"clients": [
+		{"client_id": "native", "token_endpoint_auth_method": "none", "redirect_uris": ["http://127.0.0.1/callback"]},
+		{"client_id": "confidential", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hash + `",
+		 "redirect_uris": ["http://127.0.0.1:3000/callback"]}
+	]}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	tests := []struct {
+		clientID  string
+		requested string
+		want      bool
+	}{
+		{clientID: "native", requested: "http://127.0.0.1/callback", want: true},
+		{clientID: "native", requested: "http://127.0.0.1:49152/callback", want: true},
+		{clientID: "confidential", requested: "http://127.0.0.1:3000/callback", want: true},
+		{clientID: "confidential", requested: "http://127.0.0.1:49152/callback", want: false},
+		{clientID: "confidential", requested: "http://127.0.0.1/callback", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.clientID+" "+tt.requested, func(t *testing.T) {
+			t.Parallel()
+			c, ok := reg.Client(tt.clientID)
+			if !ok {
+				t.Fatalf("Client(%q) not found", tt.clientID)
+			}
+			if got := c.AllowsRedirectURI(tt.requested); got != tt.want {
+				t.Errorf("Client(%q).AllowsRedirectURI(%q) = %t, want %t", tt.clientID, tt.requested, got, tt.want)
+			}
+		})
 	}
 }

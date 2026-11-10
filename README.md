@@ -10,7 +10,7 @@ code flow, with `prompt` and `max_age`, to an ID token and access token for
 Clients that authenticate with `client_secret_basic`, `client_secret_post` or
 `private_key_jwt`, and for public Clients, which must use PKCE with `S256`. A
 redirect URI must equal one the Client registered, character for character,
-but for the port of a loopback IP redirect URI such as
+but for the port of a public Client's loopback IP redirect URI such as
 `http://127.0.0.1/callback`, which a native app may name with any port, as
 RFC 8252 §7.3 requires; a `localhost` URI gets no such exception. A
 Client may send `response_mode=form_post` once, with an `http` or `https`
@@ -276,8 +276,8 @@ examples' tests against it, over the network. They show that those
 libraries work with pulsar: the CLI signs in with PKCE through a loopback
 redirect on a port the operating system chose, gets an access token for the
 API with `resource`, and calls the API, which accepts it. The API refuses no
-token, a token for UserInfo, an expired, changed or unsigned token and an ID
-token with 401, and a token without the route's scope with 403; and after
+token, a token for UserInfo, a token at its `exp` by the API's clock, a
+changed or unsigned token and an ID token with 401, and a token without the route's scope with 403; and after
 `pulsar keys rotate` it accepts tokens signed with the new key. No browser
 runs: the tests act as one with Go's HTTP client.
 [examples/README.md](examples/README.md#what-the-tests-prove) lists what

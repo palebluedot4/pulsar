@@ -192,8 +192,8 @@ func callbackHandler(issuer string, issParameter bool, state string, codes chan<
 	return mux
 }
 
-// Note is a note, as the API sends and receives it.
-type Note struct {
+// note is a note, as the API sends and receives it.
+type note struct {
 	Text string `json:"text"`
 }
 
@@ -211,21 +211,21 @@ func ListNotes(ctx context.Context, apiURL, accessToken string) ([]string, error
 // AddNote adds a note with text to the End-User's notes at the API at
 // apiURL.
 func AddNote(ctx context.Context, apiURL, accessToken, text string) error {
-	b, err := json.Marshal(Note{Text: text})
+	b, err := json.Marshal(note{Text: text})
 	if err != nil {
 		return err
 	}
 	return call(ctx, http.MethodPost, apiURL+"/notes", accessToken, b, http.StatusCreated, nil)
 }
 
-// StatusError is the error of a call the API answered with an unexpected
+// statusError is the error of a call the API answered with an unexpected
 // status.
-type StatusError struct {
+type statusError struct {
 	Status          int
 	WWWAuthenticate string
 }
 
-func (e *StatusError) Error() string {
+func (e *statusError) Error() string {
 	if e.WWWAuthenticate != "" {
 		return fmt.Sprintf("the API answered %d: %s", e.Status, e.WWWAuthenticate)
 	}
@@ -250,7 +250,7 @@ func call(ctx context.Context, method, url, accessToken string, body []byte, wan
 	}
 	defer resp.Body.Close() //nolint:errcheck // Closing a response body reports nothing to act on.
 	if resp.StatusCode != want {
-		return &StatusError{Status: resp.StatusCode, WWWAuthenticate: resp.Header.Get("WWW-Authenticate")}
+		return &statusError{Status: resp.StatusCode, WWWAuthenticate: resp.Header.Get("WWW-Authenticate")}
 	}
 	if out == nil {
 		return nil

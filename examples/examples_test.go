@@ -176,14 +176,14 @@ func TestAPIRefuses(t *testing.T) {
 			t.Parallel()
 			req, err := http.NewRequestWithContext(t.Context(), tt.method, tt.api.URL+"/notes", strings.NewReader(`{"text": "a note"}`))
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("http.NewRequestWithContext() error = %v, want nil", err)
 			}
 			if tt.authorization != "" {
 				req.Header.Set("Authorization", tt.authorization)
 			}
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("%s /notes error = %v, want nil", tt.method, err)
 			}
 			_ = resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus {
@@ -216,7 +216,7 @@ func TestAPIAfterKeyRotation(t *testing.T) {
 
 	out, err := exec.CommandContext(t.Context(), "sh", "-c", rotate).Output() //nolint:gosec // G204: the command make examples gives, run as the operator would.
 	if err != nil {
-		t.Fatalf("%s: %v", rotate, err)
+		t.Fatalf("sh -c %q: error = %v, want nil", rotate, err)
 	}
 	newKID, signsFrom := storedKey(t, out)
 	if newKID == oldKID {
@@ -284,7 +284,7 @@ func newBrowser(t *testing.T) *browser {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("cookiejar.New() error = %v, want nil", err)
 	}
 	return &browser{client: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
 }
@@ -366,8 +366,8 @@ func (b *browser) send(ctx context.Context, method, rawURL string, form url.Valu
 		return page{}, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // Read to its end; closing it reports nothing to act on.
-	b2, err := io.ReadAll(resp.Body)
-	return page{url: resp.Request.URL, status: resp.StatusCode, body: string(b2)}, err
+	content, err := io.ReadAll(resp.Body)
+	return page{url: resp.Request.URL, status: resp.StatusCode, body: string(content)}, err
 }
 
 // claims returns the claims of token, a JWS in compact serialization,
@@ -380,11 +380,11 @@ func claims(t *testing.T, token string) map[string]any {
 	}
 	b, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the claims of %q are not base64url: %v", token, err)
 	}
 	var c map[string]any
 	if err := json.Unmarshal(b, &c); err != nil {
-		t.Fatal(err)
+		t.Fatalf("the claims of %q are not a JSON object: %v", token, err)
 	}
 	return c
 }
@@ -407,7 +407,7 @@ func withScope(t *testing.T, token, scope string) string {
 	c["scope"] = scope
 	b, err := json.Marshal(c)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("json.Marshal(claims) error = %v, want nil", err)
 	}
 	parts := strings.Split(token, ".")
 	return parts[0] + "." + base64.RawURLEncoding.EncodeToString(b) + "." + parts[2]
@@ -419,7 +419,7 @@ func unsigned(t *testing.T, token string) string {
 	t.Helper()
 	header, err := json.Marshal(map[string]string{"alg": "none", "typ": "at+jwt", "kid": keyID(t, token)})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("json.Marshal(header) error = %v, want nil", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(header) + "." + strings.Split(token, ".")[1] + "."
 }
@@ -429,7 +429,7 @@ func keyID(t *testing.T, token string) string {
 	t.Helper()
 	jws, err := jose.ParseSignedCompact(token, []jose.SignatureAlgorithm{jose.RS256})
 	if err != nil {
-		t.Fatalf("jose.ParseSignedCompact(%q) error = %v", token, err)
+		t.Fatalf("jose.ParseSignedCompact(%q) error = %v, want nil", token, err)
 	}
 	return jws.Signatures[0].Header.KeyID
 }

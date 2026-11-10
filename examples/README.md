@@ -54,7 +54,8 @@ Over the wire, with `x/oauth2` and `go-oidc` on the other side:
   token, which the API accepts.
 - The API refuses, with 401 and a Bearer challenge: no token; a token of
   another scheme; a token pulsar issued for its own UserInfo; a token at its
-  `exp`; a token whose claims were changed; one with `alg` `none`; and an ID
+  `exp`, by the API's clock, which the test sets to that time rather than
+  wait ten minutes; a token whose claims were changed; one with `alg` `none`; and an ID
   token. It refuses a valid token without the route's scope with 403 and
   `insufficient_scope`.
 - After `pulsar keys rotate`, once pulsar signs with the new key, the API,
