@@ -87,6 +87,26 @@ func registryJSON(t *testing.T, clients, endUsers []entry) string {
 	return string(b)
 }
 
+// ordersServer returns a Resource Server in a registry file, with one
+// scope.
+func ordersServer() entry {
+	return entry{
+		"identifier": "https://api.example/orders",
+		"scopes":     []entry{{"scope": "orders:read", "description": "read your orders"}},
+	}
+}
+
+// registryWithResourceServers encodes a registry file of resourceServers
+// and clients, and no End-User.
+func registryWithResourceServers(t *testing.T, resourceServers, clients []entry) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"resource_servers": resourceServers, "clients": clients, "end_users": []entry{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 // with returns a copy of e with key set to value, or removed if value is nil.
 func with(e entry, key string, value any) entry {
 	e = maps.Clone(e)
@@ -111,6 +131,10 @@ func with(e entry, key string, value any) entry {
 // REQ-JWTBCP-1, REQ-JWTBCP-2, REQ-JWA-1: a private_key_jwt Client's key
 // names the one algorithm it signs with, which is on the allow-list, and
 // is a key that algorithm takes: RSA of at least 2048 bits, or P-256.
+// REQ-RESOURCE-1: a Resource Server's identifier is an absolute URI
+// without a fragment, registered once, and its scopes are its own: none
+// is one of OpenID Connect's or another Resource Server's. A Client lists
+// only Resource Servers registered, each once.
 func TestRunRefusesRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -136,6 +160,16 @@ func TestRunRefusesRegistry(t *testing.T) {
 	bob := with(with(endUser(), "username", "bob"), "sub", "0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b")
 	withHash := func(hash string) string {
 		return registryJSON(t, nil, []entry{with(endUser(), "password_hash", hash)})
+	}
+	withIdentifier := func(identifier any) string {
+		return registryWithResourceServers(t, []entry{with(ordersServer(), "identifier", identifier)}, nil)
+	}
+	withScope := func(scope entry) string {
+		return registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", []entry{scope})}, nil)
+	}
+	billingServer := with(with(ordersServer(), "identifier", "https://api.example/billing"), "scopes", []entry{{"scope": "billing:read", "description": "read your invoices"}})
+	permitting := func(identifiers ...string) string {
+		return registryWithResourceServers(t, []entry{ordersServer()}, []entry{with(secretClient(), "resource_servers", identifiers)})
 	}
 
 	tests := []struct {
@@ -216,6 +250,29 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "Argon2id hash with invalid base64", registry: withHash("$argon2id$v=19$m=64,t=1,p=1$cHVsc2FyLXRlc3Qtc2FsdA$!!!!"), problem: "password_hash"},
 		{name: "Argon2id hash without hash", registry: withHash("$argon2id$v=19$m=64,t=1,p=1$cHVsc2FyLXRlc3Qtc2FsdA"), problem: "password_hash"},
 		{name: "plain password", registry: withHash("correct horse"), problem: "password_hash"},
+		{name: "Resource Server without identifier", registry: withIdentifier(nil), problem: "identifier is required"},
+		{name: "relative identifier", registry: withIdentifier("/orders"), problem: "resource_servers[0]"},
+		{name: "identifier with fragment", registry: withIdentifier("https://api.example/orders#top"), problem: "fragment"},
+		{name: "identifier with empty fragment", registry: withIdentifier("https://api.example/orders#"), problem: "fragment"},
+		{name: "identifier not a URI", registry: withIdentifier("https://api.example/a b"), problem: "resource_servers[0]"},
+		{name: "https identifier without host", registry: withIdentifier("https:///orders"), problem: "no host"},
+		{name: "duplicate identifier", registry: registryWithResourceServers(t, []entry{ordersServer(), with(billingServer, "identifier", "https://api.example/orders")}, nil), problem: "identifier \"https://api.example/orders\" is not unique"},
+		{name: "misspelled Resource Server member", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scope", []string{"orders:read"})}, nil), problem: "scope"},
+		{name: "scope without value", registry: withScope(entry{"description": "read your orders"}), problem: "scope is required"},
+		{name: "scope without description", registry: withScope(entry{"scope": "orders:read"}), problem: "description is required"},
+		{name: "scope with a space", registry: withScope(entry{"scope": "orders read", "description": "read your orders"}), problem: "RFC 6749"},
+		{name: "scope with a quotation mark", registry: withScope(entry{"scope": `orders"read`, "description": "read your orders"}), problem: "RFC 6749"},
+		{name: "scope with a backslash", registry: withScope(entry{"scope": `orders\read`, "description": "read your orders"}), problem: "RFC 6749"},
+		{name: "scope openid", registry: withScope(entry{"scope": "openid", "description": "x"}), problem: "OpenID Connect"},
+		{name: "scope profile", registry: withScope(entry{"scope": "profile", "description": "x"}), problem: "OpenID Connect"},
+		{name: "scope email", registry: withScope(entry{"scope": "email", "description": "x"}), problem: "OpenID Connect"},
+		{name: "scope address", registry: withScope(entry{"scope": "address", "description": "x"}), problem: "OpenID Connect"},
+		{name: "scope phone", registry: withScope(entry{"scope": "phone", "description": "x"}), problem: "OpenID Connect"},
+		{name: "scope offline_access", registry: withScope(entry{"scope": "offline_access", "description": "x"}), problem: "OpenID Connect"},
+		{name: "scope listed twice", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", []entry{{"scope": "orders:read", "description": "a"}, {"scope": "orders:read", "description": "b"}})}, nil), problem: "scopes[1]"},
+		{name: "scope of another Resource Server", registry: registryWithResourceServers(t, []entry{ordersServer(), with(billingServer, "scopes", []entry{{"scope": "orders:read", "description": "x"}})}, nil), problem: "https://api.example/orders"},
+		{name: "client naming an unknown Resource Server", registry: permitting("https://api.example/billing"), problem: "resource_servers[0]"},
+		{name: "client naming a Resource Server twice", registry: permitting("https://api.example/orders", "https://api.example/orders"), problem: "resource_servers[1]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -264,8 +321,9 @@ func TestRunRequiresRegistry(t *testing.T) {
 // pulsar starts with a registry of each kind of Client and an End-User
 // with claims.
 //
-// REQ-OAUTH-1, REQ-CORE-1, REQ-LOGOUT-10: the forms the refusals above
-// allow.
+// REQ-OAUTH-1, REQ-CORE-1, REQ-LOGOUT-10, REQ-RESOURCE-1: the forms the
+// refusals above allow. A Resource Server's identifier may be a URN, or
+// have a query, which RFC 8707 §2 discourages without forbidding.
 func TestRunAcceptsRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -276,9 +334,17 @@ func TestRunAcceptsRegistry(t *testing.T) {
 	}
 	jwtClient := with(with(with(secretClient(), "client_secret_hash", nil), "token_endpoint_auth_method", "private_key_jwt"), "client_id", "jwt")
 	jwtClient["jwks"] = jwks(t, &ecKey.PublicKey)
-	registry := registryJSON(t,
-		[]entry{
-			secretClient(),
+	b, err := json.Marshal(map[string]any{
+		"resource_servers": []entry{
+			ordersServer(),
+			{"identifier": "urn:example:billing", "scopes": []entry{
+				{"scope": "billing:read", "description": "read your invoices"},
+				{"scope": "https://api.example/billing.write", "description": "pay your invoices"},
+			}},
+			{"identifier": "https://api.example/reports?tenant=a", "scopes": []entry{}},
+		},
+		"clients": []entry{
+			with(secretClient(), "resource_servers", []string{"https://api.example/orders", "urn:example:billing"}),
 			with(with(secretClient(), "client_id", "post"), "token_endpoint_auth_method", "client_secret_post"),
 			jwtClient,
 			with(with(with(secretClient(), "client_secret_hash", nil), "token_endpoint_auth_method", "none"), "client_id", "native"),
@@ -291,7 +357,7 @@ func TestRunAcceptsRegistry(t *testing.T) {
 				"com.example.app:/signed-out",
 			}),
 		},
-		[]entry{
+		"end_users": []entry{
 			with(endUser(), "claims", map[string]any{
 				"name":           "Alice Example",
 				"email":          "alice@example.com",
@@ -301,12 +367,15 @@ func TestRunAcceptsRegistry(t *testing.T) {
 			}),
 			with(with(endUser(), "sub", "0b5c3c62-1f3e-4f2b-9f43-8c1d2e3f4a5b"), "username", "Alice"),
 		},
-	)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	p := start(t, map[string]string{
 		"PULSAR_ISSUER":       loopbackIssuer,
 		"PULSAR_DATABASE_URL": postgrestest.NewDatabase(t),
-		"PULSAR_REGISTRY":     writeRegistry(t, registry),
+		"PULSAR_REGISTRY":     writeRegistry(t, string(b)),
 	})
 	p.waitListening()
 	p.waitKeysLoaded()

@@ -122,8 +122,8 @@ func (q *Queries) InsertAccessToken(ctx context.Context, arg InsertAccessTokenPa
 
 const insertAuthorizationCode = `-- name: InsertAuthorizationCode :exec
 
-INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry, delete_after)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, resource, auth_time, expiry, delete_after)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
 `
 
 type InsertAuthorizationCodeParams struct {
@@ -135,6 +135,7 @@ type InsertAuthorizationCodeParams struct {
 	Nonce         string
 	CodeChallenge string
 	Claims        []byte
+	Resource      string
 	AuthTime      time.Time
 	Expiry        time.Time
 }
@@ -152,6 +153,7 @@ func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthori
 		arg.Nonce,
 		arg.CodeChallenge,
 		arg.Claims,
+		arg.Resource,
 		arg.AuthTime,
 		arg.Expiry,
 	)
@@ -209,11 +211,11 @@ func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshToken
 const insertRefreshTokenFamily = `-- name: InsertRefreshTokenFamily :one
 WITH kept AS (
     UPDATE authorization_codes
-    SET delete_after = $7
+    SET delete_after = $8
     WHERE code_hash = $1
 )
-INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, auth_time, expiry)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, resource, auth_time, expiry)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id
 `
 
@@ -223,6 +225,7 @@ type InsertRefreshTokenFamilyParams struct {
 	Subject  string
 	Scopes   []string
 	Claims   []byte
+	Resource string
 	AuthTime time.Time
 	Expiry   time.Time
 }
@@ -236,6 +239,7 @@ func (q *Queries) InsertRefreshTokenFamily(ctx context.Context, arg InsertRefres
 		arg.Subject,
 		arg.Scopes,
 		arg.Claims,
+		arg.Resource,
 		arg.AuthTime,
 		arg.Expiry,
 	)
@@ -279,7 +283,7 @@ func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash []byte) (L
 }
 
 const lockRefreshTokenFamily = `-- name: LockRefreshTokenFamily :one
-SELECT f.id, f.client_id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time, f.expiry, f.revoked
+SELECT f.id, f.client_id, f.code_hash, f.subject, f.scopes, f.claims, f.resource, f.auth_time, f.expiry, f.revoked
 FROM refresh_tokens r
 JOIN refresh_token_families f ON f.id = r.family_id
 WHERE r.token_hash = $1
@@ -293,6 +297,7 @@ type LockRefreshTokenFamilyRow struct {
 	Subject  string
 	Scopes   []string
 	Claims   []byte
+	Resource string
 	AuthTime time.Time
 	Expiry   time.Time
 	Revoked  bool
@@ -316,6 +321,7 @@ func (q *Queries) LockRefreshTokenFamily(ctx context.Context, tokenHash []byte) 
 		&i.Subject,
 		&i.Scopes,
 		&i.Claims,
+		&i.Resource,
 		&i.AuthTime,
 		&i.Expiry,
 		&i.Revoked,
@@ -347,7 +353,7 @@ WHERE code_hash = $2
     AND redirect_uri = $4
     AND expiry > $5
     AND NOT redeemed
-RETURNING subject, scopes, nonce, code_challenge, claims, auth_time
+RETURNING subject, scopes, nonce, code_challenge, claims, resource, auth_time
 `
 
 type RedeemAuthorizationCodeParams struct {
@@ -364,6 +370,7 @@ type RedeemAuthorizationCodeRow struct {
 	Nonce         string
 	CodeChallenge string
 	Claims        []byte
+	Resource      string
 	AuthTime      time.Time
 }
 
@@ -397,6 +404,7 @@ func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthori
 		&i.Nonce,
 		&i.CodeChallenge,
 		&i.Claims,
+		&i.Resource,
 		&i.AuthTime,
 	)
 	return i, err

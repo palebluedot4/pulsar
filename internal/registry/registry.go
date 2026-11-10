@@ -1,14 +1,19 @@
-// Package registry holds the Clients and End-Users that pulsar reads at
-// startup from its registry file, as ADR 0001 decides. The file is a JSON
-// document:
+// Package registry holds the Resource Servers, Clients and End-Users that
+// pulsar reads at startup from its registry file, as ADR 0001 decides. The
+// file is a JSON document:
 //
 //	{
+//	  "resource_servers": [{
+//	    "identifier": "https://api.example/orders",
+//	    "scopes": [{"scope": "orders:read", "description": "read your orders"}]
+//	  }],
 //	  "clients": [{
 //	    "client_id": "rp",
 //	    "token_endpoint_auth_method": "client_secret_basic",
 //	    "client_secret_hash": "$argon2id$v=19$m=19456,t=2,p=1$...$...",
 //	    "redirect_uris": ["https://rp.example/callback"],
-//	    "post_logout_redirect_uris": ["https://rp.example/signed-out"]
+//	    "post_logout_redirect_uris": ["https://rp.example/signed-out"],
+//	    "resource_servers": ["https://api.example/orders"]
 //	  }],
 //	  "end_users": [{
 //	    "sub": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
@@ -18,10 +23,20 @@
 //	  }]
 //	}
 //
+// A Resource Server is registered by its identifier, an absolute URI
+// without a fragment (RFC 8707 §2), which a Client sends as the resource
+// parameter and which an access token for it names as its audience. Its
+// scopes are its own, each with the description the consent page shows:
+// none is a scope OpenID Connect defines, or another Resource Server's, so
+// that a scope value names one Resource Server alone. resource_servers may
+// be left out.
+//
 // A Client may list post_logout_redirect_uris, to which pulsar returns
 // the End-User after logout (OpenID Connect RP-Initiated Logout 1.0 §3.1).
 // Each is checked as a redirect URI is, and, as each redirect URI is,
-// listed once.
+// listed once. A Client may list, in resource_servers, the identifiers of
+// the Resource Servers it may request access tokens for, each once; it may
+// request none other.
 //
 // A Client authenticates with the token_endpoint_auth_method it registers:
 // client_secret_basic or client_secret_post with a client_secret_hash,
@@ -92,12 +107,13 @@ const (
 	None              AuthMethod = "none"
 )
 
-// Registry is the set of Clients and End-Users. They never change once
-// loaded, and it is safe for concurrent use.
+// Registry is the set of Resource Servers, Clients and End-Users. They
+// never change once loaded, and it is safe for concurrent use.
 type Registry struct {
-	clients   map[string]*Client  // by client_id
-	endUsers  map[string]*EndUser // by Subject
-	usernames map[string]*EndUser // by username
+	resourceServers map[string]*ResourceServer // by identifier
+	clients         map[string]*Client         // by client_id
+	endUsers        map[string]*EndUser        // by Subject
+	usernames       map[string]*EndUser        // by username
 
 	// decoy is verified against when no End-User has the username given,
 	// so that a login for a username that does not exist costs what one
@@ -129,8 +145,35 @@ type Client struct {
 	// private_key_jwt, and is nil for any other. Each key's Algorithm is
 	// one of AssertionAlgorithms, and is the only one it is used with.
 	JWKS *jose.JSONWebKeySet
+	// ResourceServers are the identifiers of the Resource Servers the
+	// Client may request access tokens for, each registered and listed
+	// once; none if it registered none.
+	ResourceServers []string
 
 	secretHash *passwordHash // for client_secret_basic and client_secret_post
+}
+
+// ResourceServer is a registered Resource Server.
+type ResourceServer struct {
+	// Identifier is the absolute URI, without a fragment, that a Client
+	// sends as the resource parameter, and that an access token for the
+	// Resource Server names as its audience (RFC 8707 §2, RFC 9068 §3).
+	Identifier string
+	// Scopes are the Resource Server's scopes, in the order registered,
+	// each listed once and the Resource Server's alone.
+	Scopes []Scope
+}
+
+// Scope is a scope value of a Resource Server, with what it allows, as the
+// consent page says it to the End-User.
+type Scope struct {
+	Value       string
+	Description string
+}
+
+// HasScope reports whether value is one of s's scopes.
+func (s *ResourceServer) HasScope(value string) bool {
+	return slices.ContainsFunc(s.Scopes, func(sc Scope) bool { return sc.Value == value })
 }
 
 // Public reports whether c is a public Client: one registered for the
@@ -184,8 +227,19 @@ type Address struct {
 
 // file is the registry file as it is decoded.
 type file struct {
-	Clients  []clientEntry  `json:"clients"`
-	EndUsers []endUserEntry `json:"end_users"`
+	ResourceServers []resourceServerEntry `json:"resource_servers"`
+	Clients         []clientEntry         `json:"clients"`
+	EndUsers        []endUserEntry        `json:"end_users"`
+}
+
+type resourceServerEntry struct {
+	Identifier string       `json:"identifier"`
+	Scopes     []scopeEntry `json:"scopes"`
+}
+
+type scopeEntry struct {
+	Scope       string `json:"scope"`
+	Description string `json:"description"`
 }
 
 type clientEntry struct {
@@ -195,6 +249,7 @@ type clientEntry struct {
 	JWKS                    *jose.JSONWebKeySet `json:"jwks"`
 	RedirectURIs            []string            `json:"redirect_uris"`
 	PostLogoutRedirectURIs  []string            `json:"post_logout_redirect_uris"`
+	ResourceServers         []string            `json:"resource_servers"`
 }
 
 type endUserEntry struct {
@@ -215,8 +270,8 @@ func Load(path string) (*Registry, error) {
 
 // Parse parses a registry file's content. It returns an error that names
 // the entry and member at fault if the content is not one JSON object of
-// the form the package describes, or if a client_id, Subject or username
-// is not unique.
+// the form the package describes, or if a Resource Server's identifier or
+// scope, a client_id, Subject or username is not unique.
 func Parse(data []byte) (*Registry, error) {
 	// A pointer, so that a file holding only null, which would leave a
 	// struct as it was, is told apart from an empty object.
@@ -228,15 +283,39 @@ func Parse(data []byte) (*Registry, error) {
 		return nil, errors.New("the registry must be a JSON object, not null")
 	}
 	r := &Registry{
-		clients:   make(map[string]*Client, len(f.Clients)),
-		endUsers:  make(map[string]*EndUser, len(f.EndUsers)),
-		usernames: make(map[string]*EndUser, len(f.EndUsers)),
+		resourceServers: make(map[string]*ResourceServer, len(f.ResourceServers)),
+		clients:         make(map[string]*Client, len(f.Clients)),
+		endUsers:        make(map[string]*EndUser, len(f.EndUsers)),
+		usernames:       make(map[string]*EndUser, len(f.EndUsers)),
+	}
+	// The Resource Server whose scope each scope value is, so that each is
+	// one Resource Server's alone.
+	scopeOwner := make(map[string]string)
+	for i, e := range f.ResourceServers {
+		s, err := newResourceServer(e)
+		if err != nil {
+			return nil, fmt.Errorf("resource_servers[%d] (identifier %q): %w", i, e.Identifier, err)
+		}
+		if _, dup := r.resourceServers[s.Identifier]; dup {
+			return nil, fmt.Errorf("resource_servers[%d]: identifier %q is not unique", i, s.Identifier)
+		}
+		for j, sc := range s.Scopes {
+			if owner, dup := scopeOwner[sc.Value]; dup {
+				return nil, fmt.Errorf("resource_servers[%d].scopes[%d]: scope %q is already the Resource Server %q's", i, j, sc.Value, owner)
+			}
+			scopeOwner[sc.Value] = s.Identifier
+		}
+		r.resourceServers[s.Identifier] = s
 	}
 	for i, e := range f.Clients {
 		c, err := newClient(e)
+		if err == nil {
+			err = r.checkResourceServers(e.ResourceServers)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("clients[%d] (client_id %q): %w", i, e.ClientID, err)
 		}
+		c.ResourceServers = e.ResourceServers
 		if _, dup := r.clients[c.ID]; dup {
 			return nil, fmt.Errorf("clients[%d]: client_id %q is not unique", i, c.ID)
 		}
@@ -378,6 +457,61 @@ func newClient(e clientEntry) (*Client, error) {
 	}
 	c.PostLogoutRedirectURIs = e.PostLogoutRedirectURIs
 	return c, nil
+}
+
+// openIDScopes are the scope values OpenID Connect Core 1.0 defines: openid
+// (§3.1.2.1), those that request claims (§5.4), and offline_access (§11).
+// No Resource Server's scope may be one of them, so that each keeps its
+// meaning.
+var openIDScopes = []string{"openid", "profile", "email", "address", "phone", "offline_access"}
+
+func newResourceServer(e resourceServerEntry) (*ResourceServer, error) {
+	if e.Identifier == "" {
+		return nil, errors.New("identifier is required")
+	}
+	// RFC 8707 §2 holds the resource parameter to the form RFC 6749
+	// §3.1.2 holds a redirect URI to: an absolute URI without a fragment.
+	if _, err := checkRedirectURI(e.Identifier); err != nil {
+		return nil, fmt.Errorf("identifier: %w", err)
+	}
+	s := &ResourceServer{Identifier: e.Identifier, Scopes: make([]Scope, 0, len(e.Scopes))}
+	for i, sc := range e.Scopes {
+		switch {
+		case sc.Scope == "":
+			return nil, fmt.Errorf("scopes[%d]: scope is required", i)
+		case strings.IndexFunc(sc.Scope, notScopeChar) >= 0:
+			return nil, fmt.Errorf("scopes[%d]: scope %q is not a scope-token of RFC 6749 §3.3", i, sc.Scope)
+		case slices.Contains(openIDScopes, sc.Scope):
+			return nil, fmt.Errorf("scopes[%d]: scope %q is one of OpenID Connect's", i, sc.Scope)
+		case s.HasScope(sc.Scope):
+			return nil, fmt.Errorf("scopes[%d]: scope %q is listed twice", i, sc.Scope)
+		case sc.Description == "":
+			return nil, fmt.Errorf("scopes[%d]: description is required", i)
+		}
+		s.Scopes = append(s.Scopes, Scope{Value: sc.Scope, Description: sc.Description})
+	}
+	return s, nil
+}
+
+// notScopeChar reports whether RFC 6749 §3.3 allows c nowhere in a scope
+// value: scope-token = 1*( %x21 / %x23-5B / %x5D-7E ), printable ASCII
+// other than the space, the quotation mark and the backslash.
+func notScopeChar(c rune) bool {
+	return c < 0x21 || c > 0x7e || c == '"' || c == '\\'
+}
+
+// checkResourceServers checks that each of identifiers, those a Client
+// lists, is a Resource Server's in r, and that none is listed twice.
+func (r *Registry) checkResourceServers(identifiers []string) error {
+	for i, id := range identifiers {
+		if _, ok := r.resourceServers[id]; !ok {
+			return fmt.Errorf("resource_servers[%d]: %q is not a registered Resource Server", i, id)
+		}
+		if slices.Contains(identifiers[:i], id) {
+			return fmt.Errorf("resource_servers[%d]: %q is listed twice", i, id)
+		}
+	}
+	return nil
 }
 
 // checkRedirectURIs checks each of list, the registry member name, as
@@ -580,6 +714,16 @@ func (r *Registry) Clients() iter.Seq[*Client] {
 func (r *Registry) Client(id string) (*Client, bool) {
 	c, ok := r.clients[id]
 	return c, ok
+}
+
+// ResourceServer returns the Resource Server whose identifier is id, if c
+// may request access tokens for it.
+func (r *Registry) ResourceServer(c *Client, id string) (*ResourceServer, bool) {
+	if !slices.Contains(c.ResourceServers, id) {
+		return nil, false
+	}
+	s, ok := r.resourceServers[id]
+	return s, ok
 }
 
 // AuthenticateClientSecret returns the Client whose client_id and secret

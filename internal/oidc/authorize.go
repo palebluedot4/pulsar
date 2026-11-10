@@ -62,7 +62,9 @@ func supportedScope(value string) (login.Scope, bool) {
 }
 
 // authorizationParams are the parameters of an authorization request that
-// pulsar reads. Every other parameter is ignored (RFC 6749 §3.1).
+// pulsar reads, besides resource, which RFC 8707 §2 lets a Client repeat,
+// and which is checked apart, with its own error code (parseResource).
+// Every other parameter is ignored (RFC 6749 §3.1).
 var authorizationParams = []string{
 	"client_id", "redirect_uri", "response_type", "response_mode",
 	"scope", "state", "nonce", "request", "request_uri",
@@ -95,6 +97,9 @@ const (
 	errTemporarilyUnavailable  = "temporarily_unavailable"
 	errRequestNotSupported     = "request_not_supported"
 	errRequestURINotSupported  = "request_uri_not_supported"
+	// RFC 8707 §2, at the authorization endpoint (§2.1) and the token
+	// endpoint (§2.2).
+	errInvalidTarget = "invalid_target"
 )
 
 var errorPageTemplate = template.Must(template.New("error").Parse(`<!doctype html>
@@ -179,7 +184,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 	if state := params["state"]; len(state) > 0 {
 		resp.state = state[0]
 	}
-	req, errCode, errDesc := parseAuthorizationRequest(client, redirectURI, p.issuer.String(), params)
+	req, errCode, errDesc := parseAuthorizationRequest(p.registry, client, redirectURI, p.issuer.String(), params)
 	if errCode != "" {
 		resp.sendError(w, r, errCode, errDesc)
 		return
@@ -317,9 +322,20 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 					Username: auth.EndUser.Username,
 					Action:   paths.consent + "?" + query,
 				}
+				// consentScopes holds supported scopes, and the Resource
+				// Server's, only.
 				for _, s := range consentScopes {
-					scope, _ := supportedScope(s) // consentScopes holds supported scopes only.
-					page.Scopes = append(page.Scopes, scope)
+					if scope, ok := supportedScope(s); ok {
+						page.Scopes = append(page.Scopes, scope)
+					}
+				}
+				if req.resource != nil {
+					page.ResourceServer = req.resource.Identifier
+					for _, sc := range req.resource.Scopes {
+						if slices.Contains(consentScopes, sc.Value) {
+							page.ResourceScopes = append(page.ResourceScopes, login.Scope{Value: sc.Value, Description: sc.Description})
+						}
+					}
 				}
 				if err := login.WriteConsentPage(w, page); err != nil {
 					p.logger.ErrorContext(ctx, "authorization endpoint", "error", err)
@@ -344,11 +360,14 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 type authorizationRequest struct {
 	client      *registry.Client
 	redirectURI string
-	scopes      []string // the scope values granted
-	nonce       string
-	challenge   string   // the S256 code_challenge (RFC 7636 §4.3), or "" if it was not sent
-	prompt      []string // the values of the prompt parameter (OpenID Connect Core 1.0 §3.1.2.1)
-	maxAge      int64    // the max_age parameter, in seconds, or -1 if it sets no limit
+	// resource is the Resource Server the resource parameter names, or nil
+	// if the request sent none.
+	resource  *registry.ResourceServer
+	scopes    []string // the scope values granted
+	nonce     string
+	challenge string   // the S256 code_challenge (RFC 7636 §4.3), or "" if it was not sent
+	prompt    []string // the values of the prompt parameter (OpenID Connect Core 1.0 §3.1.2.1)
+	maxAge    int64    // the max_age parameter, in seconds, or -1 if it sets no limit
 	// subjects are the Subjects of the End-Users a positive response may be
 	// about, as id_token_hint and a sub Claim requested in the ID token
 	// with a value name them; nil if the request names none.
@@ -371,9 +390,9 @@ func (req authorizationRequest) consentScopes() []string {
 
 // parseAuthorizationRequest checks the parameters of an authorization
 // request for client, with redirectURI, one it registered, to the OP at
-// issuer, and returns the request, or the error code and description to
-// redirect with.
-func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer string, params url.Values) (req authorizationRequest, errCode, errDesc string) {
+// issuer, whose registry is reg, and returns the request, or the error
+// code and description to redirect with.
+func parseAuthorizationRequest(reg *registry.Registry, client *registry.Client, redirectURI, issuer string, params url.Values) (req authorizationRequest, errCode, errDesc string) {
 	if name, ok := repeated(params, authorizationParams); ok {
 		return req, errInvalidRequest, "The parameter " + name + " is repeated."
 	}
@@ -417,9 +436,22 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 		return req, errInvalidRequest, "The code_challenge must be 43 to 128 unreserved characters."
 	}
 
+	resource, ok := parseResource(reg, client, params["resource"])
+	if !ok {
+		return req, errInvalidTarget, "The resource must be one Resource Server registered for this client, named by its identifier."
+	}
+
+	// A scope pulsar does not support is ignored (RFC 6749 §3.3), as is
+	// one of a Resource Server other than the one resource names, or of
+	// any Resource Server without resource: that Resource Server is not
+	// the default resource, pulsar's UserInfo, so the request stays one for
+	// UserInfo, as it is without such a scope.
 	var scopes []string
 	for s := range strings.FieldsSeq(params.Get("scope")) {
-		if _, ok := supportedScope(s); ok && !slices.Contains(scopes, s) {
+		if _, ok := supportedScope(s); !ok && (resource == nil || !resource.HasScope(s)) {
+			continue
+		}
+		if !slices.Contains(scopes, s) {
 			scopes = append(scopes, s)
 		}
 	}
@@ -485,6 +517,7 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 	return authorizationRequest{
 		client:      client,
 		redirectURI: redirectURI,
+		resource:    resource,
 		scopes:      scopes,
 		nonce:       params.Get("nonce"),
 		challenge:   challenge,
@@ -493,6 +526,25 @@ func parseAuthorizationRequest(client *registry.Client, redirectURI, issuer stri
 		subjects:    subjects,
 		claims:      claims,
 	}, "", ""
+}
+
+// parseResource returns the Resource Server that values, the values of an
+// authorization request's resource parameter, name, or nil if they are
+// none. They must be one value, the identifier of a Resource Server that
+// client may request, compared as a string, exactly as it is registered.
+// A value that is not an absolute URI without a fragment (RFC 8707 §2)
+// matches no identifier, since every identifier is one. More than one
+// value, even the same one twice, is refused rather than turned into an
+// access token for several audiences, as RFC 8707 §3 encourages.
+func parseResource(reg *registry.Registry, client *registry.Client, values []string) (*registry.ResourceServer, bool) {
+	switch len(values) {
+	case 0:
+		return nil, true
+	case 1:
+		return reg.ResourceServer(client, values[0])
+	default:
+		return nil, false
+	}
 }
 
 // idTokenSubject returns the sub of idToken, a JWT that names issuer as
@@ -560,9 +612,14 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 		return "", err
 	}
 	code, hash := newCode()
-	// The code challenge and the claims requested are stored with the
-	// code, so that the token endpoint can verify the code_verifier against
-	// the one (RFC 7636 §4.4) and release the other.
+	// The code challenge, the claims requested and the Resource Server are
+	// stored with the code, so that the token endpoint can verify the
+	// code_verifier against the one (RFC 7636 §4.4), release the other, and
+	// issue access tokens for the third (RFC 8707 §2.1).
+	var resource string
+	if req.resource != nil {
+		resource = req.resource.Identifier
+	}
 	err = p.queries.InsertAuthorizationCode(ctx, queries.InsertAuthorizationCodeParams{
 		CodeHash:      hash,
 		ClientID:      req.client.ID,
@@ -572,6 +629,7 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 		Nonce:         req.nonce,
 		CodeChallenge: req.challenge,
 		Claims:        claims,
+		Resource:      resource,
 		AuthTime:      auth.Time,
 		Expiry:        now.Add(codeLifetime),
 	})

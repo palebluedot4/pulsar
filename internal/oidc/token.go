@@ -21,8 +21,10 @@ import (
 	"github.com/palebluedot4/pulsar/internal/registry"
 )
 
-// tokenParams are the parameters of a token request that pulsar reads.
-// Every other parameter is ignored (RFC 6749 §3.2).
+// tokenParams are the parameters of a token request that pulsar reads,
+// besides resource, which RFC 8707 §2 lets a Client repeat, and which is
+// checked apart, with its own error code (exchange). Every other parameter
+// is ignored (RFC 6749 §3.2).
 var tokenParams = []string{
 	"grant_type", "code", "redirect_uri", "code_verifier", "refresh_token", "scope",
 	"client_id", "client_secret", "client_assertion_type", "client_assertion",
@@ -121,7 +123,11 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 
 	// Each grant checks the request's form before its Client
 	// authenticates, so that a malformed request does not use up a client
-	// assertion, which authenticates once.
+	// assertion, which authenticates once. A resource may be sent once, as
+	// at the authorization endpoint (parseResource).
+	if len(params["resource"]) > 1 {
+		return nil, badRequest(errInvalidTarget, "The resource must be sent once.")
+	}
 	switch params.Get("grant_type") {
 	case "authorization_code":
 		return p.exchangeCode(r, params)
@@ -194,10 +200,12 @@ func (p *Provider) exchangeCode(r *http.Request, params url.Values) (*tokenRespo
 		// replica not yet upgraded to require one.
 		return nil, badRequest(errInvalidRequest, "A public client must send code_verifier.")
 	}
-	resp, err := p.issueTokens(r.Context(), client, code, redirectURI, challenge)
+	resp, err := p.issueTokens(r.Context(), client, code, redirectURI, challenge, params.Get("resource"))
 	switch {
 	case errors.Is(err, errCodeNotRedeemable):
 		return nil, badRequest(errInvalidGrant, "The code is invalid, expired or already used, was issued to another client or redirect_uri, does not match the code_verifier, or is for an End-User who no longer exists.")
+	case errors.Is(err, errResourceNotGranted):
+		return nil, badRequest(errInvalidTarget, resourceNotGranted)
 	case err != nil:
 		return nil, p.serverError(r.Context(), err)
 	}
@@ -336,12 +344,40 @@ func (p *Provider) authenticateSecret(ctx context.Context, method registry.AuthM
 // longer in the registry.
 var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed")
 
+// errResourceNotGranted is returned by issueTokens and refresh for a token
+// request whose resource grantedResource refuses. resourceNotGranted
+// describes it to the Client.
+var errResourceNotGranted = errors.New("the resource is not the one granted")
+
+const resourceNotGranted = "The resource is not the one the authorization was granted for, or its Resource Server is no longer registered for this client."
+
+// grantedResource returns the Resource Server whose identifier is granted,
+// that of a code or Refresh Token Family, or nil if it is "", for a token
+// request by client with the resource parameter requested, "" if it sent
+// none. It reports false if requested names another, or if client may no
+// longer request that Resource Server: the access token would then be for
+// no audience the End-User allowed (RFC 8707 §2.2).
+func (p *Provider) grantedResource(client *registry.Client, granted, requested string) (*registry.ResourceServer, bool) {
+	switch {
+	case requested != "" && requested != granted:
+		return nil, false
+	case granted == "":
+		return nil, true
+	}
+	return p.registry.ResourceServer(client, granted)
+}
+
 // issueTokens redeems code, for client and redirectURI, and returns the
 // tokens issued for it. The code must have been issued with challenge, the
 // code challenge of the request's code_verifier, or "" if it sent none. A
 // code_verifier that does not match uses up the code, so that only one
 // verifier of the form RFC 7636 §4.1 allows can be tried against a code,
 // and a weak one cannot be guessed in the code's lifetime.
+//
+// The access token is for the Resource Server the code was issued for, if
+// any, which resource, the request's resource parameter, must name if it is
+// not "" (grantedResource). A resource refused leaves the code to be
+// redeemed, as RFC 8707 does not say it ends the grant.
 //
 // A code that was redeemed before, presented again, revokes the tokens
 // issued from it (RFC 6749 §4.1.2): the Refresh Token Family it started,
@@ -369,7 +405,7 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // are signed after it commits, so that the code's row is not locked
 // meanwhile; signing fails only before the signing keys are loaded, when
 // the endpoint is not served.
-func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI, challenge string) (*tokenResponse, error) {
+func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, code, redirectURI, challenge, resource string) (*tokenResponse, error) {
 	now := time.Now()
 	exp := now.Add(TokenLifetime)
 	hash := hashCode(code)
@@ -377,6 +413,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	var refreshToken string
 	var row queries.RedeemAuthorizationCodeRow
 	var claims claimsRequest
+	var server *registry.ResourceServer
 	// Whether the code is refused, after the transaction commits what the
 	// refusal changed.
 	var refused bool
@@ -432,6 +469,11 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 			refused = true
 			return nil
 		}
+		// Refusing rolls back marking the code redeemed.
+		var granted bool
+		if server, granted = p.grantedResource(client, row.Resource, resource); !granted {
+			return errResourceNotGranted
+		}
 		// A code whose End-User has been removed from the registry is
 		// refused, as a refresh token is, and is not used up: refusing rolls
 		// back marking it redeemed, so it is redeemed if they are back
@@ -450,6 +492,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 				Subject:  row.Subject,
 				Scopes:   row.Scopes,
 				Claims:   row.Claims,
+				Resource: row.Resource,
 				AuthTime: row.AuthTime,
 				Expiry:   now.Add(familyLifetime),
 			})
@@ -470,6 +513,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 	}
 	return p.signTokens(client, issuance{
 		subject:       row.Subject,
+		resource:      server,
 		scopes:        row.Scopes,
 		expiry:        exp,
 		authTime:      row.AuthTime,
@@ -501,12 +545,14 @@ func (p *Provider) exchangeRefreshToken(r *http.Request, params url.Values) (*to
 	if tokErr != nil {
 		return nil, tokErr
 	}
-	resp, err := p.refresh(r.Context(), client, refreshToken, scopes)
+	resp, err := p.refresh(r.Context(), client, refreshToken, scopes, params.Get("resource"))
 	switch {
 	case errors.Is(err, errRefreshTokenNotRedeemable):
 		return nil, badRequest(errInvalidGrant, "The refresh token is invalid, expired, revoked or already used, was issued to another client, or is for an End-User who no longer exists.")
 	case errors.Is(err, errScopeNotGranted):
 		return nil, badRequest(errInvalidScope, "The scope must not include any scope not originally granted.")
+	case errors.Is(err, errResourceNotGranted):
+		return nil, badRequest(errInvalidTarget, resourceNotGranted)
 	case err != nil:
 		return nil, p.serverError(r.Context(), err)
 	}
@@ -533,7 +579,10 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // auth_time are those of the authorization the code was issued for (OpenID
 // Connect Core 1.0 §12.2). A refresh token whose End-User has been removed
 // from the registry is refused; one whose Client has been removed never
-// gets here, since the Client cannot authenticate.
+// gets here, since the Client cannot authenticate. The access token is for
+// the family's Resource Server, if any, which resource must name if it is
+// not "" (grantedResource), as RFC 8707 §2.1 applies the resource to the
+// whole grant.
 //
 // A refresh token already used, presented again by its own Client while
 // its family lives, shows that it was stolen, and from whom pulsar cannot
@@ -554,12 +603,14 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // the second waits for the first, finds the token used, and revokes the
 // family; and a refresh and a revocation of one family take turns, so that
 // the revocation sees every access token the family has recorded, and no
-// refresh issues one after it. A scope that exceeds the family's rolls the
-// transaction back, so that the refresh token can still be redeemed. The
-// tokens are signed after it commits, as issueTokens signs them.
-func (p *Provider) refresh(ctx context.Context, client *registry.Client, refreshToken string, scopes []string) (*tokenResponse, error) {
+// refresh issues one after it. A scope that exceeds the family's, or a
+// resource refused, rolls the transaction back, so that the refresh token
+// can still be redeemed. The tokens are signed after it commits, as
+// issueTokens signs them.
+func (p *Provider) refresh(ctx context.Context, client *registry.Client, refreshToken string, scopes []string, resource string) (*tokenResponse, error) {
 	hash := hashCode(refreshToken)
 	jti := rand.Text()
+	var server *registry.ResourceServer
 	// When the refresh is, read once the family's row is locked, so that a
 	// refresh that waited for another as the family ended is not dated
 	// before the wait.
@@ -601,6 +652,10 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		if _, ok := p.registry.EndUser(row.Subject); !ok {
 			return errRefreshTokenNotRedeemable
 		}
+		var granted bool
+		if server, granted = p.grantedResource(client, row.Resource, resource); !granted {
+			return errResourceNotGranted
+		}
 		if len(scopes) == 0 {
 			scopes = row.Scopes
 		} else if !isSubset(scopes, row.Scopes) {
@@ -631,6 +686,7 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 	// of the original, and recommends against.
 	return p.signTokens(client, issuance{
 		subject:       row.Subject,
+		resource:      server,
 		scopes:        scopes,
 		expiry:        exp,
 		authTime:      row.AuthTime,
@@ -702,7 +758,11 @@ func (p *Provider) stopKeepingCode(ctx context.Context, codeHash []byte, now tim
 // recorded for it that signTokens does not sign.
 type issuance struct {
 	subject string
-	// scopes are those of the access token.
+	// resource is the Resource Server the access token is for, or nil if
+	// it is for pulsar's UserInfo.
+	resource *registry.ResourceServer
+	// scopes are those granted for the access token: all of them, or, for
+	// a Resource Server, those of them that are its own.
 	scopes []string
 	// expiry is when the access token and the ID token expire, as the
 	// access token is recorded.
@@ -722,13 +782,26 @@ type issuance struct {
 // signTokens returns the token response for t, issued to client at now:
 // an access token and an ID token, each expiring at t.expiry, and t's
 // refresh token, if any.
+//
+// An access token for a Resource Server names its identifier, alone, as
+// its audience, and holds only its scopes, so that it allows no more than
+// that Resource Server needs and is refused anywhere else, UserInfo
+// included (RFC 8707 §2, §2.2; RFC 9068 §3; RFC 9700 §2.3). Its scope may
+// then be empty, and is left out. The token response's scope is the access
+// token's (RFC 6749 §5.1). The ID token is the same either way.
 func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time) (*tokenResponse, error) {
 	exp := t.expiry
-	scope := strings.Join(t.scopes, " ")
+	audience := p.issuer.String()
+	scopes := t.scopes
+	if t.resource != nil {
+		audience = t.resource.Identifier
+		scopes = slices.DeleteFunc(slices.Clone(scopes), func(s string) bool { return !t.resource.HasScope(s) })
+	}
+	scope := strings.Join(scopes, " ")
 	accessToken, err := p.keys.SignJWT("at+jwt", accessTokenClaims{
 		Issuer:   p.issuer.String(),
 		Expiry:   exp.Unix(),
-		Audience: p.issuer.String(),
+		Audience: audience,
 		Subject:  t.subject,
 		ClientID: client.ID,
 		IssuedAt: now.Unix(),
@@ -780,8 +853,9 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 }
 
 // accessTokenClaims are the claims of a JWT access token (RFC 9068 §2.2).
-// Its audience is the issuer, the default resource of a request without a
-// resource parameter (RFC 9068 §3).
+// Its audience is the identifier of the Resource Server the request's
+// resource parameter named, or the issuer, the default resource of a
+// request without one (RFC 9068 §3).
 type accessTokenClaims struct {
 	Issuer   string `json:"iss"`
 	Expiry   int64  `json:"exp"`
@@ -790,7 +864,7 @@ type accessTokenClaims struct {
 	ClientID string `json:"client_id"`
 	IssuedAt int64  `json:"iat"`
 	JTI      string `json:"jti"`
-	Scope    string `json:"scope"`
+	Scope    string `json:"scope,omitempty"`
 }
 
 // accessTokenHash returns the at_hash of an access token signed with
