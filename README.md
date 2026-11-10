@@ -257,6 +257,32 @@ does not list with a reason, and leaves the results in
 
 [conformance/README.md](conformance/README.md) describes the files it uses.
 
+### Running the examples
+
+[examples/](examples/README.md) holds consumers of pulsar in a Go module of
+their own, which does not require pulsar's: an API, a Resource Server that
+verifies pulsar's access tokens itself, and a command-line public Client
+that signs in through a loopback redirect and calls it. They use only
+`golang.org/x/oauth2`, `github.com/coreos/go-oidc` and
+`github.com/go-jose/go-jose`. With Docker (and Compose v2), openssl and Go
+installed:
+
+```sh
+make examples
+```
+
+This runs pulsar in Docker Compose with the examples' registry, and the
+examples' tests against it, over the network. They show that those
+libraries work with pulsar: the CLI signs in with PKCE through a loopback
+redirect on a port the operating system chose, gets an access token for the
+API with `resource`, and calls the API, which accepts it. The API refuses no
+token, a token for UserInfo, an expired, changed or unsigned token and an ID
+token with 401, and a token without the route's scope with 403; and after
+`pulsar keys rotate` it accepts tokens signed with the new key. No browser
+runs: the tests act as one with Go's HTTP client.
+[examples/README.md](examples/README.md#what-the-tests-prove) lists what
+they do not prove. CI runs the same target on every pull request.
+
 On 2026-11-06, CI ran the Config OP and Basic OP plans against commit
 `8d6ab47`, on `main`, with no failures; the Form Post Basic and
 RP-Initiated Logout plans were added after that run, and no result of

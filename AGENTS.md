@@ -15,6 +15,7 @@ This file is a map. Detail lives where it is linked.
 | `make verify`      | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                                                                                                        |
 | `make fmt`         | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                                                                                                      |
 | `make conformance` | The OpenID conformance suite's Config OP, Basic OP, Form Post Basic and RP-Initiated Logout plans against pulsar, in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.             |
+| `make examples`    | The examples' tests against pulsar in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.                                                                                            |
 
 Work is not done until `make verify` passes. Run `make help` for the rest.
 Tools are installed by `make setup`, which the maintainer runs outside the
@@ -22,23 +23,23 @@ sandbox; if one is missing, say so rather than installing it.
 
 ## Where things live
 
-| Path                           | Contents                                                                                            |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `cmd/pulsar/`                  | `main` and `run`; wiring, signals, shutdown. Tests drive `run`.                                     |
-| `internal/`                    | Packages split by domain, never by layer, never `util`.                                             |
-| `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                                 |
-| `internal/harness/`            | Tests for the harness scripts that have failed before: the Stop hook and the commit check.          |
-| `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                              |
-| `conformance/`                 | The conformance suite's stack, configuration and expected results; see its README.                  |
-| `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                             |
-| `examples/`                    | Planned: consumers, a separate Go module that must not require pulsar; they reach it over the wire. |
-| `docs/research/`               | Dated surveys with sources. Decisions cite them.                                                    |
-| `docs/adr/`                    | Decisions, written through `/grill-with-docs`; created with the first one.                          |
-| `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                             |
-| `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                                    |
-| `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                                     |
-| `evals/`                       | How evals are run. Skill evals live with each plugin.                                               |
-| `docs/agents/`                 | Configuration read by the engineering skills.                                                       |
+| Path                           | Contents                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| `cmd/pulsar/`                  | `main` and `run`; wiring, signals, shutdown. Tests drive `run`.                            |
+| `internal/`                    | Packages split by domain, never by layer, never `util`.                                    |
+| `internal/cmd/`                | Repository tools, e.g. `repocheck`.                                                        |
+| `internal/harness/`            | Tests for the harness scripts that have failed before: the Stop hook and the commit check. |
+| `plugins/`                     | Skills packaged as plugins, each with its eval cases and `results.md`.                     |
+| `conformance/`                 | The conformance suite's stack, configuration and expected results; see its README.         |
+| `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                    |
+| `examples/`                    | Consumers, a separate Go module that must not require pulsar; they reach it over the wire. |
+| `docs/research/`               | Dated surveys with sources. Decisions cite them.                                           |
+| `docs/adr/`                    | Decisions, written through `/grill-with-docs`; created with the first one.                 |
+| `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                    |
+| `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                           |
+| `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                            |
+| `evals/`                       | How evals are run. Skill evals live with each plugin.                                      |
+| `docs/agents/`                 | Configuration read by the engineering skills.                                              |
 
 ## Requirements and tests
 
