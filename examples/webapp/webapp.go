@@ -224,9 +224,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-// outbound returns ctx with the HTTP client of the web app's requests, as
-// x/oauth2 and go-oidc read it.
-func (s *Server) outbound(ctx context.Context) context.Context {
+// withHTTPClient returns ctx with the HTTP client of the web app's
+// requests, as x/oauth2 and go-oidc read it.
+func (s *Server) withHTTPClient(ctx context.Context) context.Context {
 	return oidc.ClientContext(ctx, s.cfg.HTTPClient)
 }
 
@@ -273,7 +273,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	// and leaves the sign-in to finish.
 	f := s.endFlow(w, r, func(f *flow) bool { return f.state != "" && q.Get("state") == f.state })
 	if f == nil {
-		message(w, http.StatusBadRequest, "This is not the response to a sign-in this browser started.")
+		errorPage(w, http.StatusBadRequest, "This is not the response to a sign-in this browser started.")
 		return
 	}
 	switch {
@@ -281,14 +281,14 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	// names pulsar in iss, which pulsar's discovery document says it
 	// always sends (RFC 9207 §2.4).
 	case (s.issParameter || q.Has("iss")) && q.Get("iss") != s.cfg.Issuer:
-		message(w, http.StatusBadRequest, "The response does not come from pulsar.")
+		errorPage(w, http.StatusBadRequest, "The response does not come from pulsar.")
 		return
 	case q.Has("error"):
-		message(w, http.StatusForbidden, "Sign-in refused: "+q.Get("error"))
+		errorPage(w, http.StatusForbidden, "Sign-in refused: "+q.Get("error"))
 		return
 	}
 
-	ctx := s.outbound(r.Context())
+	ctx := s.withHTTPClient(r.Context())
 	// The code is redeemed with the code_verifier, the client's
 	// credentials, and the same resource, as RFC 8707 §2.2 allows.
 	token, err := s.oauth.Exchange(ctx, q.Get("code"),
@@ -296,7 +296,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		oauth2.SetAuthURLParam("resource", s.cfg.APIIdentifier),
 	)
 	if err != nil {
-		message(w, http.StatusBadGateway, "The code could not be redeemed.")
+		errorPage(w, http.StatusBadGateway, "The code could not be redeemed.")
 		return
 	}
 	// The ID token is verified as OpenID Connect Core 1.0 §3.1.3.7 says:
@@ -304,7 +304,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	rawIDToken, _ := token.Extra("id_token").(string)
 	idToken, err := s.verifier.Verify(ctx, rawIDToken)
 	if err != nil || idToken.Nonce != f.nonce {
-		message(w, http.StatusBadGateway, "The ID token is not valid.")
+		errorPage(w, http.StatusBadGateway, "The ID token is not valid.")
 		return
 	}
 
@@ -322,9 +322,8 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 
 // listNotes shows the End-User's notes, from the API.
 func (s *Server) listNotes(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
+	sess, ok := s.signedIn(w, r)
 	if !ok {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	var body struct {
@@ -338,21 +337,20 @@ func (s *Server) listNotes(w http.ResponseWriter, r *http.Request) {
 
 // addNote adds a note through the API, and shows the notes.
 func (s *Server) addNote(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
+	sess, ok := s.signedIn(w, r)
 	if !ok {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	text := r.PostFormValue("text")
 	if strings.TrimSpace(text) == "" {
-		message(w, http.StatusBadRequest, "A note needs text.")
+		errorPage(w, http.StatusBadRequest, "A note needs text.")
 		return
 	}
 	b, err := json.Marshal(struct {
 		Text string `json:"text"`
 	}{text})
 	if err != nil {
-		message(w, http.StatusInternalServerError, "The note could not be sent.")
+		errorPage(w, http.StatusInternalServerError, "The note could not be sent.")
 		return
 	}
 	if !s.callAPI(w, r, sess, http.MethodPost, b, http.StatusCreated, nil) {
@@ -367,19 +365,19 @@ func (s *Server) addNote(w http.ResponseWriter, r *http.Request) {
 // fails, it answers w and reports false.
 func (s *Server) callAPI(w http.ResponseWriter, r *http.Request, sess *session, method string, body []byte, want int, out any) bool {
 	ctx := r.Context()
-	accessToken, err := s.accessToken(s.outbound(ctx), sess)
+	accessToken, err := s.accessToken(s.withHTTPClient(ctx), sess)
 	if errors.Is(err, errRefreshRefused) {
 		s.endSession(w, r)
-		message(w, http.StatusUnauthorized, "Your session has ended; sign in again.")
+		errorPage(w, http.StatusUnauthorized, "Your session has ended; sign in again.")
 		return false
 	}
 	if err != nil {
-		message(w, http.StatusBadGateway, "pulsar could not be reached to refresh the access token.")
+		errorPage(w, http.StatusBadGateway, "pulsar could not be reached to refresh the access token.")
 		return false
 	}
 	req, err := http.NewRequestWithContext(ctx, method, s.cfg.APIURL+"/notes", bytes.NewReader(body))
 	if err != nil {
-		message(w, http.StatusInternalServerError, "The API could not be called.")
+		errorPage(w, http.StatusInternalServerError, "The API could not be called.")
 		return false
 	}
 	// The access token goes in the Authorization header (RFC 6750 §2.1).
@@ -389,16 +387,16 @@ func (s *Server) callAPI(w http.ResponseWriter, r *http.Request, sess *session, 
 	}
 	resp, err := s.cfg.HTTPClient.Do(req)
 	if err != nil {
-		message(w, http.StatusBadGateway, "The API could not be reached.")
+		errorPage(w, http.StatusBadGateway, "The API could not be reached.")
 		return false
 	}
 	defer resp.Body.Close() //nolint:errcheck // Closing a response body reports nothing to act on.
 	if resp.StatusCode != want {
-		message(w, http.StatusBadGateway, fmt.Sprintf("The API answered %d.", resp.StatusCode))
+		errorPage(w, http.StatusBadGateway, fmt.Sprintf("The API answered %d.", resp.StatusCode))
 		return false
 	}
 	if out != nil && json.NewDecoder(resp.Body).Decode(out) != nil {
-		message(w, http.StatusBadGateway, "The API's answer could not be read.")
+		errorPage(w, http.StatusBadGateway, "The API's answer could not be read.")
 		return false
 	}
 	return true
@@ -424,7 +422,7 @@ func (s *Server) accessToken(ctx context.Context, sess *session) (string, error)
 		return "", fmt.Errorf("%w: %w", errRefreshRefused, err)
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("webapp: refresh: %w", err)
 	}
 	// The refresh token pulsar returned replaces the one redeemed, which
 	// pulsar will not accept again (RFC 9700 §4.14.2).
@@ -442,9 +440,8 @@ func (s *Server) expiry(token *oauth2.Token) time.Time {
 // logout revokes the session's refresh token, ends the session, and sends
 // the browser to pulsar's logout endpoint, to sign out there too.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
+	sess, ok := s.signedIn(w, r)
 	if !ok {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	// Revoking the refresh token revokes its whole grant at pulsar, so no
@@ -452,10 +449,10 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	// §6.1.2.3). If pulsar cannot be reached, the session is kept, so that
 	// the End-User can try again.
 	sess.mu.Lock()
-	err := s.revoke(s.outbound(r.Context()), sess.token.RefreshToken)
+	err := s.revoke(s.withHTTPClient(r.Context()), sess.token.RefreshToken)
 	sess.mu.Unlock()
 	if err != nil {
-		message(w, http.StatusBadGateway, "The refresh token could not be revoked; try again.")
+		errorPage(w, http.StatusBadGateway, "The refresh token could not be revoked; try again.")
 		return
 	}
 	s.endSession(w, r)
@@ -482,7 +479,7 @@ func (s *Server) revoke(ctx context.Context, refreshToken string) error {
 	form := url.Values{"token": {refreshToken}, "token_type_hint": {"refresh_token"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.revocationEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return err
+		return fmt.Errorf("webapp: revoke: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	// The client_id and secret are form-encoded before they are joined
@@ -490,14 +487,14 @@ func (s *Server) revoke(ctx context.Context, refreshToken string) error {
 	req.SetBasicAuth(url.QueryEscape(s.cfg.ClientID), url.QueryEscape(s.cfg.ClientSecret))
 	resp, err := s.cfg.HTTPClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("webapp: revoke: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // Closing a response body reports nothing to act on.
 	_, _ = io.Copy(io.Discard, resp.Body)
 	// 200 means revoked, or already invalid; both leave nothing to revoke
 	// (RFC 7009 §2.2).
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("the revocation endpoint answered %d", resp.StatusCode)
+		return fmt.Errorf("webapp: revoke: the revocation endpoint answered %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -509,7 +506,7 @@ func (s *Server) signedOut(w http.ResponseWriter, r *http.Request) {
 	// A return with another is refused, and leaves the logout to finish.
 	state := r.URL.Query().Get("state")
 	if f := s.endFlow(w, r, func(f *flow) bool { return f.logoutState != "" && state == f.logoutState }); f == nil {
-		message(w, http.StatusBadRequest, "This is not the return from a logout this browser started.")
+		errorPage(w, http.StatusBadRequest, "This is not the return from a logout this browser started.")
 		return
 	}
 	render(w, http.StatusOK, signedOutPage, nil)
@@ -524,6 +521,16 @@ func (s *Server) session(r *http.Request) (*session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[c.Value]
+	return sess, ok
+}
+
+// signedIn returns the session r's cookie names, if there is one, and
+// otherwise redirects to the home page, where the End-User can sign in.
+func (s *Server) signedIn(w http.ResponseWriter, r *http.Request) (*session, bool) {
+	sess, ok := s.session(r)
+	if !ok {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
 	return sess, ok
 }
 
@@ -644,7 +651,7 @@ func render(w http.ResponseWriter, status int, t *template.Template, data any) {
 	_, _ = w.Write(buf.Bytes()) // The status is already sent; a failed write has no one to tell.
 }
 
-// message answers with status and a page that says msg.
-func message(w http.ResponseWriter, status int, msg string) {
+// errorPage answers with status and a page that says msg.
+func errorPage(w http.ResponseWriter, status int, msg string) {
 	render(w, status, messagePage, msg)
 }

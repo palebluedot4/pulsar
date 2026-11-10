@@ -53,25 +53,27 @@ port must be free.
 
 Over the wire, with `x/oauth2` and `go-oidc` on the other side:
 
-- The web app signs in with PKCE, `state`, `nonce`, `offline_access` and
-  `resource`, authenticating with its secret; refuses a response to its
-  callback with another `state`; verifies the ID token; and adds and lists
-  a note through the API. When its access token has expired
-  by its clock, which the test moves forward rather than wait ten minutes,
-  it refreshes it, and the API accepts the new one; twice, so the second
-  refresh uses the refresh token the first returned. Its logout revokes its
-  refresh token, and sends the browser to pulsar's logout endpoint with the
-  ID token as `id_token_hint`, its `post_logout_redirect_uri` and a
-  `state`. A return with another `state` is refused. The End-User confirms
-  on pulsar's page, and pulsar sends them back with the `state`. Then the
-  web app's last refresh token, which it never redeemed, gets
-  `invalid_grant`, and an authorization request with `prompt=none` in the
-  same browser gets `login_required`.
-- Of every response the browser receives in that test, none holds an
-  access or refresh token, and only two hold the ID token: the web app's
-  redirect to pulsar's logout endpoint, as `id_token_hint`, and pulsar's
-  logout page, which carries it in its form. After sign-in, the browser
-  holds one cookie for the web app.
+- The web app's authorization request carries a PKCE `code_challenge` by
+  `S256`, a `state`, a `nonce`, `offline_access` with `prompt=consent`, and
+  `resource`. It refuses a response to its callback with another `state`.
+  The End-User signs in on pulsar's login page and allows the request on
+  its consent page; the web app redeems the code with its secret, verifies
+  the ID token, and adds and lists a note through the API. When its access
+  token has expired by its clock, which the test moves forward rather than
+  wait ten minutes, it refreshes it, and the API accepts the new one;
+  twice, so the second refresh uses the refresh token the first returned.
+  Its logout revokes its refresh token, and sends the browser to pulsar's
+  logout endpoint with the ID token as `id_token_hint`, its
+  `post_logout_redirect_uri` and a `state`. A return with another `state`
+  is refused. The End-User confirms on pulsar's logout page, and pulsar
+  sends them back with the `state`. Then the web app's last refresh token,
+  which it never redeemed, gets `invalid_grant`, and an authorization
+  request with `prompt=none` in the same browser gets `login_required`.
+- No response the browser receives in that test holds an access or
+  refresh token, and the ID token appears only as `id_token_hint`: in the
+  `Location` of the web app's redirect to pulsar's logout endpoint, and in
+  the form of pulsar's logout page. After sign-in, the browser holds one
+  cookie for the web app.
 - The CLI signs in through a loopback redirect on a port the operating
   system chose, with PKCE, `state` and `nonce`, and `resource` at both
   endpoints; it verifies the ID token; and it calls the API with its access

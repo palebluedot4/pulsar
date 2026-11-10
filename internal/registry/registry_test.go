@@ -104,8 +104,8 @@ func TestClientOrigins(t *testing.T) {
 // suite and the examples run pulsar with load, and that the example
 // End-User's published password, the web app example's published secret
 // and the CLI example's loopback redirect URI are accepted, since only
-// make conformance and make examples, which
-// need Docker, would otherwise start pulsar with them.
+// make conformance and make examples, which need Docker, would otherwise
+// start pulsar with them.
 func TestCommittedRegistries(t *testing.T) {
 	t.Parallel()
 

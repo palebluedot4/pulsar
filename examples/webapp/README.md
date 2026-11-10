@@ -50,11 +50,13 @@ serves it.
 Every page also has `Cache-Control: no-store`, so that no page about the
 End-User is cached.
 
-The ID token passes through the browser once, by design: RP-Initiated
-Logout 1.0 §2 sends `id_token_hint` in the logout request, which the web
-app makes by redirecting the browser to pulsar. pulsar then carries it in
-the body of its own confirmation form, not in a URL. No access or refresh
-token ever reaches the browser.
+No response the browser receives holds an access or refresh token, and
+the ID token appears only as `id_token_hint`: in the `Location` of the web
+app's redirect to pulsar's logout endpoint, and in the form of pulsar's
+logout page. RP-Initiated Logout 1.0 §2 sends `id_token_hint` in the
+logout request, which the web app makes by redirecting the browser to
+pulsar; pulsar's logout page then posts it back to pulsar in the body of
+its form, not in a URL.
 
 The home page names the End-User by their `sub`. A name would come from
 UserInfo, which accepts only access tokens for pulsar, and the web app
@@ -62,10 +64,11 @@ holds one for the API alone.
 
 ## What it does not do
 
-- It keeps sessions and their tokens in memory, without limit, until
-  logout, and loses them when it stops; a session it no longer has is
-  signed out. RFC 10017 §6.1.2.3 recommends server-side sessions only in
-  small-scale scenarios.
+- It keeps sessions and their tokens in memory, without limit and with no
+  lifetime of their own: each lasts until logout, or until pulsar refuses
+  a refresh with its refresh token, and a session the End-User leaves
+  lasts until the web app stops, which loses them all. RFC 10017 §6.1.2.3
+  recommends server-side sessions only in small-scale scenarios.
 - It ignores the ID token a refresh may return, and keeps the one from
   sign-in for `id_token_hint`, which pulsar accepts after it expires.
 - It serves plain `http`, for `localhost` alone, where a browser keeps
