@@ -179,8 +179,10 @@ install added a record and removed the `.orphaned_at` marker, and either
 could be what made it load. The marker is not the original cause, since it
 postdates the first sessions without the plugin. Why a relative-path plugin
 needed a record, against the documentation's "needs no install record", is
-**UNVERIFIED**, and so is whether the install succeeds on a fresh clone
-whose `pulsar` marketplace is not yet cloned. `make setup` now installs
+**UNVERIFIED**. On a fresh clone with an empty `HOME`, before any session,
+the install fails with `Plugin "right-sizing" not found in marketplace
+"pulsar"`, and `mattpocock-skills` fails the same way, since neither
+marketplace has been cloned yet (#92). `make setup` now installs
 every enabled plugin at project scope and restores `.claude/settings.json`
 afterwards.
 
