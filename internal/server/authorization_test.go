@@ -67,7 +67,9 @@ const aliceClaims = `{
 // with aliceClaims, and bob: rp and other authenticate with
 // client_secret_basic, post with client_secret_post, and jwt with
 // private_key_jwt, by the public keys of jwtKeys; public is a public
-// Client. Only rp and other register post-logout redirect URIs.
+// Client. Only rp and other register post-logout redirect URIs. It has the
+// Resource Servers of resource_test.go too: rp may request ordersServer and
+// billingServer, public ordersServer, and other adminServer.
 func flowRegistry(tb testing.TB) *registry.Registry {
 	tb.Helper()
 	reg, err := registry.Parse(flowRegistryFile(tb))
@@ -114,17 +116,21 @@ func flowRegistryWithout(tb testing.TB, id string) *registry.Registry {
 func flowRegistryFile(tb testing.TB) []byte {
 	tb.Helper()
 	return []byte(`{
+		"resource_servers": ` + resourceServersJSON + `,
 		"clients": [
 			{"client_id": "rp", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hashPassword(tb, rpSecret) + `",
 			 "redirect_uris": ["` + rpRedirectURI + `", "` + rpQueryRedirectURI + `"],
-			 "post_logout_redirect_uris": ["` + rpSignedOutURI + `", "` + rpQuerySignedOutURI + `"]},
+			 "post_logout_redirect_uris": ["` + rpSignedOutURI + `", "` + rpQuerySignedOutURI + `"],
+			 "resource_servers": ["` + ordersServer + `", "` + billingServer + `"]},
 			{"client_id": "other", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hashPassword(tb, otherSecret) + `",
-			 "redirect_uris": ["https://other.example/callback"], "post_logout_redirect_uris": ["` + otherSignedOutURI + `"]},
+			 "redirect_uris": ["https://other.example/callback"], "post_logout_redirect_uris": ["` + otherSignedOutURI + `"],
+			 "resource_servers": ["` + adminServer + `"]},
 			{"client_id": "post", "token_endpoint_auth_method": "client_secret_post", "client_secret_hash": "` + hashPassword(tb, postSecret) + `",
 			 "redirect_uris": ["` + postRedirectURI + `"]},
 			{"client_id": "jwt", "token_endpoint_auth_method": "private_key_jwt", "jwks": ` + jwtJWKS(tb) + `,
 			 "redirect_uris": ["` + jwtRedirectURI + `"]},
-			{"client_id": "public", "token_endpoint_auth_method": "none", "redirect_uris": ["` + publicRedirectURI + `"]}
+			{"client_id": "public", "token_endpoint_auth_method": "none", "redirect_uris": ["` + publicRedirectURI + `"],
+			 "resource_servers": ["` + ordersServer + `"]}
 		],
 		"end_users": [
 			{"sub": "` + aliceSubject + `", "username": "alice", "password_hash": "` + hashPassword(tb, alicePassword) + `",

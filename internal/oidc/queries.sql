@@ -3,8 +3,8 @@
 
 -- name: InsertAuthorizationCode :exec
 -- A code not redeemed may be deleted once it has expired.
-INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, auth_time, expiry, delete_after)
-VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_challenge, @claims, @auth_time, @expiry, @expiry);
+INSERT INTO authorization_codes (code_hash, client_id, redirect_uri, subject, scopes, nonce, code_challenge, claims, resource, auth_time, expiry, delete_after)
+VALUES (@code_hash, @client_id, @redirect_uri, @subject, @scopes, @nonce, @code_challenge, @claims, @resource, @auth_time, @expiry, @expiry);
 
 -- name: RedeemAuthorizationCode :one
 -- Marks the code redeemed and returns what it was issued for, if it was
@@ -29,7 +29,7 @@ WHERE code_hash = @code_hash
     AND redirect_uri = @redirect_uri
     AND expiry > @now
     AND NOT redeemed
-RETURNING subject, scopes, nonce, code_challenge, claims, auth_time;
+RETURNING subject, scopes, nonce, code_challenge, claims, resource, auth_time;
 
 -- name: LockAuthorizationCode :one
 -- Locks the code's row, if it is still kept, until the transaction ends,
@@ -90,8 +90,8 @@ WITH kept AS (
     SET delete_after = @expiry
     WHERE code_hash = @code_hash
 )
-INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, auth_time, expiry)
-VALUES (@code_hash, @client_id, @subject, @scopes, @claims, @auth_time, @expiry)
+INSERT INTO refresh_token_families (code_hash, client_id, subject, scopes, claims, resource, auth_time, expiry)
+VALUES (@code_hash, @client_id, @subject, @scopes, @claims, @resource, @auth_time, @expiry)
 RETURNING id;
 
 -- name: InsertRefreshToken :exec
@@ -107,7 +107,7 @@ VALUES (@token_hash, @family_id);
 -- and access tokens, as that one left them. The lock is the one an UPDATE
 -- of the row takes, which does not block recording a refresh token in the
 -- family.
-SELECT f.id, f.client_id, f.code_hash, f.subject, f.scopes, f.claims, f.auth_time, f.expiry, f.revoked
+SELECT f.id, f.client_id, f.code_hash, f.subject, f.scopes, f.claims, f.resource, f.auth_time, f.expiry, f.revoked
 FROM refresh_tokens r
 JOIN refresh_token_families f ON f.id = r.family_id
 WHERE r.token_hash = @token_hash

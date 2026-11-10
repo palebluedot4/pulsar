@@ -70,7 +70,12 @@ type ConsentPage struct {
 	// page asks. A decision counts only for that Subject.
 	Subject  string
 	Username string
-	Scopes   []Scope // the scopes the Client asks for
+	Scopes   []Scope // the scopes the Client asks for, OpenID Connect's
+	// ResourceServer is the identifier of the Resource Server the Client
+	// asks for an access token for, or "" for none, and ResourceScopes the
+	// scopes of it the Client asks for.
+	ResourceServer string
+	ResourceScopes []Scope
 	// Action is where the form is submitted: the consent form's path, with
 	// the authorization request's parameters as its query.
 	Action string
@@ -112,6 +117,16 @@ var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype htm
 <li><code>{{.Value}}</code>: {{.Description}}</li>
 {{- end}}
 </ul>
+{{- if .ResourceServer}}
+<p>It also asks for access to <strong id="resource-server">{{.ResourceServer}}</strong>{{if .ResourceScopes}}, to:{{else}}.{{end}}</p>
+{{- with .ResourceScopes}}
+<ul id="resource-server-scopes">
+{{- range .}}
+<li><code>{{.Value}}</code>: {{.Description}}</li>
+{{- end}}
+</ul>
+{{- end}}
+{{- end}}
 <form method="post" action="{{.Action}}">
 <input type="hidden" name="{{.EndUserField}}" value="{{.Subject}}">
 <p><button type="submit" name="decision" value="{{.Allow}}">Allow</button>
