@@ -65,11 +65,12 @@ nothing else, only if the identified Client registered exactly that URI, and
 otherwise shows a page that says whether they are signed out. An
 `id_token_hint` must be an ID token pulsar issued to a registered Client,
 and a `client_id` sent with it must name that Client. The hint may have
-expired, and may be signed by a key that `pulsar keys rotate` replaced: that
+expired, and may be signed by a key that `pulsar keys rotate` replaced. That
 key leaves the JWK Set eleven minutes after the new key starts signing, but
-pulsar goes on accepting hints it signed, and nothing else it signed, for
-ten hours and a minute after that, the longest a Login Session in which it
-signed could last. A hint refused, or a `client_id` that does not match it,
+pulsar accepts hints it signed, and nothing else it signed, until ten hours
+and a minute after the new key started signing: the longest a Login Session
+in which the old key signed can last from then, plus a reload interval's
+margin. A hint refused, or a `client_id` that does not match it,
 gets an error page and logs no one out. The request is carried in
 the confirmation form's body, so no URL pulsar sends the browser to holds
 the hint. Logout revokes no refresh token and no access token.

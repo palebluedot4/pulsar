@@ -39,11 +39,14 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   Nor does a rotation end a hint early. After `pulsar keys rotate`, the
   replaced key leaves the JWK Set eleven minutes after the new key starts
   signing, but its public half still verifies a hint, and nothing else,
-  until a Login Session's ten-hour lifetime plus a reload interval has
-  passed since then: until every Login Session in which it signed an ID
-  token has ended. A hint it signed is refused, with the error page, from
-  then on. node-oidc-provider likewise verifies hints against its whole
-  keystore, and Spring looks them up rather than verifying them with a key
+  until ten hours and a minute after the new key started signing. That is
+  a Login Session's lifetime, the longest a Login Session in which the old
+  key signed an ID token can last from then, plus the reload interval of
+  margin the JWK Set's retention has (REQ-CORE-51). A hint it signed is
+  refused, with the error page, from then on. node-oidc-provider likewise
+  verifies hints against its whole keystore, Keycloak's documentation says
+  a passive key "can be used to verify previous signatures", and Spring
+  looks hints up rather than verifying them with a key
   ([research](../research/logout-revocation-resources.md#client_id-and-hints-signed-by-rotated-keys)).
 
 - REQ-LOGOUT-4 (§2, `client_id`): "When both client_id and id_token_hint
