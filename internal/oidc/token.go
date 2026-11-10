@@ -130,12 +130,12 @@ func (p *Provider) exchange(w http.ResponseWriter, r *http.Request) (*tokenRespo
 	// Each grant checks the request's form before its Client
 	// authenticates, so that a malformed request does not use up a client
 	// assertion, which authenticates once.
-	switch params.Get("grant_type") {
-	case "authorization_code":
+	switch registry.GrantType(params.Get("grant_type")) {
+	case registry.AuthorizationCode:
 		return p.exchangeCode(r, params)
-	case "refresh_token":
+	case registry.RefreshToken:
 		return p.exchangeRefreshToken(r, params)
-	case "client_credentials":
+	case registry.ClientCredentials:
 		return p.exchangeClientCredentials(r, params)
 	case "":
 		return nil, badRequest(errInvalidRequest, "The parameter grant_type is required.")
@@ -656,7 +656,7 @@ func (p *Provider) exchangeClientCredentials(r *http.Request, params url.Values)
 // request for an access token for server and scopes: an access token
 // whose sub is the Client's client_id, as RFC 9068 §2.2 says it SHOULD be
 // for this grant, and which the registry keeps from equaling any End-User's
-// Subject (docs/adr/0007-machine-clients-are-their-own-subject.md). It
+// Subject (docs/adr/0007-a-machine-clients-sub-is-its-client-id.md). It
 // carries no refresh token (RFC 6749 §4.4.3) and no ID token, since there
 // is no End-User. The access token is not recorded: none is looked up at
 // UserInfo, which refuses it for its aud, or at the revocation endpoint,
@@ -666,7 +666,7 @@ func (p *Provider) exchangeClientCredentials(r *http.Request, params url.Values)
 func (p *Provider) issueClientToken(ctx context.Context, client *registry.Client, server *registry.ResourceServer, scopes []string) (*tokenResponse, *tokenError) {
 	now := time.Now()
 	exp := now.Add(TokenLifetime)
-	accessToken, err := p.signAccessToken(client, client.ID, server.Identifier, scopes, rand.Text(), now, exp)
+	accessToken, err := p.signAccessToken(client.ID, client.ID, server.Identifier, scopes, rand.Text(), now, exp)
 	if err != nil {
 		return nil, p.serverError(ctx, err)
 	}
@@ -916,7 +916,7 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 		audience = t.resource.Identifier
 		scopes = slices.DeleteFunc(slices.Clone(scopes), func(s string) bool { return !t.resource.HasScope(s) })
 	}
-	accessToken, err := p.signAccessToken(client, t.subject, audience, scopes, t.jti, now, exp)
+	accessToken, err := p.signAccessToken(client.ID, t.subject, audience, scopes, t.jti, now, exp)
 	if err != nil {
 		return nil, err
 	}
@@ -962,15 +962,15 @@ func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time
 }
 
 // signAccessToken returns a JWT access token (RFC 9068 §2) issued to
-// client at now, until exp, for subject, with audience as its aud, scopes
-// as its scope, and jti.
-func (p *Provider) signAccessToken(client *registry.Client, subject, audience string, scopes []string, jti string, now, exp time.Time) (string, error) {
+// the Client whose client_id is clientID at now, until exp, for subject,
+// with audience as its aud, scopes as its scope, and jti.
+func (p *Provider) signAccessToken(clientID, subject, audience string, scopes []string, jti string, now, exp time.Time) (string, error) {
 	return p.keys.SignJWT("at+jwt", accessTokenClaims{
 		Issuer:   p.issuer.String(),
 		Expiry:   exp.Unix(),
 		Audience: audience,
 		Subject:  subject,
-		ClientID: client.ID,
+		ClientID: clientID,
 		IssuedAt: now.Unix(),
 		JTI:      jti,
 		Scope:    strings.Join(scopes, " "),

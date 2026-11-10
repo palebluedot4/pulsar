@@ -171,9 +171,16 @@ func newFlowHandlerFor(tb testing.TB, pool *pgxpool.Pool, reg *registry.Registry
 // answered before either is needed.
 func newFlowHandlerWithoutDatabase(tb testing.TB) http.Handler {
 	tb.Helper()
+	return newFlowHandlerWithoutDatabaseFor(tb, flowRegistry(tb))
+}
+
+// newFlowHandlerWithoutDatabaseFor returns the handler of
+// newFlowHandlerWithoutDatabase with the registry reg.
+func newFlowHandlerWithoutDatabaseFor(tb testing.TB, reg *registry.Registry) http.Handler {
+	tb.Helper()
 	pool := postgrestest.Open(tb, postgrestest.UnreachableURL(tb))
 	logger := slog.New(slog.DiscardHandler)
-	return New(logger, mustParse(tb, loginIssuer), pool, signing.New(pool, config.Secret{}), flowRegistry(tb), guessing.New(pool, nil), ready())
+	return New(logger, mustParse(tb, loginIssuer), pool, signing.New(pool, config.Secret{}), reg, guessing.New(pool, nil), ready())
 }
 
 // newBubbleFlowHandler returns the handler of newFlowHandler for the

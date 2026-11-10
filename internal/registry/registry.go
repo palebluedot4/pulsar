@@ -55,10 +55,12 @@
 // post_logout_redirect_uris, since it is never sent to the authorization
 // or logout endpoint; and lists, in scope, space-separated as RFC 7591 §2
 // gives it, the scopes it may be granted, at least one, each a scope of a
-// Resource Server it lists in resource_servers. Its client_id is the sub
-// of its access tokens (docs/adr/0007-machine-clients-are-their-own-subject.md),
-// so it may not be a UUID in the form of an End-User's Subject, and no
-// End-User's Subject can equal it. No other Client may list scope.
+// Resource Server it lists in resource_servers. No other Client may list
+// scope. Its client_id is the sub of its access tokens
+// (docs/adr/0007-a-machine-clients-sub-is-its-client-id.md), so no
+// Client's client_id may be a UUID, in any case, the form of every
+// End-User's Subject: no access token's sub can then name both a Client
+// and an End-User.
 //
 //	{
 //	  "client_id": "batch",
@@ -526,8 +528,16 @@ func decoyFor(h passwordHash) passwordHash {
 }
 
 func newClient(e clientEntry) (*Client, error) {
-	if e.ClientID == "" {
+	switch {
+	case e.ClientID == "":
 		return nil, errors.New("client_id is required")
+	case isUUID(strings.ToLower(e.ClientID)):
+		// A machine Client's client_id is the sub of its access tokens, and
+		// a Client of the code flow could otherwise share an End-User's
+		// Subject, whose access tokens for it would then carry sub equal to
+		// client_id; so no Client's is a UUID, in any case, the form of
+		// every End-User's Subject (RFC 9700 §4.15.1).
+		return nil, fmt.Errorf("client_id %q is a UUID, the form of an End-User's Subject", e.ClientID)
 	}
 	c := &Client{ID: e.ClientID, AuthMethod: e.TokenEndpointAuthMethod}
 	var needsSecret, needsJWKS bool
@@ -569,7 +579,7 @@ func newClient(e clientEntry) (*Client, error) {
 		c.JWKS = e.JWKS
 	}
 
-	if err := checkGrantTypes(c, e); err != nil {
+	if err := parseGrantTypes(c, e); err != nil {
 		return nil, err
 	}
 	if c.machine() {
@@ -613,12 +623,12 @@ func newClient(e clientEntry) (*Client, error) {
 	return c, nil
 }
 
-// checkGrantTypes checks e's grant_types, and sets c's GrantTypes from
-// them. A Client lists client_credentials alone, or authorization_code and
+// parseGrantTypes checks e's grant_types and sets c's GrantTypes from them.
+// A Client lists client_credentials alone, or authorization_code and
 // refresh_token, each once, or lists none. A machine Client, one that lists
 // client_credentials, is also checked against what such a Client may
-// register, and its scope is set as c's Scopes.
-func checkGrantTypes(c *Client, e clientEntry) error {
+// register, and its scope is set as c's Scopes (parseMachineClient).
+func parseGrantTypes(c *Client, e clientEntry) error {
 	if e.GrantTypes == nil {
 		c.GrantTypes = slices.Clone(defaultGrantTypes)
 		return nil
@@ -637,16 +647,16 @@ func checkGrantTypes(c *Client, e clientEntry) error {
 		// RFC 7591 §5 lets an authorization server keep the two apart.
 		return fmt.Errorf("grant_types: %s must be listed alone, so that a Client acts for itself or for End-Users, never both", ClientCredentials)
 	case c.machine():
-		return checkMachineClient(c, e)
+		return parseMachineClient(c, e)
 	case len(c.GrantTypes) != len(defaultGrantTypes):
 		return fmt.Errorf("grant_types must list %s alone, or %s and %s", ClientCredentials, AuthorizationCode, RefreshToken)
 	}
 	return nil
 }
 
-// checkMachineClient checks what a machine Client registers, and sets c's
+// parseMachineClient checks what a machine Client registers, and sets c's
 // Scopes from its scope.
-func checkMachineClient(c *Client, e clientEntry) error {
+func parseMachineClient(c *Client, e clientEntry) error {
 	switch {
 	case c.Public():
 		// RFC 6749 §4.4.
@@ -655,9 +665,6 @@ func checkMachineClient(c *Client, e clientEntry) error {
 		return fmt.Errorf("redirect_uris is not allowed for %s", ClientCredentials)
 	case len(e.PostLogoutRedirectURIs) > 0:
 		return fmt.Errorf("post_logout_redirect_uris is not allowed for %s", ClientCredentials)
-	case isUUID(e.ClientID):
-		// RFC 9700 §4.15.1, RFC 9068 §5.
-		return fmt.Errorf("client_id %q is in the form of an End-User's Subject, which the sub of its access tokens must never be", e.ClientID)
 	case e.Scope == "":
 		return fmt.Errorf("scope is required for %s", ClientCredentials)
 	}

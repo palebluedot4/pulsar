@@ -98,7 +98,7 @@ func HandleDiscovery(issuer *Issuer) http.Handler {
 		ScopesSupported:                   append(scopeValues(supportedScopes), offlineAccessScope.Value),
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            responseModes,
-		GrantTypesSupported:               []string{"authorization_code", "refresh_token", "client_credentials"},
+		GrantTypesSupported:               []string{string(registry.AuthorizationCode), string(registry.RefreshToken), string(registry.ClientCredentials)},
 		SubjectTypesSupported:             []string{"public"},
 		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
 		TokenEndpointAuthMethodsSupported: clientAuthMethods,
