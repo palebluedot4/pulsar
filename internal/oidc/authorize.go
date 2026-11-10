@@ -160,10 +160,10 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		return
 	}
 	// The URI redirected to, and recorded with the code, is the request's:
-	// one the Client registered, or a loopback IP redirect URI it
-	// registered with the port the request names.
+	// one the Client registered, or, for a public Client, a loopback IP
+	// redirect URI it registered with the port the request names.
 	v := params["redirect_uri"]
-	if len(v) != 1 || !client.RedirectURI(v[0]) {
+	if len(v) != 1 || !client.AllowsRedirectURI(v[0]) {
 		p.errorPage(w, "The authorization request's redirect_uri is not one the client registered.")
 		return
 	}

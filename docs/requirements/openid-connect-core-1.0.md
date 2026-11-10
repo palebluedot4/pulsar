@@ -37,7 +37,7 @@ that pulsar, as an OP, must or should meet.
   Provider, with the matching performed as described in Section 6.2.1 of
   [RFC3986] (Simple String Comparison)."
 
-  Departure: the port of a loopback IP redirect URI may differ from the
+  Departure: the port of a public Client's loopback IP redirect URI may differ from the
   one registered, as RFC 8252 §7.3 requires and RFC 9700 §2.1 allows
   (REQ-NATIVE-1, REQ-BCP-3), so that a native app can listen on a port the
   operating system chooses. Everything else is compared exactly.

@@ -34,8 +34,9 @@
 // does not know (see [Registry.HasResourceServer]).
 //
 // A request names one of a Client's redirect_uris exactly, but for the
-// port of a loopback IP redirect URI, such as http://127.0.0.1/callback,
-// which a native app may name with any port (see [Client.RedirectURI]).
+// port of a public Client's loopback IP redirect URI, such as
+// http://127.0.0.1/callback, which a native app may name with any port
+// (see [Client.AllowsRedirectURI]).
 //
 // A Client may list post_logout_redirect_uris, to which pulsar returns
 // the End-User after logout (OpenID Connect RP-Initiated Logout 1.0 §3.1).
@@ -188,14 +189,22 @@ func (c *Client) Public() bool {
 	return c.AuthMethod == None
 }
 
-// RedirectURI reports whether requested, an authorization request's
-// redirect_uri, is one of c's: equal to one c registered, or to a
-// loopback IP redirect URI c registered but for the port, which RFC 8252
-// §7.3 lets a native app choose at the time of the request. The response
-// goes to requested, port included.
-func (c *Client) RedirectURI(requested string) bool {
+// AllowsRedirectURI reports whether requested, an authorization
+// request's redirect_uri, is one of c's: equal to one c registered, or,
+// if c is public, to a loopback IP redirect URI c registered but for the
+// port, which RFC 8252 §7.3 lets a native app choose at the time of the
+// request. The response goes to requested, port included.
+//
+// The port may differ for a public Client alone: RFC 8252 describes native
+// apps as public Clients (§8.4), and RFC 9700 §2.1 excepts the port of
+// "localhost redirection URIs of native apps" only. A confidential Client
+// that registers a loopback redirect URI must name it exactly.
+func (c *Client) AllowsRedirectURI(requested string) bool {
 	if slices.Contains(c.RedirectURIs, requested) {
 		return true
+	}
+	if !c.Public() {
+		return false
 	}
 	want, ok := withoutLoopbackPort(requested)
 	if !ok {
