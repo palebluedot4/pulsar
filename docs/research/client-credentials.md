@@ -35,8 +35,9 @@ Open-source providers were read from their source at these commits:
   `15ca394e00a66434520b9ade26294999295a43ae` (2026-10-23)
 - `golang.org/x/oauth2` v0.38.0, the version `examples/go.mod` requires
 
-These are development heads, not releases, except x/oauth2 and the
-conformance suite, and a released version may behave differently
+Hydra, Keycloak, Spring and Zitadel are development heads, not releases;
+node-oidc-provider 9.13.3, zitadel/oidc v3.47.5, x/oauth2 and the
+conformance suite are releases. A released version may behave differently
 (**UNVERIFIED** that each behaves the same). Paths are relative to each
 repository at its commit. Auth0, Okta and Microsoft Entra ID were read from
 their documentation on 2026-11-10, at the URLs given. OAuth 2.1 was read as
@@ -299,9 +300,11 @@ Source: <https://github.com/modelcontextprotocol/ext-auth/tree/15ca394e00a664345
 | Okta               | A service app ("API Services"), and an access policy rule of the custom authorization server whose grant types include it: "If no matching rule is found, then the authorization request fails."                  | Not stated.                                                                                                              | Not stated.                                                                                                                                          | [Client credentials](https://developer.okta.com/docs/guides/implement-grant-type/clientcreds/main/), [authorization servers](https://developer.okta.com/docs/guides/customize-authz-server/main/) |
 | Microsoft Entra ID | "You must use application permissions, also known as app roles, that are granted by an admin or by the API's owner."                                                                                              | Not stated.                                                                                                              | Not stated.                                                                                                                                          | [Client credentials flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow)                                                                            |
 
-Every provider makes the grant something a Client is given rather than
-has: off by default per Client in node-oidc-provider, Hydra, Keycloak and
-Spring, and tied to an authorization per API in Auth0 and Entra. Three of
+Every provider but Zitadel, where any machine user with a secret may use
+it, makes the grant something a Client is given rather than has: off by
+default per Client in node-oidc-provider, Hydra, Keycloak and Spring, and
+tied to an authorization per API in Auth0, whose confidential
+applications have the grant type on by default, and in Entra. Three of
 five open-source providers answer a Client not allowed with
 `unauthorized_client`; node-oidc-provider and Zitadel use
 `invalid_request`. Hydra and Keycloak refuse public Clients explicitly.
@@ -493,8 +496,8 @@ and of "what the End-User allowed", which would need rewording.
      the registry already refuses members that do nothing, such as
      `client_secret_hash` for `none`. Without one, such a Client cannot
      start an authorization request.
-   - `client_id` must not be a UUID in the form of an End-User's Subject
-     (recommendation 6).
+   - `client_id` must not be a UUID in the form of an End-User's Subject,
+     as for every Client (recommendation 6).
 
    This keeps ADR 0001's static file and its strict decoding. It does not
    need ADR 0001 itself to change, but the choice of `sub` in
@@ -508,7 +511,11 @@ and of "what the End-User allowed", which would need rewording.
    does (REQ-RESOURCE-4, REQ-RESOURCE-9). There is no per-Client default,
    and no default inferred from `scope`: the code flow does not infer one
    either (REQ-AT-14's departure), so one rule holds at the token endpoint,
-   that a token for a Resource Server is one the Client named. Auth0
+   that a token for a Resource Server is one the Client named.
+   REQ-AT-5's MUST governs the `aud` of a token issued; refusing to issue
+   one leaves it met, and the notes of REQ-AT-5 and REQ-AT-14, which say
+   that a request without `resource` gets a token for the issuer, gain a
+   sentence on this grant. Auth0
    requires `audience`, Entra makes the `scope` name the resource, and
    MCP's example requests carry `resource`; a token for pulsar's UserInfo
    would make no sense with no End-User, and no open-source provider
@@ -532,9 +539,12 @@ and of "what the End-User allowed", which would need rewording.
    RFC 9068 §5 ask that a Client not choose a `client_id` that could pass
    for a resource owner. In pulsar no Client chooses its `client_id`; the
    operator writes it in the registry (ADR 0001). To keep even the
-   operator from a collision, pulsar refuses to start on a Client
-   registered for this grant whose `client_id` is a UUID in the lowercase
-   hyphenated form `isUUID` accepts, the only form a Subject may take. The
+   operator from a collision, pulsar refuses to start on any Client whose
+   `client_id` is a UUID in the lowercase hyphenated form `isUUID`
+   accepts, the only form a Subject may take; no registry in this
+   repository has one. Were the check limited to Clients of this grant, a
+   code-flow Client could share an End-User's Subject, and an End-User's
+   token for it would carry `sub` equal to `client_id`. The
    two namespaces are then apart by form, as Auth0's `@clients` suffix
    keeps them, and stay apart across edits to the registry while tokens
    issued before are still valid. A Resource Server can tell a Client's
@@ -629,9 +639,12 @@ The code that changes:
   `client_credentials` as the unsupported grant, which move to another
   grant type rather than lose the case.
 - `docs/requirements`: new IDs for RFC 6749 §4.4, §4.4.2, §4.4.3, the
-  `unauthorized_client` code of §5.2 and §3.3; RFC 9068 §2.2's `sub` and
-  §5; RFC 9700 §2.5 and §4.15.1; RFC 8707 §2's "missing"; and the RFC 7591
-  default departure beside the registry's requirement.
+  `unauthorized_client` code of §5.2 and §3.3; RFC 9068 §2.2's `sub`;
+  RFC 9700 §2.5 and §4.15.1; RFC 8707 §2's "missing"; and the RFC 7591
+  default departure beside the registry's requirement. RFC 9068 §5's
+  "should prevent" is not a BCP 14 keyword, so it gets no ID; RFC 9700
+  §4.15.1 carries the requirement. The notes of REQ-AT-5 and REQ-AT-14
+  gain the sentence recommendation 4 describes.
 - `README.md`: the paragraph on what pulsar does, and the one on the
   registry.
 - `examples/`: the worker package and command, `registry.json`, the test,
@@ -648,7 +661,10 @@ A rough split into tickets, each depending on the one before:
    README. Medium: the largest of the three, mostly in tests.
 3. **The worker example**: the package, command, registry entry, test,
    READMEs and the AGENTS.md row. Small, and it runs only under
-   `make examples`, which CI runs and the agent sandbox cannot.
+   `make examples`, which CI runs and the agent sandbox cannot. With the
+   Decision's `private_key_jwt`, it also needs a token source that signs
+   a client assertion with go-jose for each request, and the worker's
+   public key in `jwks` rather than a secret: small to medium.
 
 Tickets 1 and 2 could be one, since the registry members do nothing
 until the token endpoint reads them.
