@@ -51,9 +51,10 @@ The access token's `aud` is that Resource Server's identifier, its `sub` and
 `client_id` are the Client's `client_id`, and it lives ten minutes; the
 response carries no refresh token or ID token, and UserInfo refuses the
 token. Neither `resource` nor `scope` has a default: a request without
-`resource`, or for another Resource Server's scope, gets `invalid_target`,
-and one without `scope`, or for a scope the Client is not registered for,
-`invalid_scope`. A Client gets `unauthorized_client` for a grant the
+`resource` gets `invalid_target`, and one without `scope`, or for a scope
+the Client is not registered for, `invalid_scope`; a scope the Client is
+registered for, but of another Resource Server than `resource` names, gets
+`invalid_target`. A Client gets `unauthorized_client` for a grant the
 registry does not list for it. A
 request with `offline_access` and `prompt=consent` asks the End-User for
 offline access, and if they allow it, the token response carries a refresh
@@ -158,9 +159,9 @@ alone; it is then a machine Client, which acts for itself. A machine Client
 is confidential, registers no redirect URIs, and lists in `scope` the scopes
 it may be granted, each of a Resource Server it may request; with no End-User
 to consent, the registry is what authorizes them. Its `client_id` is the
-`sub` of its access tokens, so it may not be a UUID in the form of an
-End-User's Subject
-([ADR 0007](docs/adr/0007-machine-clients-are-their-own-subject.md)).
+`sub` of its access tokens, so no Client's `client_id` may be a UUID, the
+form of every End-User's Subject
+([ADR 0007](docs/adr/0007-a-machine-clients-sub-is-its-client-id.md)).
 Register a machine Client for `private_key_jwt`, as RFC 9700 §2.5 recommends
 asymmetric client authentication: pulsar then holds only its public key, and
 nothing in the registry could authenticate as it.

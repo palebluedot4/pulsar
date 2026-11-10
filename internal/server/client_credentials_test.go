@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -10,14 +9,10 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/google/go-cmp/cmp"
-	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/palebluedot4/pulsar/internal/config"
-	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 	"github.com/palebluedot4/pulsar/internal/registry"
-	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 // The secrets of the machine Clients of machineRegistry that have one.
@@ -62,20 +57,6 @@ func machineRegistry(t *testing.T) *registry.Registry {
 	})
 }
 
-// newMachineHandler returns newFlowHandler's handler with machineRegistry.
-func newMachineHandler(t *testing.T, pool *pgxpool.Pool) http.Handler {
-	t.Helper()
-	return newFlowHandlerFor(t, pool, machineRegistry(t))
-}
-
-// newMachineHandlerWithoutDatabase returns newFlowHandlerWithoutDatabase's
-// handler with machineRegistry.
-func newMachineHandlerWithoutDatabase(t *testing.T) http.Handler {
-	t.Helper()
-	pool := postgrestest.Open(t, postgrestest.UnreachableURL(t))
-	return New(slog.New(slog.DiscardHandler), mustParse(t, loginIssuer), pool, signing.New(pool, config.Secret{}), machineRegistry(t), guessing.New(pool, nil), ready())
-}
-
 // clientCredentialsForm returns the form of a token request for the
 // client_credentials grant, for resource and scope.
 func clientCredentialsForm(resource, scope string) url.Values {
@@ -106,7 +87,7 @@ func batchJWTAssertion(t *testing.T) string {
 func TestClientCredentials(t *testing.T) {
 	t.Parallel()
 
-	handler := newMachineHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	handler := newFlowHandlerFor(t, postgrestest.Open(t, postgrestest.NewDatabase(t)), machineRegistry(t))
 	tests := []struct {
 		name      string
 		clientID  string
@@ -199,7 +180,7 @@ func TestClientCredentialsTokenElsewhere(t *testing.T) {
 	t.Parallel()
 
 	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
-	handler := newMachineHandler(t, pool)
+	handler := newFlowHandlerFor(t, pool, machineRegistry(t))
 	accessToken := tokenResponseOf(t, tokenRequest(t, handler, "batch", batchSecret, clientCredentialsForm(ordersServer, "orders:read"))).AccessToken
 
 	if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
@@ -231,7 +212,7 @@ func TestClientCredentialsTokenElsewhere(t *testing.T) {
 func TestClientCredentialsErrors(t *testing.T) {
 	t.Parallel()
 
-	handler := newMachineHandlerWithoutDatabase(t)
+	handler := newFlowHandlerWithoutDatabaseFor(t, machineRegistry(t))
 	batch := credentials{"batch", batchSecret}
 	valid := clientCredentialsForm(ordersServer, "orders:read")
 	with := func(edit func(url.Values)) url.Values {

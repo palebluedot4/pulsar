@@ -157,8 +157,10 @@ func with(e entry, key string, value any) entry {
 // post-logout redirect URIs, and lists in scope, by single spaces, scopes
 // of the Resource Servers it may request, at least one and each once; no
 // other Client lists scope.
-// REQ-AT-16, REQ-BCP-17: a machine Client's client_id, the sub of its
-// access tokens, is not a UUID, the form of every End-User's Subject.
+// REQ-BCP-17: no Client's client_id is a UUID, in any case, the form of
+// every End-User's Subject: a machine Client's is the sub of its access
+// tokens, and a code-flow Client's appears beside an End-User's sub in
+// theirs.
 func TestRunRefusesRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -317,7 +319,10 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "public machine client", registry: registryWithResourceServers(t, []entry{ordersServer()}, []entry{with(with(machineClient(), "client_secret_hash", nil), "token_endpoint_auth_method", "none")}), problem: "confidential"},
 		{name: "machine client with redirect URIs", registry: withMachine("redirect_uris", []string{"https://rp.example/callback"}), problem: "redirect_uris is not allowed"},
 		{name: "machine client with post-logout redirect URIs", registry: withMachine("post_logout_redirect_uris", []string{"https://rp.example/signed-out"}), problem: "post_logout_redirect_uris is not allowed"},
-		{name: "machine client whose client_id is a Subject", registry: withMachine("client_id", "7c9e6679-7425-40de-944b-e07fc1f90ae7"), problem: "Subject"},
+		{name: "machine client whose client_id is a UUID", registry: withMachine("client_id", "7c9e6679-7425-40de-944b-e07fc1f90ae7"), problem: "is a UUID"},
+		{name: "machine client whose client_id is an uppercase UUID", registry: withMachine("client_id", "7C9E6679-7425-40DE-944B-E07FC1F90AE7"), problem: "is a UUID"},
+		{name: "code-flow client whose client_id is a UUID", registry: registryJSON(t, []entry{with(secretClient(), "client_id", "7c9e6679-7425-40de-944b-e07fc1f90ae7")}, nil), problem: "is a UUID"},
+		{name: "public client whose client_id is a mixed-case UUID", registry: registryJSON(t, []entry{with(publicClient, "client_id", "7c9e6679-7425-40DE-944b-e07fc1f90ae7")}, nil), problem: "is a UUID"},
 		{name: "machine client without scope", registry: withMachine("scope", nil), problem: "scope is required"},
 		{name: "machine client with empty scope", registry: withMachine("scope", ""), problem: "scope is required"},
 		{name: "machine client with a scope of a Resource Server not listed", registry: withMachine("scope", "orders:read billing:read"), problem: `"billing:read"`},
@@ -384,9 +389,9 @@ func TestRunRequiresRegistry(t *testing.T) {
 // REQ-CLIENTMETA-1, REQ-CLIENTMETA-2: a Client may list
 // authorization_code and refresh_token, in either order, as it may leave
 // grant_types out; a machine Client, by any confidential method, lists
-// scopes of each Resource Server it may request. Its client_id may be a
-// UUID in another form than a Subject's, since Subjects are compared as
-// case-sensitive strings and so can never equal it.
+// scopes of each Resource Server it may request. A client_id may be a
+// UUID's 32 hexadecimal digits without hyphens, which is not a UUID's
+// form, and so no Subject's.
 func TestRunAcceptsRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -422,7 +427,7 @@ func TestRunAcceptsRegistry(t *testing.T) {
 			}),
 			with(with(secretClient(), "client_id", "listed"), "grant_types", []string{"refresh_token", "authorization_code"}),
 			with(with(machineClient(), "resource_servers", []string{"https://api.example/orders", "urn:example:billing"}), "scope", "orders:read https://api.example/billing.write"),
-			with(with(with(with(machineClient(), "client_id", "7C9E6679-7425-40DE-944B-E07FC1F90AE7"), "client_secret_hash", nil), "token_endpoint_auth_method", "private_key_jwt"), "jwks", jwks(t, &ecKey.PublicKey)),
+			with(with(with(with(machineClient(), "client_id", "7c9e6679742540de944be07fc1f90ae7"), "client_secret_hash", nil), "token_endpoint_auth_method", "private_key_jwt"), "jwks", jwks(t, &ecKey.PublicKey)),
 		},
 		"end_users": []entry{
 			with(endUser(), "claims", map[string]any{
