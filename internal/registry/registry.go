@@ -29,7 +29,9 @@
 // lists at least one scope, and its scopes are its own, each with the
 // description the consent page shows: none is a scope OpenID Connect
 // defines, or another Resource Server's, so that a scope value names one
-// Resource Server alone. resource_servers may be left out.
+// Resource Server alone. resource_servers may be left out. pulsar also
+// refuses to start on an identifier that is its issuer, which the registry
+// does not know (see [Registry.HasResourceServer]).
 //
 // A Client may list post_logout_redirect_uris, to which pulsar returns
 // the End-User after logout (OpenID Connect RP-Initiated Logout 1.0 §3.1).
@@ -719,6 +721,13 @@ func (r *Registry) Clients() iter.Seq[*Client] {
 func (r *Registry) Client(id string) (*Client, bool) {
 	c, ok := r.clients[id]
 	return c, ok
+}
+
+// HasResourceServer reports whether a Resource Server's identifier is id,
+// compared as a string, as a resource parameter is.
+func (r *Registry) HasResourceServer(id string) bool {
+	_, ok := r.resourceServers[id]
+	return ok
 }
 
 // ResourceServer returns the Resource Server whose identifier is id, if c
