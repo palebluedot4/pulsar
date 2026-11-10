@@ -15,12 +15,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"golang.org/x/oauth2"
 
 	"github.com/palebluedot4/pulsar/examples/api"
 	"github.com/palebluedot4/pulsar/examples/worker"
@@ -35,7 +38,15 @@ func main() {
 	keyFile := flag.String("key", envOr("WORKER_KEY_FILE", "worker-key.json"), "the file of the worker's private key, a JWK (WORKER_KEY_FILE)")
 	resource := flag.String("resource", os.Getenv("API_IDENTIFIER"), "the API's identifier, sent as the resource parameter (API_IDENTIFIER)")
 	apiURL := flag.String("api", envOr("API_URL", "http://127.0.0.1:8081"), "the API's URL (API_URL)")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: worker [flags]")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
+	if flag.NArg() > 0 {
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	cfg := worker.Config{
 		Issuer:   *issuer,
@@ -50,6 +61,9 @@ func main() {
 }
 
 func run(cfg worker.Config, keyFile, apiURL string) error {
+	if cfg.Issuer == "" || cfg.Resource == "" {
+		return errors.New("-issuer and -resource are required")
+	}
 	data, err := os.ReadFile(keyFile) //nolint:gosec // G304: the operator's own flag.
 	if err != nil {
 		return err
@@ -67,6 +81,8 @@ func run(cfg worker.Config, keyFile, apiURL string) error {
 	if err != nil {
 		return err
 	}
+	// One token for the run, unless it expires.
+	ts = oauth2.ReuseTokenSource(nil, ts)
 	notes, err := worker.Run(ctx, ts, apiURL, "ran at "+time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return err
