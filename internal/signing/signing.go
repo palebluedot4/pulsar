@@ -125,16 +125,17 @@ type KeySet struct {
 }
 
 // snapshot is the key set as it was last loaded: the keys it publishes,
-// and the public halves of those that verify an id_token_hint.
+// and the public halves of the retired keys that still verify an
+// id_token_hint.
 type snapshot struct {
 	keys    map[string]*rsa.PrivateKey // by kid
-	hints   map[string]hintKey         // by kid; the published keys among them
+	hints   map[string]hintKey         // by kid
 	signers []signer                   // in the order they start signing
 	jwks    []byte                     // the encoded JWK Set
 }
 
-// hintKey is the public half of a key that verifies an id_token_hint, and
-// the time from which it no longer does; zero if there is none yet.
+// hintKey is the public half of a retired key that verifies an
+// id_token_hint, and the time from which it no longer does.
 type hintKey struct {
 	public *rsa.PublicKey
 	until  time.Time
@@ -308,11 +309,13 @@ func (s *KeySet) VerifyIDTokenHint(token string) (typ string, claims []byte, ok 
 	}
 	now := time.Now()
 	return verify(token, func(kid string) *rsa.PublicKey {
-		key, ok := snap.hints[kid]
-		if !ok || (!key.until.IsZero() && !now.Before(key.until)) {
-			return nil
+		if key, ok := snap.keys[kid]; ok {
+			return &key.PublicKey
 		}
-		return key.public
+		if key, ok := snap.hints[kid]; ok && now.Before(key.until) {
+			return key.public
+		}
+		return nil
 	})
 }
 
@@ -457,27 +460,18 @@ func (s *KeySet) reload(ctx context.Context) error {
 	// Rows come in the order they start signing, so a key's successor is
 	// the next row, and the last key is never retired.
 	for i, row := range rows {
-		var until time.Time
-		published := true
 		if i+1 < len(rows) {
 			next := rows[i+1].ActivatesAt
-			until = next.Add(hintRetention)
-			if !now.Before(until) {
+			if !now.Before(next.Add(retention)) {
+				if until := next.Add(hintRetention); now.Before(until) {
+					public, err := s.publicKey(previous, row)
+					if err != nil {
+						return err
+					}
+					hints[row.Kid] = hintKey{public: public, until: until}
+				}
 				continue
 			}
-			published = now.Before(next.Add(retention))
-		}
-		if !published {
-			public := previous.hints[row.Kid].public
-			if public == nil {
-				key, err := s.open(row.Kid, row.SealedPrivateKey)
-				if err != nil {
-					return fmt.Errorf("signing key %s: %w", row.Kid, err)
-				}
-				public = &key.PublicKey
-			}
-			hints[row.Kid] = hintKey{public: public, until: until}
-			continue
 		}
 		key, ok := previous.keys[row.Kid]
 		if !ok {
@@ -487,7 +481,6 @@ func (s *KeySet) reload(ctx context.Context) error {
 			}
 		}
 		keys[row.Kid] = key
-		hints[row.Kid] = hintKey{public: &key.PublicKey, until: until}
 		signers = append(signers, signer{KID: row.Kid, Signer: key, from: row.ActivatesAt})
 		set.Keys = append(set.Keys, jose.JSONWebKey{
 			Key:       &key.PublicKey,
@@ -502,6 +495,22 @@ func (s *KeySet) reload(ctx context.Context) error {
 	}
 	s.loaded.Store(&snapshot{keys: keys, hints: hints, signers: signers, jwks: jwks})
 	return nil
+}
+
+// publicKey returns the public half of the key stored in row, from
+// previous if it holds the key, and by decrypting the row otherwise.
+func (s *KeySet) publicKey(previous *snapshot, row queries.ListSigningKeysRow) (*rsa.PublicKey, error) {
+	if key, ok := previous.keys[row.Kid]; ok {
+		return &key.PublicKey, nil
+	}
+	if key, ok := previous.hints[row.Kid]; ok {
+		return key.public, nil
+	}
+	key, err := s.open(row.Kid, row.SealedPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing key %s: %w", row.Kid, err)
+	}
+	return &key.PublicKey, nil
 }
 
 // open decrypts a stored private key and checks that it is an RSA key of

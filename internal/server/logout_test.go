@@ -351,17 +351,18 @@ func TestLogoutClientIDDisagreesWithHint(t *testing.T) {
 	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
 	signedIn, hint := signedInWithHint(t, handler)
 	tests := []struct {
+		name     string
 		method   string
 		clientID string
 		uri      string
 	}{
-		{method: http.MethodGet, clientID: "other", uri: otherSignedOutURI},
-		{method: http.MethodGet, clientID: "other", uri: rpSignedOutURI},
-		{method: http.MethodPost, clientID: "other", uri: otherSignedOutURI},
-		{method: http.MethodGet, clientID: "unknown", uri: rpSignedOutURI},
+		{name: "GET, another Client with its URI", method: http.MethodGet, clientID: "other", uri: otherSignedOutURI},
+		{name: "GET, another Client with the hint's Client's URI", method: http.MethodGet, clientID: "other", uri: rpSignedOutURI},
+		{name: "POST, another Client with its URI", method: http.MethodPost, clientID: "other", uri: otherSignedOutURI},
+		{name: "GET, no registered Client", method: http.MethodGet, clientID: "unknown", uri: rpSignedOutURI},
 	}
 	for _, tt := range tests {
-		t.Run(tt.method+" client_id "+tt.clientID+" "+tt.uri, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			b := &browser{t: t, handler: handler, session: signedIn.session}
 			params := url.Values{"id_token_hint": {hint}, "client_id": {tt.clientID}, "post_logout_redirect_uri": {tt.uri}, "state": {"xyz"}}
