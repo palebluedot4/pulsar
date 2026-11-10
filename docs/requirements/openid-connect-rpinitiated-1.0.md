@@ -21,10 +21,11 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   present, the OP MUST validate that it was the issuer of the ID Token."
 
   pulsar accepts as a hint only a JWT signed by RS256, the algorithm of
-  its ID tokens, with a key its JWK Set publishes; whose `typ` is that of
-  its ID tokens, so that no access token stands in for one; whose `iss` is
-  the issuer; and whose one audience is a registered Client. A hint that
-  fails gets an error page, with no logout and no redirect.
+  its ID tokens, with one of its own keys (REQ-LOGOUT-3 says which); whose
+  `typ` is that of its ID tokens, so that no access token stands in for
+  one; whose `iss` is the issuer; and whose one audience is a registered
+  Client. A hint that fails gets an error page, with no logout and no
+  redirect.
 
 - REQ-LOGOUT-3 (§2, `id_token_hint`): "The OP SHOULD accept ID Tokens when
   the RP identified by the ID Token's aud claim and/or sid claim has a
@@ -35,23 +36,27 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   Authorization Server does not
   ([research](../research/logout-revocation-resources.md#rp-initiated-logout)).
 
-  Limit: a hint must still verify against a key the JWK Set publishes
-  (REQ-LOGOUT-2), and a key outlives its replacement's activation by
-  eleven minutes only, the token lifetime plus a reload interval, while a
-  Login Session lasts up to ten hours. So after `pulsar keys rotate`, an
-  ID token the old key signed is refused as a hint, with the error page,
-  even while the RP's session lasts. The RP can still log the End-User
-  out by sending `client_id` instead of the hint.
+  Nor does a rotation end a hint early. After `pulsar keys rotate`, the
+  replaced key leaves the JWK Set eleven minutes after the new key starts
+  signing, but its public half still verifies a hint, and nothing else,
+  until a Login Session's ten-hour lifetime plus a reload interval has
+  passed since then: until every Login Session in which it signed an ID
+  token has ended. A hint it signed is refused, with the error page, from
+  then on. node-oidc-provider likewise verifies hints against its whole
+  keystore, and Spring looks them up rather than verifying them with a key
+  ([research](../research/logout-revocation-resources.md#client_id-and-hints-signed-by-rotated-keys)).
 
 - REQ-LOGOUT-4 (§2, `client_id`): "When both client_id and id_token_hint
   are present, the OP MUST verify that the Client Identifier matches the
   one used when issuing the ID Token."
 
-  A `client_id` that does not match fails validation and is not used
-  (REQ-LOGOUT-12): the request then identifies no Client, so it redirects
-  nowhere, and the End-User is asked to confirm and shown that they are
-  signed out. A `client_id` without a hint identifies the Client it names,
-  if one is registered.
+  A `client_id` that does not match, whether it names another registered
+  Client or none, gets the error page, with no logout and no redirect, as
+  a hint that fails does (REQ-LOGOUT-12). node-oidc-provider, Keycloak and
+  Spring Authorization Server refuse it too
+  ([research](../research/logout-revocation-resources.md#client_id-and-hints-signed-by-rotated-keys)).
+  A `client_id` without a hint identifies the Client it names, if one is
+  registered.
 
 - REQ-LOGOUT-5 (§2, `post_logout_redirect_uri`): "The value MUST have been
   previously registered with the OP, either using the
@@ -126,8 +131,9 @@ other RPs has no one to notify, and `sid` is neither issued nor read.
   the RP-Initiated Logout request, the OP MUST not perform post-logout
   redirection to an RP."
 
-  A hint that fails gets an error page. A parameter pulsar reads that is
-  repeated does too, as no clause says which value would count.
+  A hint that fails gets an error page, and so does a `client_id` that
+  does not match it. A parameter pulsar reads that is repeated does too,
+  as no clause says which value would count.
 
 ## Security (§6)
 

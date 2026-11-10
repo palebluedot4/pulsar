@@ -24,7 +24,10 @@ distribute and rotate those files across replicas. The evidence is in
   long. Auth0 likewise publishes its next key before signing with it.
 - A retired key's public half stays in the JWKS until every token it signed
   has expired. OpenID Connect Core 1.0 §10.1.1 asks only for "a reasonable
-  period"; this is pulsar's reading of it.
+  period"; this is pulsar's reading of it. pulsar itself goes on verifying
+  `id_token_hint` with it, and nothing else, until every Login Session in
+  which it signed could have ended, so that logout keeps working across a
+  rotation (#81). The JWKS is unchanged by this.
 - Signing goes through `crypto.Signer`, so an AWS KMS key can replace the
   stored key without changing callers.
 - Losing `PULSAR_SECRET` makes the stored keys unreadable. Recovery means new

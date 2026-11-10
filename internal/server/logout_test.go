@@ -1,12 +1,17 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"html"
+	"log/slog"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -14,8 +19,12 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/google/go-cmp/cmp"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/guessing"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
+	"github.com/palebluedot4/pulsar/internal/signing"
 )
 
 // logoutPath is the path of the logout endpoint under loginIssuer.
@@ -277,8 +286,8 @@ func wantErrorPage(t *testing.T, resp response, when string) {
 }
 
 // REQ-LOGOUT-2, REQ-LOGOUT-12: an id_token_hint that is not an ID token
-// this OP issued to a registered Client, signed by RS256 with a key its
-// JWK Set publishes, with its own issuer, gets an error page, with no
+// this OP issued to a registered Client, signed by RS256 with one of its
+// keys, with its own issuer, gets an error page, with no
 // confirmation, no redirect and no logout, whether it is sent to the
 // logout endpoint or with a confirmation submitted directly.
 func TestLogoutInvalidHint(t *testing.T) {
@@ -328,6 +337,39 @@ func TestLogoutInvalidHint(t *testing.T) {
 			form := confirmationForm(params, confirmLogout, aliceSubject)
 			wantErrorPage(t, b.do(newFormRequest(t, logoutConfirmationPath, form)), "confirmation submitted directly")
 			wantSignedIn(t, b, "after an invalid id_token_hint")
+		})
+	}
+}
+
+// REQ-LOGOUT-4, REQ-LOGOUT-12: a client_id that is not the Client the
+// id_token_hint was issued to, whether another registered Client or none,
+// gets the error page, by GET or POST, and with a confirmation submitted
+// directly: no confirmation, no redirect, and the End-User stays signed in.
+func TestLogoutClientIDDisagreesWithHint(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	signedIn, hint := signedInWithHint(t, handler)
+	tests := []struct {
+		method   string
+		clientID string
+		uri      string
+	}{
+		{method: http.MethodGet, clientID: "other", uri: otherSignedOutURI},
+		{method: http.MethodGet, clientID: "other", uri: rpSignedOutURI},
+		{method: http.MethodPost, clientID: "other", uri: otherSignedOutURI},
+		{method: http.MethodGet, clientID: "unknown", uri: rpSignedOutURI},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" client_id "+tt.clientID+" "+tt.uri, func(t *testing.T) {
+			t.Parallel()
+			b := &browser{t: t, handler: handler, session: signedIn.session}
+			params := url.Values{"id_token_hint": {hint}, "client_id": {tt.clientID}, "post_logout_redirect_uri": {tt.uri}, "state": {"xyz"}}
+			wantErrorPage(t, b.logout(tt.method, params), "logout request")
+
+			form := confirmationForm(params, confirmLogout, aliceSubject)
+			wantErrorPage(t, b.do(newFormRequest(t, logoutConfirmationPath, form)), "confirmation submitted directly")
+			wantSignedIn(t, b, "after a client_id that disagrees with the hint")
 		})
 	}
 }
@@ -405,10 +447,6 @@ func TestLogoutRedirectOnlyToRegisteredURI(t *testing.T) {
 		{
 			name:   "no hint and no client_id",
 			params: url.Values{"post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}},
-		},
-		{
-			name:   "client_id that disagrees with the hint",
-			params: url.Values{"id_token_hint": {"HINT"}, "client_id": {"other"}, "post_logout_redirect_uri": {otherSignedOutURI}, "state": {"xyz"}},
 		},
 		{
 			name:   "client_id of no registered Client",
@@ -721,4 +759,124 @@ func TestLogoutKeepsTokens(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newReloadingBubbleFlowHandler returns the handler of newBubbleFlowHandler,
+// whose signing keys reload every interval until the test ends, as a
+// serving replica's do, and the pool behind it.
+func newReloadingBubbleFlowHandler(t *testing.T, databaseURL string) (http.Handler, *pgxpool.Pool) {
+	t.Helper()
+	pool := newBubblePool(t, databaseURL)
+	keys := signing.New(pool, config.Secret{})
+	if err := keys.Load(t.Context()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(t.Output(), nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	reloading := make(chan struct{})
+	go func() {
+		defer close(reloading)
+		keys.Run(ctx, logger)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-reloading
+	})
+	return New(logger, mustParse(t, loginIssuer), pool, keys, flowRegistry(t), guessing.New(pool, nil), ready()), pool
+}
+
+// publishedKids returns the kids of the JWK Set the handler serves, sorted.
+func publishedKids(t *testing.T, handler http.Handler) []string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://op.example"+jwksPath, http.NoBody))
+	var set jose.JSONWebKeySet
+	if err := json.Unmarshal(rec.Body.Bytes(), &set); err != nil {
+		t.Fatalf("GET %s body is not a JWK Set: %v", jwksPath, err)
+	}
+	var kids []string
+	for _, k := range set.Keys {
+		kids = append(kids, k.KeyID)
+	}
+	slices.Sort(kids)
+	return kids
+}
+
+// sleepUntil sleeps until t, by the bubble's clock, and waits for the
+// bubble's goroutines to block.
+func sleepUntil(t time.Time) {
+	time.Sleep(time.Until(t))
+	synctest.Wait()
+}
+
+// REQ-LOGOUT-2, REQ-LOGOUT-3: after `pulsar keys rotate`, an ID token the
+// replaced key signed is still accepted as an id_token_hint while a Login
+// Session in which that key signed could last: until the Login Session's
+// ten-hour lifetime, plus a reload interval, has passed since the new key
+// started signing. From then on it gets the error page. Throughout, the
+// replaced key is gone from the JWK Set from eleven minutes after the new
+// key started signing (REQ-CORE-51), and signs nothing.
+//
+// The End-User signs in before the rotation and stays active until their
+// Login Session nearly ends, then logs out with the hint they got first.
+func TestLogoutHintSignedByRetiredKey(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		handler, pool := newReloadingBubbleFlowHandler(t, databaseURL)
+		b, hint := signedInWithHint(t, handler)
+		sessionEnds := time.Now().Add(10 * time.Hour)
+		retired := verify(t, handler, hint).kid
+		// What `pulsar keys rotate` runs.
+		rotated, err := signing.New(pool, config.Secret{}).Rotate(t.Context())
+		if err != nil {
+			t.Fatalf("Rotate() error = %v", err)
+		}
+
+		// The new key starts signing two minutes after the rotation, and the
+		// old one leaves the JWK Set eleven minutes later, at a reload.
+		sleepUntil(rotated.SignsFrom.Add(12 * time.Minute))
+		if diff := cmp.Diff([]string{rotated.KID}, publishedKids(t, handler)); diff != "" {
+			t.Errorf("GET %s once the old key has left it kids mismatch (-want +got):\n%s", jwksPath, diff)
+		}
+		wantSignedIn(t, b, "once the old key has left the JWK Set")
+		_, idToken := signedInWithHint(t, handler)
+		if got := verify(t, handler, idToken).kid; got != rotated.KID {
+			t.Errorf("ID token issued after the rotation signed with %q, want the new key %q", got, rotated.KID)
+		}
+
+		// Idle for 20 minutes at a time, under the Login Session's 30.
+		for time.Until(sessionEnds) > 20*time.Minute {
+			time.Sleep(20 * time.Minute)
+			wantSignedIn(t, b, "while waiting")
+		}
+		if got := publishedKids(t, handler); slices.Contains(got, retired) {
+			t.Errorf("GET %s near the Login Session's end kids = %q, want no retired key %q", jwksPath, got, retired)
+		}
+		params := url.Values{"id_token_hint": {hint}, "post_logout_redirect_uri": {rpSignedOutURI}, "state": {"xyz"}}
+		resp := b.logout(http.MethodGet, params)
+		if got := parseLogoutPage(t, resp).client; got != "rp" {
+			t.Errorf("logout confirmation page for a retired key's hint names the client %q, want rp", got)
+		}
+		resp = b.answerLogout(resp, confirmLogout)
+		if got, want := location(t, resp).String(), rpSignedOutURI+"?state=xyz"; got != want {
+			t.Errorf("confirmed logout with a retired key's hint redirects to %q, want %q", got, want)
+		}
+		wantSignedOut(t, handler, b.session, "after the logout")
+
+		// The Login Session's lifetime and one reload interval after the new
+		// key started signing.
+		refusedFrom := rotated.SignsFrom.Add(10*time.Hour + time.Minute)
+		sleepUntil(refusedFrom.Add(-time.Nanosecond))
+		late := &browser{t: t, handler: handler}
+		if got := parseLogoutPage(t, late.logout(http.MethodGet, params)).client; got != "rp" {
+			t.Errorf("logout confirmation page 1ns before a retired key's hints are refused names the client %q, want rp", got)
+		}
+		sleepUntil(refusedFrom)
+		wantErrorPage(t, late.logout(http.MethodGet, params), "hint signed by a key retired a Login Session's lifetime ago")
+		if diff := cmp.Diff([]string{rotated.KID}, publishedKids(t, handler)); diff != "" {
+			t.Errorf("GET %s at the end kids mismatch (-want +got):\n%s", jwksPath, diff)
+		}
+	})
 }

@@ -194,14 +194,14 @@ func (p *Provider) parseLogoutRequest(params url.Values) (req logoutRequest, msg
 		}
 		req.client = client
 	}
-	// A client_id that names another Client than the hint fails validation,
-	// and is not used (§2, §4): the request then identifies no Client.
+	// A client_id that names another Client than the hint fails validation
+	// (§2), and an error found in the request gets an error page (§4).
 	if id := params.Get("client_id"); id != "" {
 		switch {
 		case req.client == nil:
 			req.client, _ = p.registry.Client(id)
 		case req.client.ID != id:
-			req.client = nil
+			return req, "The client_id is not the client the id_token_hint was issued to."
 		}
 	}
 	if req.client != nil {
@@ -224,16 +224,17 @@ func (p *Provider) parseLogoutRequest(params url.Values) (req logoutRequest, msg
 }
 
 // idTokenHintClient returns the Client to which idToken was issued, if it
-// is an ID token this OP issued: a JWT that one of the keys the JWK Set
-// publishes signed, by RS256, the algorithm of the ID tokens it issues,
-// whose typ is that of its ID tokens, whose iss is the issuer, and whose
-// one audience is a registered Client (RP-Initiated Logout 1.0 §2).
+// is an ID token this OP issued: a JWT that one of its keys signed, by
+// RS256, the algorithm of the ID tokens it issues, whose typ is that of its
+// ID tokens, whose iss is the issuer, and whose one audience is a
+// registered Client (RP-Initiated Logout 1.0 §2).
 //
-// Its exp is not checked, so that an End-User returning after their ID
-// token expired can still log out. A hint signed by a key the JWK Set no
-// longer publishes, after a rotation, is refused all the same.
+// Its exp is not checked, and the key may be one the JWK Set no longer
+// publishes after a rotation, as long as a Login Session in which it
+// signed could still last, so that an End-User returning after their ID
+// token expired can still log out (§2).
 func (p *Provider) idTokenHintClient(idToken string) (*registry.Client, bool) {
-	typ, payload, ok := p.keys.VerifyJWT(idToken)
+	typ, payload, ok := p.keys.VerifyIDTokenHint(idToken)
 	// The media type, compared without regard to case (RFC 7515 §4.1.9), so
 	// that no access token stands in for an ID token (RFC 8725 §3.11).
 	if !ok || !strings.EqualFold(typ, "JWT") {

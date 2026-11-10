@@ -6,7 +6,9 @@
 // A rotation stores a new key that every replica publishes at its next
 // reload and that signs only after [ActivationDelay]. The key it replaces
 // stays published until every token it signed has expired, and then
-// leaves the JWK Set.
+// leaves the JWK Set. Its public half still verifies an id_token_hint, and
+// nothing else, until every Login Session in which it signed could have
+// ended.
 package signing
 
 import (
@@ -34,6 +36,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/config"
+	"github.com/palebluedot4/pulsar/internal/login"
 	"github.com/palebluedot4/pulsar/internal/oidc"
 	"github.com/palebluedot4/pulsar/internal/signing/internal/queries"
 )
@@ -66,6 +69,14 @@ const ActivationDelay = ReloadInterval + jwksCacheLifetime
 // margin, as #23 asks: for a replica whose clock is up to that much
 // behind, or that loads the next key up to that much after its time.
 const retention = ReloadInterval + oidc.TokenLifetime
+
+// hintRetention is how long a key verifies an id_token_hint once the next
+// key's time to sign has come: the longest a Login Session in which it
+// signed an ID token can last, so that the Client can still log the
+// End-User out with that ID token (OpenID Connect RP-Initiated Logout 1.0
+// §2), plus the reload interval that [retention] adds, for the same
+// reason.
+const hintRetention = ReloadInterval + login.SessionLifetime
 
 // algorithm is the JWS algorithm every key signs with: RS256, which
 // OpenID Connect Core 1.0 §15.1 requires an OP to support.
@@ -113,11 +124,20 @@ type KeySet struct {
 	loaded  atomic.Pointer[snapshot]
 }
 
-// snapshot is the key set as it was last loaded: the keys it publishes.
+// snapshot is the key set as it was last loaded: the keys it publishes,
+// and the public halves of those that verify an id_token_hint.
 type snapshot struct {
 	keys    map[string]*rsa.PrivateKey // by kid
+	hints   map[string]hintKey         // by kid; the published keys among them
 	signers []signer                   // in the order they start signing
 	jwks    []byte                     // the encoded JWK Set
+}
+
+// hintKey is the public half of a key that verifies an id_token_hint, and
+// the time from which it no longer does; zero if there is none yet.
+type hintKey struct {
+	*rsa.PublicKey
+	until time.Time
 }
 
 // signer is a published key and when it starts signing.
@@ -189,7 +209,7 @@ type Rotated struct {
 // key set need not be loaded; Rotate loads it.
 //
 // It fails if the database holds no key yet, since pulsar has then never
-// started against it, and if a published key cannot be decrypted, since
+// started against it, and if a key it loads cannot be decrypted, since
 // PULSAR_SECRET is then not the secret the keys were stored under, and no
 // replica could decrypt a key stored under it.
 func (s *KeySet) Rotate(ctx context.Context) (Rotated, error) {
@@ -267,16 +287,50 @@ func (s *KeySet) VerifyJWT(token string) (typ string, claims []byte, ok bool) {
 	if snap == nil {
 		return "", nil, false
 	}
+	return verify(token, func(kid string) *rsa.PublicKey {
+		if key, ok := snap.keys[kid]; ok {
+			return &key.PublicKey
+		}
+		return nil
+	})
+}
+
+// VerifyIDTokenHint is [KeySet.VerifyJWT] for an id_token_hint, which a
+// key also verifies once it has left the JWK Set, until [hintRetention]
+// has passed since the next key's time to sign came, by this replica's
+// clock. A Client can then log the End-User out with the ID token it was
+// given until every Login Session in which that key signed has ended,
+// although the key verifies nothing else.
+func (s *KeySet) VerifyIDTokenHint(token string) (typ string, claims []byte, ok bool) {
+	snap := s.loaded.Load()
+	if snap == nil {
+		return "", nil, false
+	}
+	now := time.Now()
+	return verify(token, func(kid string) *rsa.PublicKey {
+		key, ok := snap.hints[kid]
+		if !ok || !key.until.IsZero() && !now.Before(key.until) {
+			return nil
+		}
+		return key.PublicKey
+	})
+}
+
+// verify reports whether token is a JWT in the JWS Compact Serialization
+// signed with RS256, never none, by the public key that keyFor returns
+// for its header's kid, or nil if none may verify it. If it is, verify
+// returns its header's typ and its claims, as JSON.
+func verify(token string, keyFor func(kid string) *rsa.PublicKey) (typ string, claims []byte, ok bool) {
 	jws, err := jose.ParseSignedCompact(token, []jose.SignatureAlgorithm{algorithm})
 	if err != nil {
 		return "", nil, false
 	}
 	header := jws.Signatures[0].Header // A compact JWS has exactly one.
-	key, found := snap.keys[header.KeyID]
-	if !found {
+	key := keyFor(header.KeyID)
+	if key == nil {
 		return "", nil, false
 	}
-	claims, err = jws.Verify(&key.PublicKey)
+	claims, err = jws.Verify(key)
 	if err != nil {
 		return "", nil, false
 	}
@@ -378,8 +432,10 @@ func (s *KeySet) generate(delay time.Duration) (queries.InsertSigningKeyParams, 
 // loaded is not decrypted again: a row is never updated.
 //
 // A key is retired once [retention] has passed since the next key's time
-// to sign came: it is then neither decrypted, nor published, nor accepted.
-// Its row stays.
+// to sign came: it is then neither published nor accepted, and its private
+// half is not kept. Its public half verifies an id_token_hint until
+// [hintRetention] has passed since that time; after that, the key is not
+// decrypted at all. Its row stays.
 func (s *KeySet) reload(ctx context.Context) error {
 	rows, err := s.queries.ListSigningKeys(ctx)
 	if err != nil {
@@ -388,24 +444,42 @@ func (s *KeySet) reload(ctx context.Context) error {
 	if len(rows) == 0 {
 		return errNoKey
 	}
-	// Rows come in the order they start signing, so the retired keys come
-	// first, and the last key is never retired.
-	now := time.Now()
-	first := 0
-	for first+1 < len(rows) && !now.Before(rows[first+1].ActivatesAt.Add(retention)) {
-		first++
-	}
-	var previous map[string]*rsa.PrivateKey
-	if snap := s.loaded.Load(); snap != nil {
-		previous = snap.keys
+	previous := s.loaded.Load()
+	if previous == nil {
+		previous = &snapshot{}
 	}
 
-	published := rows[first:]
-	keys := make(map[string]*rsa.PrivateKey, len(published))
-	signers := make([]signer, 0, len(published))
-	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(published))}
-	for _, row := range published {
-		key, ok := previous[row.Kid]
+	now := time.Now()
+	keys := make(map[string]*rsa.PrivateKey)
+	hints := make(map[string]hintKey)
+	var signers []signer
+	var set jose.JSONWebKeySet
+	// Rows come in the order they start signing, so a key's successor is
+	// the next row, and the last key is never retired.
+	for i, row := range rows {
+		var until time.Time
+		published := true
+		if i+1 < len(rows) {
+			next := rows[i+1].ActivatesAt
+			until = next.Add(hintRetention)
+			if !now.Before(until) {
+				continue
+			}
+			published = now.Before(next.Add(retention))
+		}
+		if !published {
+			public := previous.hints[row.Kid].PublicKey
+			if public == nil {
+				key, err := s.open(row.Kid, row.SealedPrivateKey)
+				if err != nil {
+					return fmt.Errorf("signing key %s: %w", row.Kid, err)
+				}
+				public = &key.PublicKey
+			}
+			hints[row.Kid] = hintKey{PublicKey: public, until: until}
+			continue
+		}
+		key, ok := previous.keys[row.Kid]
 		if !ok {
 			key, err = s.open(row.Kid, row.SealedPrivateKey)
 			if err != nil {
@@ -413,6 +487,7 @@ func (s *KeySet) reload(ctx context.Context) error {
 			}
 		}
 		keys[row.Kid] = key
+		hints[row.Kid] = hintKey{PublicKey: &key.PublicKey, until: until}
 		signers = append(signers, signer{KID: row.Kid, Signer: key, from: row.ActivatesAt})
 		set.Keys = append(set.Keys, jose.JSONWebKey{
 			Key:       &key.PublicKey,
@@ -425,7 +500,7 @@ func (s *KeySet) reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("encode JWK Set: %w", err)
 	}
-	s.loaded.Store(&snapshot{keys: keys, signers: signers, jwks: jwks})
+	s.loaded.Store(&snapshot{keys: keys, hints: hints, signers: signers, jwks: jwks})
 	return nil
 }
 

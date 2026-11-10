@@ -64,11 +64,13 @@ returns the End-User to the `post_logout_redirect_uri`, with `state` and
 nothing else, only if the identified Client registered exactly that URI, and
 otherwise shows a page that says whether they are signed out. An
 `id_token_hint` must be an ID token pulsar issued to a registered Client,
-signed with a key its JWK Set still publishes. It may have expired, but not
-outlived its key: after `pulsar keys rotate`, the key it replaces leaves the
-JWK Set eleven minutes after the new key starts signing, at each replica's
-next reload, and a hint that key signed is refused from then on. A hint
-refused gets an error page and logs no one out. The request is carried in
+and a `client_id` sent with it must name that Client. The hint may have
+expired, and may be signed by a key that `pulsar keys rotate` replaced: that
+key leaves the JWK Set eleven minutes after the new key starts signing, but
+pulsar goes on accepting hints it signed, and nothing else it signed, for
+ten hours and a minute after that, the longest a Login Session in which it
+signed could last. A hint refused, or a `client_id` that does not match it,
+gets an error page and logs no one out. The request is carried in
 the confirmation form's body, so no URL pulsar sends the browser to holds
 the hint. Logout revokes no refresh token and no access token.
 The OpenID conformance suite's Config OP, Basic OP, Form Post Basic and

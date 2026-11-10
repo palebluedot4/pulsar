@@ -389,7 +389,9 @@ are those of `private_key_jwt`.
 
   pulsar reads "a reasonable period" as until every token the key signed
   has expired: one reload interval plus the token lifetime after the next
-  key's time to sign (ADR 0003).
+  key's time to sign (ADR 0003). After that, the key verifies only an
+  `id_token_hint`, for as long as REQ-LOGOUT-3 says, and never returns to
+  the JWK Set.
 
 ## Offline access (§11)
 
