@@ -240,30 +240,50 @@ mattpocock-skills@claude-plugins-official --scope project` moved the copy
   behavior of 2.1.319, not a documented contract. An earlier run that
   seemed to show `DISABLE_UPDATES=1` holding fell inside that throttle.
 
-`make setup` now sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, adds
-every marketplace in `extraKnownMarketplaces` with `claude plugin
-marketplace add <owner/repo> --scope project`, read with jq, and then
-installs the enabled plugins. It accepts only GitHub sources named by
-`repo` alone, in `owner/repo` form, the only kind declared, and stops with
-an error on any other, including one that pins a `ref` it would not pass
-on. Run with its prerequisites
+An explicit `claude plugin marketplace update pulsar` still refreshed a
+copy one commit behind under that variable, and `claude plugin marketplace
+add … --json` ends with a line naming the marketplace it added, from the
+repository's manifest.
+
+`make setup` now runs `scripts/setup-plugins.sh`, which, with
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` set throughout:
+
+1. adds every marketplace in `extraKnownMarketplaces` with `claude plugin
+marketplace add <owner/repo> --scope project`, and stops if it was added
+   under another name than its key, under which the installs would look
+   for it;
+2. updates each marketplace with `"autoUpdate": true` explicitly, since an
+   install no longer does;
+3. takes a digest of every file in each other marketplace's copy, installs
+   the enabled plugins, and stops if any digest changed, so that a later
+   release of Claude Code that stops honoring the variable fails `make
+setup` instead of moving the freeze unnoticed;
+4. restores `.claude/settings.json` byte for byte, as before.
+
+It accepts only GitHub sources named by `repo` alone, in `owner/repo` form,
+the only kind declared, and stops before any command on any other,
+including one that pins a `ref` it would not pass on.
+`internal/harness/setupplugins_test.go` checks each step against a fake
+`claude`. Run against Claude Code with the Makefile's other prerequisites
 already built (`make -o tools -o hooks setup`):
 
-| Machine                                                                                  | Result                                                                                                                           |
-| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Fresh clone, empty `HOME`                                                                | Exit 0; both marketplaces cloned, both plugins installed at project scope, `.claude/settings.json` unchanged                     |
-| Both installed, the official copy one commit behind, `lastUpdated` a week old; run twice | Exit 0 both times; the copy stayed at `c131608`                                                                                  |
-| `mattpocock-skills` uninstalled, the official copy behind, `lastUpdated` a week old      | Exit 0; `mattpocock-skills` installed, the copy stayed at `c131608`                                                              |
-| A declared marketplace with a `url` source, or a GitHub one with a `ref`                 | Exit 2 with `make setup adds only GitHub marketplaces named by owner/repo alone`; `.claude/settings.json` restored byte for byte |
+| Machine                                                                                                                             | Result                                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Fresh clone, empty `HOME`                                                                                                           | Exit 0; both marketplaces cloned, `pulsar` updated, both plugins installed at project scope, `.claude/settings.json` unchanged |
+| Both installed, the official copy at `c131608` and the `pulsar` copy at `a0604ca`, one commit behind each, `lastUpdated` a week old | Exit 0; the official copy stayed at `c131608`, the `pulsar` copy moved to `dfbfa19`, its `main`                                |
+| The same, with the official copy behind again and the script's variable removed                                                     | Exit 1 with `an install changed a marketplace with autoUpdate off: claude-plugins-official`; the copy had moved to `dceb15d`   |
 
-Two consequences follow from the behavior above but were not run
-(**UNVERIFIED**). A plugin newly enabled from the official marketplace that
+An earlier version of the change, which set the variable in the Makefile's
+recipe without the update or the digest, was also run with
+`mattpocock-skills` uninstalled and the official copy behind: it installed
+the plugin and left the copy at `c131608`.
+
+One consequence follows from the behavior above but was not run
+(**UNVERIFIED**): a plugin newly enabled from the official marketplace that
 a frozen copy does not yet list would fail to install, as `right-sizing`
 did before its marketplace was cloned, until that marketplace is updated
 on purpose (`claude plugin marketplace update claude-plugins-official`),
-which is what the freeze in `docs/harness.md` (Versions) asks for. And
-`make setup` would not refresh the `pulsar` marketplace either, leaving
-that to a session's background pass, which `autoUpdate: true` turns on.
+which is what the freeze in `docs/harness.md` (Versions) asks for.
 
 Sources: <https://code.claude.com/docs/en/plugins/loading>,
 <https://code.claude.com/docs/en/plugins/org>,
