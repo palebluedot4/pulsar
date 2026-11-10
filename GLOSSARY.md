@@ -43,7 +43,7 @@ _Avoid_: session (unqualified), SSO session
 
 **Consent**:
 An End-User's recorded permission for one Client to receive a given set of
-scopes.
+scopes, and access tokens for the Resource Servers it names.
 _Avoid_: grant, approval, authorization
 
 ## Tokens

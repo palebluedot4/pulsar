@@ -294,7 +294,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		// A public Client's Consent is never consulted (see below), so it
 		// is not kept.
 		if !req.client.Public() {
-			if err := p.consents.Allow(ctx, subject, req.client.ID, consentScopes); err != nil {
+			if err := p.consents.Allow(ctx, subject, req.client.ID, consentScopes, req.resourceIdentifier()); err != nil {
 				fail(err)
 				return
 			}
@@ -308,7 +308,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request, paths pageP
 		// §8.6).
 		covered := false
 		if !req.prompts("consent") && !req.client.Public() {
-			covered, err = p.consents.Covers(ctx, subject, req.client.ID, consentScopes)
+			covered, err = p.consents.Covers(ctx, subject, req.client.ID, consentScopes, req.resourceIdentifier())
 			if err != nil {
 				fail(err)
 				return
@@ -373,6 +373,15 @@ type authorizationRequest struct {
 	// with a value name them; nil if the request names none.
 	subjects []string
 	claims   claimsRequest // the claims parameter (OpenID Connect Core 1.0 §5.5)
+}
+
+// resourceIdentifier returns the identifier of the Resource Server the
+// request names, as a code and a Consent record it, or "" for none.
+func (req authorizationRequest) resourceIdentifier() string {
+	if req.resource == nil {
+		return ""
+	}
+	return req.resource.Identifier
 }
 
 // consentScopes returns the scopes the End-User's Consent must cover for
@@ -520,6 +529,14 @@ func parseAuthorizationRequest(reg *registry.Registry, client *registry.Client, 
 		}
 	}
 
+	// The access token for a Resource Server is refused at UserInfo, so the
+	// claims requested from UserInfo could never be released. They are
+	// ignored, as a claim pulsar cannot release is (OpenID Connect Core 1.0
+	// §5.5.1, REQ-CORE-45), and the End-User is not asked for their scopes.
+	if resource != nil {
+		claims.UserInfo = nil
+	}
+
 	return authorizationRequest{
 		client:      client,
 		redirectURI: redirectURI,
@@ -622,10 +639,6 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 	// stored with the code, so that the token endpoint can verify the
 	// code_verifier against the one (RFC 7636 §4.4), release the other, and
 	// issue access tokens for the third (RFC 8707 §2.1).
-	var resource string
-	if req.resource != nil {
-		resource = req.resource.Identifier
-	}
 	err = p.queries.InsertAuthorizationCode(ctx, queries.InsertAuthorizationCodeParams{
 		CodeHash:      hash,
 		ClientID:      req.client.ID,
@@ -635,7 +648,7 @@ func (p *Provider) issueCode(ctx context.Context, req authorizationRequest, auth
 		Nonce:         req.nonce,
 		CodeChallenge: req.challenge,
 		Claims:        claims,
-		Resource:      resource,
+		Resource:      req.resourceIdentifier(),
 		AuthTime:      auth.Time,
 		Expiry:        now.Add(codeLifetime),
 	})

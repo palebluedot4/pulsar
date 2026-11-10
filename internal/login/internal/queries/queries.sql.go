@@ -11,22 +11,30 @@ import (
 )
 
 const addToConsent = `-- name: AddToConsent :exec
-INSERT INTO consents (subject, client_id, scopes)
-VALUES ($1, $2, $3)
+INSERT INTO consents (subject, client_id, scopes, resource_servers)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (subject, client_id) DO UPDATE
-SET scopes = ARRAY(SELECT DISTINCT unnest(consents.scopes || excluded.scopes))
+SET scopes = ARRAY(SELECT DISTINCT unnest(consents.scopes || excluded.scopes)),
+    resource_servers = ARRAY(SELECT DISTINCT unnest(consents.resource_servers || excluded.resource_servers))
 `
 
 type AddToConsentParams struct {
-	Subject  string
-	ClientID string
-	Scopes   []string
+	Subject         string
+	ClientID        string
+	Scopes          []string
+	ResourceServers []string
 }
 
-// Adds scopes to the Consent of the End-User for the Client, creating it if
-// there is none, in one statement, so that two additions at once both count.
+// Adds scopes and Resource Servers to the Consent of the End-User for the
+// Client, creating it if there is none, in one statement, so that two
+// additions at once both count.
 func (q *Queries) AddToConsent(ctx context.Context, arg AddToConsentParams) error {
-	_, err := q.db.Exec(ctx, addToConsent, arg.Subject, arg.ClientID, arg.Scopes)
+	_, err := q.db.Exec(ctx, addToConsent,
+		arg.Subject,
+		arg.ClientID,
+		arg.Scopes,
+		arg.ResourceServers,
+	)
 	return err
 }
 
@@ -68,7 +76,7 @@ func (q *Queries) DeleteLoginSession(ctx context.Context, token string) error {
 }
 
 const findConsent = `-- name: FindConsent :one
-SELECT scopes
+SELECT scopes, resource_servers
 FROM consents
 WHERE subject = $1 AND client_id = $2
 `
@@ -78,11 +86,16 @@ type FindConsentParams struct {
 	ClientID string
 }
 
-func (q *Queries) FindConsent(ctx context.Context, arg FindConsentParams) ([]string, error) {
+type FindConsentRow struct {
+	Scopes          []string
+	ResourceServers []string
+}
+
+func (q *Queries) FindConsent(ctx context.Context, arg FindConsentParams) (FindConsentRow, error) {
 	row := q.db.QueryRow(ctx, findConsent, arg.Subject, arg.ClientID)
-	var scopes []string
-	err := row.Scan(&scopes)
-	return scopes, err
+	var i FindConsentRow
+	err := row.Scan(&i.Scopes, &i.ResourceServers)
+	return i, err
 }
 
 const findLoginSession = `-- name: FindLoginSession :one
