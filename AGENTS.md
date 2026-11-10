@@ -38,6 +38,7 @@ sandbox; if one is missing, say so rather than installing it.
 | `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                                      |
 | `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                                             |
 | `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                                              |
+| `docs/mutation-testing.md`     | How `make mutation` measures test strength, and the scores recorded.                                         |
 | `evals/`                       | How evals are run. Skill evals live with each plugin.                                                        |
 | `docs/agents/`                 | Configuration read by the engineering skills.                                                                |
 

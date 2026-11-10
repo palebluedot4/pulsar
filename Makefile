@@ -51,7 +51,7 @@ SHELL_SCRIPTS = $(wildcard .claude/hooks/*.sh .githooks/* scripts/*.sh conforman
 .PHONY: help setup tools node-tools check verify fmt lint format-check \
 	markdown-lint shell-lint spell test tidy-check repocheck workflow-check \
 	sqlc sqlc-check dockerfile-check vulncheck build conformance examples \
-	hooks eval
+	hooks eval mutation
 
 help: ## Show the available targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z%-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -306,6 +306,24 @@ eval: ## Run a plugin's evals (PLUGIN=right-sizing); uses plan usage or API cred
 		--model $(EVAL_MODEL) --judge-model $(EVAL_JUDGE_MODEL) \
 		--max-cost-usd $(EVAL_MAX_COST_USD) --no-publish $(EVAL_FLAGS) \
 		--allow-tools Write WebSearch WebFetch
+
+# Mutation testing (#5): gremlins changes one operator at a time in each
+# package and runs the tests; a mutant they do not notice lived. It is a
+# measurement, never a gate: the default packages took 79 minutes. Nothing
+# else may use the test database meanwhile. Why each flag, what the scores
+# mean, and those recorded so far: docs/mutation-testing.md. JSON results go
+# to mutation/, one file a package.
+MUTATION_PACKAGES ?= internal/oidc internal/registry internal/signing
+MUTATION_WORKERS ?= 1
+
+mutation: ## Mutation testing of the security-critical packages; slow, not a gate
+	@mkdir -p mutation
+	@set -e; for p in $(MUTATION_PACKAGES); do \
+		echo "gremlins unleash $$p"; \
+		GOFLAGS=-count=1 $(TOOL) gremlins unleash --integration --coverpkg ./... \
+			--exclude-files '(^|/)internal/queries/' --workers $(MUTATION_WORKERS) \
+			--output "mutation/$$(basename "$$p").json" "$$p"; \
+	done
 
 print-%: ## Print a variable, e.g. make print-GOLANGCI_LINT
 	@echo $($*)

@@ -11,6 +11,10 @@ coverage.*
 /conformance/tls/
 /conformance/results/
 
+# Per run of `make mutation`; the scores worth keeping go in
+# docs/mutation-testing.md
+/mutation/
+
 # macOS
 .DS_Store
 
