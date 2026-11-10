@@ -418,6 +418,6 @@ None yet.
   Compose. `make check` and `make verify` lint, tidy, build and scan that
   module as they do pulsar's, and Dependabot updates it. Until the
   maintainer adds the job to the `main` ruleset, it does not block a merge.
-- Maintainer's decision, as #70 (story 36) asks: the `main` ruleset requires
-  `make examples`, so a change that breaks the examples against pulsar
-  blocks a merge.
+- Maintainer's decision: the `main` ruleset requires `make examples`, so a
+  change that breaks the examples against pulsar blocks a merge (#70,
+  story 36).
