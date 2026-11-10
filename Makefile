@@ -310,18 +310,20 @@ eval: ## Run a plugin's evals (PLUGIN=right-sizing); uses plan usage or API cred
 # Mutation testing (#5): gremlins changes one operator at a time in each
 # package and runs the tests; a mutant they do not notice lived. It is a
 # measurement, never a gate: the default packages took 79 minutes. Nothing
-# else may use the test database meanwhile. Why each flag, what the scores
-# mean, and those recorded so far: docs/mutation-testing.md. JSON results go
-# to mutation/, one file a package.
+# else may use the test database meanwhile, so one worker, always. Why each
+# flag, what the scores mean, and those recorded so far:
+# docs/mutation-testing.md. JSON results go to mutation/, one file a
+# package. gremlins runs the go first on PATH, so $(GO)'s goes first.
 MUTATION_PACKAGES ?= internal/oidc internal/registry internal/signing
-MUTATION_WORKERS ?= 1
 
 mutation: ## Mutation testing of the security-critical packages; slow, not a gate
 	@mkdir -p mutation
-	@set -e; for p in $(MUTATION_PACKAGES); do \
+	@set -e; PATH="$$($(GO) env GOROOT)/bin:$$PATH"; export PATH; \
+	for p in $(MUTATION_PACKAGES); do \
 		echo "gremlins unleash $$p"; \
-		GOFLAGS=-count=1 $(TOOL) gremlins unleash --integration --coverpkg ./... \
-			--exclude-files '(^|/)internal/queries/' --workers $(MUTATION_WORKERS) \
+		$(GO) clean -testcache; \
+		$(TOOL) gremlins unleash --integration --coverpkg ./... \
+			--exclude-files '(^|/)internal/queries/' --workers 1 \
 			--output "mutation/$$(basename "$$p").json" "$$p"; \
 	done
 

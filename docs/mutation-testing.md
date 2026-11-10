@@ -35,9 +35,16 @@ Nothing else may use the test database while it runs. One run of the suite
 held up to about 70 of PostgreSQL's default 100 connections, so a second run
 alongside, from another worker, another session's `make check` or a Stop
 hook, can fail tests with SQLSTATE 53300 ("too many clients already"), and
-gremlins counts each mutant whose tests failed that way as killed. A run
-is clean only if the server's log has no such error between its start and
-its end; with Postgres.app:
+gremlins counts each mutant whose tests failed that way as killed, which
+raises the score with nothing to show for it. A server of the run's own
+avoids that:
+
+```sh
+PULSAR_TEST_DATABASE_URL=postgres://<role>@localhost:<port>/postgres make mutation
+```
+
+On a shared server, a run is clean only if the server's log has no such
+error between its start and its end; with Postgres.app:
 
 ```sh
 grep 'too many clients' ~/Library/Application\ Support/Postgres/var-17/postgresql.log | tail
@@ -51,10 +58,15 @@ grep 'too many clients' ~/Library/Application\ Support/Postgres/var-17/postgresq
   so no mutant there would count as covered and none would run; without
   `--coverpkg`, coverage would count no line of it either. With both, each
   mutant runs the whole suite, which is why a run is slow.
-- **`GOFLAGS=-count=1`.** gremlins times one run of the suite and gives each
-  mutant three times as long before calling it timed out. A cached run takes
-  a second, so every mutant would time out.
-- **`--workers 1`.** The connections above.
+- **`go clean -testcache` before each package.** gremlins times one run of
+  the suite and gives each mutant three times as long before calling it
+  timed out. A cached run takes a second, so every mutant would time out.
+  The mutants' own runs keep the cache, so a package that cannot import the
+  mutated one is not run again.
+- **`--workers 1`, not a variable.** The connections above: a second worker
+  is a second run of the suite alongside.
+- **`$(GO)`'s toolchain first on `PATH`.** gremlins runs the `go` it finds
+  there, not the one that built it.
 - **`--exclude-files '(^|/)internal/queries/'`.** sqlc generates that code;
   `make sqlc-check` already checks it against its queries.
 - **Mutators.** gremlins' defaults: arithmetic, conditional boundaries,
@@ -79,7 +91,12 @@ changed `internal/oidc`.
   profile has no block for the conditions of a `case` clause, which sit
   between the `switch` and the clause's body, nor for package-level
   declarations. A mutant there is never run, however thoroughly the tests
-  exercise it, so neither score covers it.
+  exercise it: it lowers mutator coverage and is left out of test efficacy,
+  so no score says whether the tests would catch it.
+- Scores compare only at the same gremlins version, which each run below
+  records. Dependabot updates gremlins with the other tools in
+  `tools/go.mod`, and a release may change its default mutators or how it
+  matches coverage.
 - A lived mutant is not always a missing test. An equivalent mutant changes
   the code without changing what it does, such as `<` to `<=` where the two
   are never equal; no test can kill it. Each one is decided by reading the
@@ -90,7 +107,9 @@ changed `internal/oidc`.
 ### 2026-11-10
 
 gremlins v0.6.0, Go 1.27.3, PostgreSQL 17.2 (Postgres.app), at `dfbfa19`;
-79 minutes, with no SQLSTATE 53300 in the server's log while it ran.
+79 minutes, with no SQLSTATE 53300 in the server's log while it ran. It ran
+every test of every mutant uncached (`GOFLAGS=-count=1`), before the target
+cleared the cache only for the baseline.
 
 | Package             | Killed | Lived | Timed out | Not covered | Test efficacy | Mutator coverage |
 | ------------------- | -----: | ----: | --------: | ----------: | ------------: | ---------------: |
@@ -98,15 +117,15 @@ gremlins v0.6.0, Go 1.27.3, PostgreSQL 17.2 (Postgres.app), at `dfbfa19`;
 | `internal/registry` |     94 |     9 |         1 |          48 |        91.26% |           68.21% |
 | `internal/signing`  |     44 |     2 |         0 |           5 |        95.65% |           90.20% |
 
-These scores leave out much of what #5 names. Of the 125 mutants not
+Test efficacy leaves out much of what #5 names. Of the 125 mutants not
 covered, 111 are conditions of `case` clauses (64 in `internal/oidc`, 47 in
 `internal/registry`) and 13 are in package-level declarations; one alone,
 the `Retry-After` header at `internal/oidc/token.go:117`, is in a statement
 no test runs. The `case` conditions include the PKCE checks in
 `internal/oidc/authorize.go` and `pkce.go`, the checks on a private_key_jwt
 assertion in `assertion.go`, those on an access token in `userinfo.go`, and
-the parsing of redirect URIs in `internal/registry/registry.go`: none of
-them was mutated. Nor was any `&&` or `||` inverted, which many of the
+the parsing of redirect URIs in `internal/registry/registry.go`: gremlins
+listed their mutants but ran none of them. Nor was any `&&` or `||` inverted, which many of the
 checks that were mutated are built from.
 
 Mutants that lived, and the one that timed out, with the line each changed.
