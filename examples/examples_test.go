@@ -1,7 +1,9 @@
-// The examples' tests run the CLI and the API against a pulsar that
-// make examples starts in Docker Compose, with registry.json. They reach
-// pulsar only by its URL, and act as the End-User's browser through its
-// login and consent pages. The environment names that pulsar:
+// The examples' tests run the web app, the CLI and the API against a
+// pulsar that make examples starts in Docker Compose, with registry.json.
+// They reach pulsar only by its URL, and act as the End-User's browser
+// through its login, consent and logout pages. They serve the web app at
+// localhost:8082, under which registry.json registers its redirect URIs,
+// so that port must be free. The environment names that pulsar:
 //
 //	PULSAR_EXAMPLES_ISSUER  its issuer, which serves on the host
 //	PULSAR_EXAMPLES_ROTATE  a shell command that runs `pulsar keys rotate` against it
@@ -307,10 +309,12 @@ func signIn(t *testing.T, resource string, scopes ...string) *cli.Session {
 }
 
 // browser acts as the End-User's browser: it keeps cookies, follows
-// redirects, and on pulsar's login page signs in, and on its consent page
-// allows the request.
+// redirects, and on pulsar's login page signs in, on its consent page
+// allows the request, and on its logout page signs out. It records every
+// response it receives.
 type browser struct {
-	client *http.Client
+	client   *http.Client
+	recorder *recorder
 }
 
 func newBrowser(t *testing.T) *browser {
@@ -319,7 +323,49 @@ func newBrowser(t *testing.T) *browser {
 	if err != nil {
 		t.Fatalf("cookiejar.New() error = %v, want nil", err)
 	}
-	return &browser{client: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
+	rec := &recorder{next: http.DefaultTransport}
+	return &browser{client: &http.Client{Jar: jar, Transport: rec, Timeout: 30 * time.Second}, recorder: rec}
+}
+
+// response is a response as it was received, with its body read.
+type response struct {
+	url    *url.URL
+	status int
+	header http.Header
+	body   string
+}
+
+// recorder is an http.RoundTripper that records every response next
+// returns, each redirect of one followed included.
+type recorder struct {
+	next http.RoundTripper
+
+	mu        sync.Mutex
+	responses []response
+}
+
+func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := r.next.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.responses = append(r.responses, response{url: req.URL, status: resp.StatusCode, header: resp.Header.Clone(), body: string(body)})
+	return resp, nil
+}
+
+// received returns the responses recorded so far.
+func (r *recorder) received() []response {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.responses)
 }
 
 // signInMu is held while a browser signs in, so that sign-ins happen one
@@ -327,62 +373,98 @@ func newBrowser(t *testing.T) *browser {
 // wait (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
 var signInMu sync.Mutex
 
-// The forms of pulsar's consent page, as a browser reads them.
+// The forms of pulsar's consent and logout pages, as a browser reads them.
 var (
-	consentAction = regexp.MustCompile(`<form method="post" action="([^"]*)">`)
-	hiddenInput   = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
+	formAction  = regexp.MustCompile(`<form method="post" action="([^"]*)">`)
+	hiddenInput = regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
 )
 
 // open opens url and answers each of pulsar's pages, until the browser
-// reaches the redirect URI's page.
+// reaches the redirect URI's page, which must answer 200.
 func (b *browser) open(ctx context.Context, rawURL string) error {
+	p, err := b.visit(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	if p.status != http.StatusOK {
+		return fmt.Errorf("the redirect URI answered %d: %s", p.status, p.body)
+	}
+	return nil
+}
+
+// visit sends a request, a POST with form as its body, and answers each
+// of pulsar's pages it is led to, until it reaches a page pulsar does not
+// serve, which it returns.
+func (b *browser) visit(ctx context.Context, method, rawURL string, form url.Values) (page, error) {
 	signInMu.Lock()
 	defer signInMu.Unlock()
 
-	p, err := b.send(ctx, http.MethodGet, rawURL, nil)
+	pulsar, err := url.Parse(issuer)
+	if err != nil {
+		return page{}, err
+	}
+	p, err := b.send(ctx, method, rawURL, form)
 	for range 4 {
 		switch {
 		case err != nil:
-			return err
-		case p.url.Path == "/callback":
-			if p.status != http.StatusOK {
-				return fmt.Errorf("the redirect URI answered %d: %s", p.status, p.body)
-			}
-			return nil
+			return page{}, err
+		case p.url.Host != pulsar.Host:
+			return p, nil
 		case strings.Contains(p.body, `name="password"`):
 			// The login form posts to the page's own URL.
 			p, err = b.send(ctx, http.MethodPost, p.url.String(), url.Values{"username": {username}, "password": {password}})
-		case strings.Contains(p.body, `name="decision"`):
-			m := consentAction.FindStringSubmatch(p.body)
-			if m == nil {
-				return errors.New("the consent page has no form")
-			}
-			action, parseErr := p.url.Parse(html.UnescapeString(m[1]))
-			if parseErr != nil {
-				return parseErr
-			}
-			form := url.Values{"decision": {"allow"}}
-			for _, h := range hiddenInput.FindAllStringSubmatch(p.body, -1) {
-				form.Add(html.UnescapeString(h[1]), html.UnescapeString(h[2]))
-			}
-			p, err = b.send(ctx, http.MethodPost, action.String(), form)
+		case strings.Contains(p.body, `name="decision" value="allow"`):
+			p, err = b.submit(ctx, p, "allow")
+		case strings.Contains(p.body, `name="decision" value="logout"`):
+			p, err = b.submit(ctx, p, "logout")
 		default:
-			return fmt.Errorf("unexpected page at %s, status %d: %s", p.url, p.status, p.body)
+			return page{}, fmt.Errorf("unexpected page at %s, status %d: %s", p.url, p.status, p.body)
 		}
 	}
-	return errors.New("the browser did not reach the redirect URI")
+	return page{}, errors.New("the browser did not leave pulsar's pages")
+}
+
+// submit submits the form of p, one of pulsar's consent or logout pages,
+// by its button for decision.
+func (b *browser) submit(ctx context.Context, p page, decision string) (page, error) {
+	m := formAction.FindStringSubmatch(p.body)
+	if m == nil {
+		return page{}, fmt.Errorf("the page at %s has no form", p.url)
+	}
+	action, err := p.url.Parse(html.UnescapeString(m[1]))
+	if err != nil {
+		return page{}, err
+	}
+	form := url.Values{"decision": {decision}}
+	for _, h := range hiddenInput.FindAllStringSubmatch(p.body, -1) {
+		form.Add(html.UnescapeString(h[1]), html.UnescapeString(h[2]))
+	}
+	return b.send(ctx, http.MethodPost, action.String(), form)
 }
 
 // page is a page the browser ended at.
 type page struct {
 	url    *url.URL
 	status int
+	header http.Header
 	body   string
 }
 
 // send sends a request, a POST with form as its body, and follows
 // redirects, returning the page it ends at.
 func (b *browser) send(ctx context.Context, method, rawURL string, form url.Values) (page, error) {
+	return b.do(ctx, b.client, method, rawURL, form)
+}
+
+// step sends a request as send does, but follows no redirect: it returns
+// the response itself.
+func (b *browser) step(ctx context.Context, method, rawURL string, form url.Values) (page, error) {
+	c := *b.client
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return b.do(ctx, &c, method, rawURL, form)
+}
+
+func (b *browser) do(ctx context.Context, client *http.Client, method, rawURL string, form url.Values) (page, error) {
 	var body io.Reader = http.NoBody
 	if form != nil {
 		body = strings.NewReader(form.Encode())
@@ -394,13 +476,13 @@ func (b *browser) send(ctx context.Context, method, rawURL string, form url.Valu
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	resp, err := b.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return page{}, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // Read to its end; closing it reports nothing to act on.
 	content, err := io.ReadAll(resp.Body)
-	return page{url: resp.Request.URL, status: resp.StatusCode, body: string(content)}, err
+	return page{url: resp.Request.URL, status: resp.StatusCode, header: resp.Header, body: string(content)}, err
 }
 
 // claims returns the claims of token, a JWS in compact serialization,

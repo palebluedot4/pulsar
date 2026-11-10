@@ -29,10 +29,12 @@ the stack publishes no port to the host.
 
 `examples/registry.json` registers an End-User whose password,
 `examples-password`, is published in `examples/README.md` and
-`examples/examples_test.go`, for the throwaway pulsar that `make examples`
-runs. It is for that testing only: never use it, or that registry,
-anywhere else. The `PULSAR_SECRET` of each run is generated for it and
-never committed. The stack publishes pulsar's port on the host's loopback
+`examples/examples_test.go`, and the web app example's Client, whose
+secret is published in `examples/README.md`, `examples/webapp_test.go` and
+`internal/registry/registry_test.go`, with its Argon2id hash in the
+registry. They are for the throwaway pulsar that `make examples` runs, and
+for that testing only: never use them, or that registry, anywhere else.
+The `PULSAR_SECRET` of each run is generated for it and never committed. The stack publishes pulsar's port on the host's loopback
 interface alone.
 
 ## Supported versions

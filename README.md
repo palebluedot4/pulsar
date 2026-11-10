@@ -260,9 +260,11 @@ does not list with a reason, and leaves the results in
 ### Running the examples
 
 [examples/](examples/README.md) holds consumers of pulsar in a Go module of
-their own, which does not require pulsar's: an API, a Resource Server that
-verifies pulsar's access tokens itself, and a command-line public Client
-that signs in through a loopback redirect and calls it. They use only
+their own, which does not require pulsar's: a web app, a confidential
+Client on the server that keeps tokens from the browser; an API, a
+Resource Server that verifies pulsar's access tokens itself; and a
+command-line public Client that signs in through a loopback redirect. Both
+Clients call the API. They use only
 `golang.org/x/oauth2`, `github.com/coreos/go-oidc` and
 `github.com/go-jose/go-jose`. With Docker (and Compose v2), openssl and Go
 installed:
@@ -273,8 +275,13 @@ make examples
 
 This runs pulsar in Docker Compose with the examples' registry, and the
 examples' tests against it, over the network. They show that those
-libraries work with pulsar: the CLI signs in with PKCE through a loopback
-redirect on a port the operating system chose, gets an access token for the
+libraries work with pulsar: the web app signs in with its secret, calls
+the API, refreshes its access token twice, and at logout revokes its
+refresh token, which pulsar then refuses, and signs out at pulsar's logout
+endpoint, which returns it its `state`; no access or refresh token reaches
+the browser, and the ID token only as `id_token_hint`. The CLI signs in
+with PKCE through a loopback redirect on a port the operating system
+chose, gets an access token for the
 API with `resource`, and calls the API, which accepts it. The API refuses no
 token, a token for UserInfo, a token at its `exp` by the API's clock, a
 changed or unsigned token and an ID token with 401, and a token without the route's scope with 403; and after
