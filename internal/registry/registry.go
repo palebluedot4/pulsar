@@ -157,6 +157,11 @@ type Client struct {
 	// once; none if it registered none.
 	ResourceServers []string
 
+	// loopbackRedirectURIs are a public Client's loopback IP redirect
+	// URIs without their ports (see withoutLoopbackPort), each once; none
+	// for a confidential Client.
+	loopbackRedirectURIs []string
+
 	secretHash *passwordHash // for client_secret_basic and client_secret_post
 }
 
@@ -203,17 +208,8 @@ func (c *Client) AllowsRedirectURI(requested string) bool {
 	if slices.Contains(c.RedirectURIs, requested) {
 		return true
 	}
-	if !c.Public() {
-		return false
-	}
-	want, ok := withoutLoopbackPort(requested)
-	if !ok {
-		return false
-	}
-	return slices.ContainsFunc(c.RedirectURIs, func(registered string) bool {
-		got, ok := withoutLoopbackPort(registered)
-		return ok && got == want
-	})
+	u, ok := withoutLoopbackPort(requested)
+	return ok && slices.Contains(c.loopbackRedirectURIs, u)
 }
 
 // withoutLoopbackPort returns raw without its port, if raw is a loopback
@@ -522,6 +518,13 @@ func newClient(e clientEntry) (*Client, error) {
 		}
 	}
 	c.RedirectURIs = e.RedirectURIs
+	if c.Public() {
+		for _, raw := range c.RedirectURIs {
+			if u, ok := withoutLoopbackPort(raw); ok && !slices.Contains(c.loopbackRedirectURIs, u) {
+				c.loopbackRedirectURIs = append(c.loopbackRedirectURIs, u)
+			}
+		}
+	}
 
 	// RP-Initiated Logout 1.0 §3 compares a post-logout redirect URI
 	// exactly with one registered, as RFC 6749 §3.1.2 does a redirect URI,

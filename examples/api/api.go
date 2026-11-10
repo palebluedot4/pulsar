@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +33,11 @@ const (
 	ScopeRead  = "notes:read"
 	ScopeWrite = "notes:write"
 )
+
+// ErrKeysUnreachable is the error of Verify when pulsar's JWK Set, which
+// it needed to fetch, could not be reached: the token may be valid, so the
+// API answers 503 rather than invalid_token.
+var ErrKeysUnreachable = errors.New("api: pulsar's JWK Set could not be reached")
 
 // maxNoteBytes bounds the body of a request that adds a note.
 const maxNoteBytes = 4 << 10
@@ -80,7 +86,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	var meta struct {
 		JWKSURI string `json:"jwks_uri"`
 	}
-	if err := provider.Claims(&meta); err != nil || meta.JWKSURI == "" {
+	if err := provider.Claims(&meta); err != nil {
+		return nil, fmt.Errorf("api: the discovery document of %s: %w", cfg.Issuer, err)
+	}
+	if meta.JWKSURI == "" {
 		return nil, fmt.Errorf("api: the discovery document of %s has no jwks_uri", cfg.Issuer)
 	}
 	s := &Server{
@@ -135,6 +144,12 @@ func (s *Server) Verify(ctx context.Context, raw string) (*Token, error) {
 	// The signature, by a key in pulsar's JWK Set (RFC 9068 §4).
 	payload, err := s.keys.VerifySignature(ctx, raw)
 	if err != nil {
+		// RemoteKeySet wraps the error of a request that never got an
+		// answer, and no other kind of failed fetch, in a way this can
+		// tell apart.
+		if _, ok := errors.AsType[*url.Error](err); ok {
+			return nil, fmt.Errorf("%w: %w", ErrKeysUnreachable, err)
+		}
 		return nil, fmt.Errorf("signature: %w", err)
 	}
 	var claims struct {
@@ -181,6 +196,10 @@ func (s *Server) require(scope string, next func(http.ResponseWriter, *http.Requ
 			return
 		}
 		token, err := s.Verify(r.Context(), raw)
+		if errors.Is(err, ErrKeysUnreachable) {
+			http.Error(w, "pulsar's keys could not be reached; try again later.", http.StatusServiceUnavailable)
+			return
+		}
 		if err != nil {
 			// The reason stays in the API: the Client learns only that the
 			// token is invalid (RFC 6750 §3.1).

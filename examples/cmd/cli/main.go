@@ -52,12 +52,13 @@ func main() {
 }
 
 func run(cfg cli.Config, apiURL string, args []string) error {
-	var text string // the note to add; "" to list
+	var adding bool
+	var text string
 	switch {
 	case len(args) == 1 && args[0] == "list":
 		cfg.Scopes = []string{api.ScopeRead}
-	case len(args) >= 2 && args[0] == "add":
-		cfg.Scopes, text = []string{api.ScopeWrite}, strings.Join(args[1:], " ")
+	case len(args) >= 2 && args[0] == "add" && strings.TrimSpace(strings.Join(args[1:], "")) != "":
+		adding, cfg.Scopes, text = true, []string{api.ScopeWrite}, strings.Join(args[1:], " ")
 	default:
 		flag.Usage()
 		return errors.New("unknown command")
@@ -74,7 +75,7 @@ func run(cfg cli.Config, apiURL string, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "signed in as %s\n", session.Subject)
 
-	if text != "" {
+	if adding {
 		return cli.AddNote(ctx, apiURL, session.AccessToken, text)
 	}
 	notes, err := cli.ListNotes(ctx, apiURL, session.AccessToken)
