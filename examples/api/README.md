@@ -2,8 +2,10 @@
 
 A Resource Server: an API that accepts the access tokens pulsar issues for
 it, and verifies each one itself, with no call to pulsar but for its
-discovery document and JWK Set. Its routes keep each End-User's notes, by
-their `sub`:
+discovery document and JWK Set. Its routes keep each `sub`'s notes, apart
+from every other's: an End-User's, for a Client that acts for them, or a
+machine Client's own, such as [the worker's](../worker/README.md), whose
+`sub` is its `client_id`:
 
 | Route         | Scope it needs |
 | ------------- | -------------- |
@@ -25,7 +27,7 @@ RFC 9068 §4 lists what a Resource Server must check of a JWT access token.
 | `iss` is pulsar's issuer, exactly                      | A token from another authorization server is refused                                                                                                                                                                           | RFC 9068 §4                          |
 | `aud` names the API's identifier                       | A token pulsar issued for something else, such as its own UserInfo, is refused: a token stolen from another recipient cannot be replayed here. pulsar puts the identifier in `aud` when the Client asks for it with `resource` | RFC 9068 §4; RFC 9700 §2.3; RFC 8707 |
 | The current time is before `exp`, and `exp` is present | An expired token is refused; pulsar's access tokens live ten minutes                                                                                                                                                           | RFC 9068 §2.2, §4                    |
-| `scope` holds the scope the route needs                | A token is used only for what the End-User allowed                                                                                                                                                                             | RFC 9068 §2.2.3; RFC 6750 §3.1       |
+| `scope` holds the scope the route needs                | A token is used only for what the End-User allowed, or the registry grants a machine Client                                                                                                                                    | RFC 9068 §2.2.3; RFC 6750 §3.1       |
 
 It answers as RFC 6750 §3 says, with a `WWW-Authenticate` challenge of the
 Bearer scheme:

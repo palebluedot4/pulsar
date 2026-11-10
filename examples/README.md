@@ -14,19 +14,22 @@ from pulsar's discovery document.
 | The web app | [`webapp/`](webapp/README.md) | [`cmd/webapp/`](cmd/webapp/main.go) | A confidential Client on the server, a backend-for-frontend, that keeps the End-User's tokens from the browser, calls the API, refreshes its access token, and at logout revokes its refresh token and signs out of pulsar |
 | The API     | [`api/`](api/README.md)       | [`cmd/api/`](cmd/api/main.go)       | A Resource Server that verifies each access token itself against pulsar's JWK Set, and keeps each End-User's notes                                                                                                         |
 | The CLI     | [`cli/`](cli/README.md)       | [`cmd/cli/`](cmd/cli/main.go)       | A public Client that signs the End-User in through their browser and a loopback redirect, gets an access token for the API, and calls it                                                                                   |
+| The worker  | [`worker/`](worker/README.md) | [`cmd/worker/`](cmd/worker/main.go) | A job, a machine Client with no End-User, that gets an access token of its own by the client credentials grant, authenticating with `private_key_jwt`, and calls the API with it                                           |
 
 Each package's README says what it checks and why, citing the clause each
 check comes from.
 
-| File               | Contents                                                                                                                                                                                                                                    |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `registry.json`    | pulsar's registry for the examples: the web app's Client `webapp`, with its redirect URIs under `http://localhost:8082`; the CLI's Client `cli`; the API's Resource Server `https://api.example/notes` with its two scopes; and an End-User |
-| `compose.yaml`     | pulsar and its PostgreSQL, as `make examples` runs them, with pulsar on the host's loopback interface at `http://127.0.0.1:9080`                                                                                                            |
-| `examples_test.go` | The tests of the CLI and the API, and the browser the tests act as                                                                                                                                                                          |
-| `webapp_test.go`   | The test of the web app, which it serves at `localhost:8082`, with the API                                                                                                                                                                  |
+| File               | Contents                                                                                                                                                                                                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `registry.json`    | pulsar's registry for the examples: the web app's Client `webapp`, with its redirect URIs under `http://localhost:8082`; the CLI's Client `cli`; the worker's Client `worker`, with its public key and both the API's scopes; the API's Resource Server `https://api.example/notes` with its two scopes; and an End-User |
+| `worker-key.json`  | The worker's private key, a JWK, whose public half `registry.json` lists                                                                                                                                                                                                                                                 |
+| `compose.yaml`     | pulsar and its PostgreSQL, as `make examples` runs them, with pulsar on the host's loopback interface at `http://127.0.0.1:9080`                                                                                                                                                                                         |
+| `examples_test.go` | The tests of the CLI, the worker and the API, and the browser the tests act as                                                                                                                                                                                                                                           |
+| `webapp_test.go`   | The test of the web app, which it serves at `localhost:8082`, with the API                                                                                                                                                                                                                                               |
 
 The End-User's username is `example` and their password `examples-password`.
-The web app's client secret is `fXVx4UH6F0awyDIESJsM21sLdOr_SDTYmQfHerTUPPY`.
+The web app's client secret is `fXVx4UH6F0awyDIESJsM21sLdOr_SDTYmQfHerTUPPY`,
+and the worker's private key is in `worker-key.json`.
 Like the conformance suite's credentials, they are published deliberately,
 for this stack only ([SECURITY.md](../SECURITY.md)).
 
@@ -80,6 +83,13 @@ Over the wire, with `x/oauth2` and `go-oidc` on the other side:
   system chose, with PKCE, `state` and `nonce`, and `resource` at both
   endpoints; it verifies the ID token; and it calls the API with its access
   token, which the API accepts.
+- The worker gets an access token for the API by the client credentials
+  grant, authenticating with `private_key_jwt`, and the API accepts it.
+  The token response holds no refresh token and no ID token. The token's
+  `sub` and `client_id` are both `worker`, and its `aud` the API's
+  identifier. A second token request, with a new assertion, succeeds.
+  After the End-User adds a note through the CLI and the worker adds one
+  of its own, each lists only its own.
 - The API refuses, with 401 and a Bearer challenge: no token; a token of
   another scheme; a token pulsar issued for its own UserInfo; a token at its
   `exp`, by the API's clock, which the test sets to that time rather than
@@ -105,6 +115,8 @@ They do not prove:
 - That the web app refuses a wrong `iss` or an ID token that fails
   verification, or ends its session when a refresh is refused: no test
   makes pulsar send it one.
+- How pulsar answers a worker request it refuses: no test sends one;
+  pulsar's own tests do.
 - That the examples are fit for production. They keep notes, and the web
   app its sessions, in memory; [the API's
   README](api/README.md#what-it-does-not-do) and [the web app's
@@ -123,6 +135,7 @@ export ISSUER=http://localhost:8080 API_IDENTIFIER=https://api.example/notes
 go run ./cmd/api &                # serves on 127.0.0.1:8081
 go run ./cmd/cli add 'buy milk'   # opens a browser to sign in as example
 go run ./cmd/cli list
+go run ./cmd/worker               # signs with worker-key.json, adds a note, lists its notes
 WEBAPP_CLIENT_SECRET=fXVx4UH6F0awyDIESJsM21sLdOr_SDTYmQfHerTUPPY \
   go run ./cmd/webapp &           # serves on localhost:8082
 ```

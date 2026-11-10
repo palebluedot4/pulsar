@@ -1,9 +1,10 @@
-// The examples' tests run the web app, the CLI and the API against a
-// pulsar that make examples starts in Docker Compose, with registry.json.
-// They reach pulsar only by its URL, and act as the End-User's browser
-// through its login, consent and logout pages. They serve the web app at
-// localhost:8082, under which registry.json registers its redirect URIs,
-// so that port must be free. The environment names that pulsar:
+// The examples' tests run the web app, the CLI, the worker and the API
+// against a pulsar that make examples starts in Docker Compose, with
+// registry.json. They reach pulsar only by its URL, and act as the
+// End-User's browser through its login, consent and logout pages. They
+// serve the web app at localhost:8082, under which registry.json
+// registers its redirect URIs, so that port must be free. The environment
+// names that pulsar:
 //
 //	PULSAR_EXAMPLES_ISSUER  its issuer, which serves on the host
 //	PULSAR_EXAMPLES_ROTATE  a shell command that runs `pulsar keys rotate` against it
@@ -39,15 +40,19 @@ import (
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	"golang.org/x/oauth2"
 
 	"github.com/palebluedot4/pulsar/examples/api"
 	"github.com/palebluedot4/pulsar/examples/cli"
+	"github.com/palebluedot4/pulsar/examples/worker"
 )
 
-// What registry.json registers: the CLI's Client, the API's Resource
-// Server, and the End-User, whose password examples/README.md publishes.
+// What registry.json registers: the CLI's Client, the worker's, the API's
+// Resource Server, and the End-User, whose password examples/README.md
+// publishes.
 const (
 	clientID   = "cli"
+	workerID   = "worker"
 	identifier = "https://api.example/notes"
 	username   = "example"
 	password   = "examples-password" // published deliberately, for this stack only (SECURITY.md)
@@ -119,6 +124,66 @@ func TestCLICallsAPI(t *testing.T) {
 	}
 	if want := []string{"buy milk"}; !slices.Equal(got, want) {
 		t.Errorf("cli.ListNotes() = %q, want %q", got, want)
+	}
+}
+
+// TestWorkerCallsAPI: the worker, a machine Client, gets an access token
+// of its own by the client credentials grant, authenticating with
+// private_key_jwt as RFC 9700 §2.5 recommends (REQ-BCP-16), and the API
+// accepts it. The response holds no refresh token and no ID token
+// (REQ-OAUTH-49). The token's sub and client_id are the worker's client_id
+// (REQ-AT-15), and its aud the API's identifier (REQ-RESOURCE-3). A second
+// token request succeeds, so the worker signed a new assertion for it,
+// since pulsar refuses one whose jti it has seen (REQ-JWTAUTH-6). The
+// API keeps notes by sub, and the worker's are kept apart from the
+// End-User's, since no client_id can be an End-User's Subject
+// (REQ-BCP-17).
+func TestWorkerCallsAPI(t *testing.T) {
+	t.Parallel()
+
+	srv := newAPI(t, nil)
+	ts := newWorker(t)
+	tok, err := ts.Token()
+	if err != nil {
+		t.Fatalf("worker token source Token() error = %v, want nil", err)
+	}
+	if tok.RefreshToken != "" {
+		t.Errorf("token response refresh_token = %q, want none", tok.RefreshToken)
+	}
+	if got := tok.Extra("id_token"); got != nil {
+		t.Errorf("token response id_token = %q, want none", got)
+	}
+	c := claims(t, tok.AccessToken)
+	for _, claim := range []string{"sub", "client_id"} {
+		if got := c[claim]; got != workerID {
+			t.Errorf("access token %s = %v, want %q", claim, got, workerID)
+		}
+	}
+	if got := c["aud"]; got != identifier {
+		t.Errorf("access token aud = %v, want %q", got, identifier)
+	}
+	if _, err := ts.Token(); err != nil {
+		t.Errorf("a second worker token request: Token() error = %v, want nil", err)
+	}
+
+	endUser := signIn(t, identifier, api.ScopeWrite)
+	if err := cli.AddNote(t.Context(), srv.URL, endUser.AccessToken, "the End-User's note"); err != nil {
+		t.Fatalf("cli.AddNote() error = %v, want nil", err)
+	}
+	got, err := worker.Run(t.Context(), ts, srv.URL, "the worker's note")
+	if err != nil {
+		t.Fatalf("worker.Run() error = %v, want nil", err)
+	}
+	if want := []string{"the worker's note"}; !slices.Equal(got, want) {
+		t.Errorf("worker.Run() = %q, want %q", got, want)
+	}
+	reader := signIn(t, identifier, api.ScopeRead)
+	got, err = cli.ListNotes(t.Context(), srv.URL, reader.AccessToken)
+	if err != nil {
+		t.Fatalf("cli.ListNotes() error = %v, want nil", err)
+	}
+	if want := []string{"the End-User's note"}; !slices.Equal(got, want) {
+		t.Errorf("cli.ListNotes() as the End-User = %q, want %q", got, want)
 	}
 }
 
@@ -291,6 +356,28 @@ func newAPI(t *testing.T, now func() time.Time) *httptest.Server {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// newWorker returns the worker's token source, with the private key
+// worker-key.json publishes, for an access token for the API with both
+// its scopes.
+func newWorker(t *testing.T) oauth2.TokenSource {
+	t.Helper()
+	data, err := os.ReadFile("worker-key.json")
+	if err != nil {
+		t.Fatalf("os.ReadFile(worker-key.json) error = %v, want nil", err)
+	}
+	key, err := worker.ParseKey(data)
+	if err != nil {
+		t.Fatalf("worker.ParseKey(worker-key.json) error = %v, want nil", err)
+	}
+	ts, err := worker.NewTokenSource(t.Context(), worker.Config{
+		Issuer: issuer, ClientID: workerID, Key: key, Resource: identifier, Scopes: []string{api.ScopeRead, api.ScopeWrite},
+	})
+	if err != nil {
+		t.Fatalf("worker.NewTokenSource() error = %v, want nil", err)
+	}
+	return ts
 }
 
 // signIn runs the CLI's sign-in, for an access token for resource, or
