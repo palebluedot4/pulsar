@@ -46,17 +46,20 @@ func run(issuer, identifier, addr string) error {
 		return err
 	}
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	// ListenAndServe returns as soon as Shutdown begins, so run waits for
+	// Shutdown to finish the requests in flight before it returns.
+	shutdown := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		shutdown <- srv.Shutdown(shutdownCtx)
 	}()
 	log.Printf("serving %q for %q on %q", identifier, issuer, addr) //nolint:gosec // G706: the operator's own flags, quoted.
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-	return nil
+	return <-shutdown
 }
 
 // envOr returns the environment variable key, or def if it is unset.

@@ -30,13 +30,17 @@ RFC 9068 §4 lists what a Resource Server must check of a JWT access token.
 It answers as RFC 6750 §3 says, with a `WWW-Authenticate` challenge of the
 Bearer scheme:
 
-| Request                                    | Status | `WWW-Authenticate`                                                                |
-| ------------------------------------------ | ------ | --------------------------------------------------------------------------------- |
-| No token, or credentials of another scheme | 401    | `Bearer`, with no error code (§3.1)                                               |
-| A token that fails any check above         | 401    | `Bearer error="invalid_token", error_description="The access token is invalid."`  |
-| A valid token without the route's scope    | 403    | `Bearer error="insufficient_scope", scope="notes:write"`, naming the scope needed |
+| Request                                                                                             | Status | `WWW-Authenticate`                                                                    |
+| --------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------- |
+| No token, or credentials of another scheme                                                          | 401    | `Bearer`, with no error code (§3.1)                                                   |
+| A token that fails any check above                                                                  | 401    | `Bearer error="invalid_token", error_description="The access token is invalid."`      |
+| A valid token without the route's scope                                                             | 403    | `Bearer error="insufficient_scope", scope="notes:write"`, naming the scope needed     |
+| A token the API cannot check, because pulsar's JWK Set, which it had to fetch, could not be reached | 503    | none: the token may be valid, and `invalid_token` would tell the Client to discard it |
 
-The reason a token failed is not sent to the Client.
+The reason a token failed is not sent to the Client. A fetch of the JWK Set
+that got an answer other than the set, such as a 500 from pulsar, is not
+told apart by go-oidc from a token the keys do not verify, so it gets 401
+`invalid_token`; only a fetch that got no answer gets 503.
 
 It accepts the token in the `Authorization` header, the one method RFC 6750
 §2.1 requires a Resource Server to support, by a scheme name compared

@@ -46,7 +46,7 @@ var formPostHeaders = login.NewScriptPage(autoSubmit)
 
 // formPostPage is what formPostTemplate reads.
 type formPostPage struct {
-	Action string // a redirect URI the Client registered, one postable accepts
+	Action string // a redirect URI the Client allows, one postable accepts
 	Params []formPostParam
 }
 
@@ -56,7 +56,7 @@ type formPostParam struct {
 }
 
 // postable reports whether a browser can POST to redirectURI, a redirect
-// URI the Client registered: whether its scheme is http or https. A
+// URI the Client allows: whether its scheme is http or https. A
 // browser hands a URI of any other scheme, such as a native app's
 // (RFC 8252 §7.1), to the app that claims it, without a body, so a
 // response sent there by form_post would never arrive.

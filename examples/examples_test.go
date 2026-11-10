@@ -8,7 +8,9 @@
 //
 // They wait on a real pulsar's clock, so they use the clock rather than
 // testing/synctest, and take a few minutes: a rotated key signs two
-// minutes after it is stored.
+// minutes after it is stored. They compare with slices.Equal and ==
+// rather than cmp.Diff, as AGENTS.md has tests do, since the module
+// requires only the three libraries the examples show.
 package examples_test
 
 import (
@@ -193,6 +195,37 @@ func TestAPIRefuses(t *testing.T) {
 				t.Errorf("%s /notes WWW-Authenticate = %q, want %q", tt.method, got, tt.wantChallenge)
 			}
 		})
+	}
+}
+
+// TestAPIKeysUnreachable: a token the API cannot verify because pulsar's
+// JWK Set cannot be reached gets 503, not invalid_token, which would tell
+// the Client to discard a token that may be valid (RFC 6750 §3.1).
+func TestAPIKeysUnreachable(t *testing.T) {
+	t.Parallel()
+
+	// An issuer whose discovery document names a JWK Set at a port
+	// nothing listens on: one a listener just released.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	jwksURI := closed.URL + "/jwks"
+	closed.Close()
+	var discovery *httptest.Server
+	discovery = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"issuer": %q, "jwks_uri": %q}`, discovery.URL, jwksURI)
+	}))
+	t.Cleanup(discovery.Close)
+	handler, err := api.New(t.Context(), api.Config{Issuer: discovery.URL, Identifier: identifier})
+	if err != nil {
+		t.Fatalf("api.New() error = %v, want nil", err)
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	reader := signIn(t, identifier, api.ScopeRead)
+	_, err = cli.ListNotes(t.Context(), srv.URL, reader.AccessToken)
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Errorf("cli.ListNotes() with pulsar's JWK Set unreachable error = %v, want the API's 503", err)
 	}
 }
 

@@ -57,7 +57,8 @@ Over the wire, with `x/oauth2` and `go-oidc` on the other side:
   `exp`, by the API's clock, which the test sets to that time rather than
   wait ten minutes; a token whose claims were changed; one with `alg` `none`; and an ID
   token. It refuses a valid token without the route's scope with 403 and
-  `insufficient_scope`.
+  `insufficient_scope`. It answers 503, not `invalid_token`, when it cannot
+  reach pulsar's JWK Set to check a token.
 - After `pulsar keys rotate`, once pulsar signs with the new key, the API,
   which cached pulsar's JWK Set before, accepts a token signed with the new
   key, and still accepts one the old key signed.

@@ -396,7 +396,8 @@ func (req authorizationRequest) consentScopes() []string {
 }
 
 // parseAuthorizationRequest checks the parameters of an authorization
-// request for client, with redirectURI, one it registered, to the OP at
+// request for client, with redirectURI, one it allows (see
+// registry.Client.AllowsRedirectURI), to the OP at
 // issuer, whose registry is reg, and returns the request, or the error
 // code and description to redirect with.
 func parseAuthorizationRequest(reg *registry.Registry, client *registry.Client, redirectURI, issuer string, params url.Values) (req authorizationRequest, errCode, errDesc string) {
