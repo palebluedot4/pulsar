@@ -4,9 +4,11 @@
 // only over the network, and learns everything but pulsar's issuer and
 // its own identifier from pulsar's discovery document.
 //
-// It keeps each End-User's notes in memory:
+// It keeps each sub's notes in memory, apart from every other's: an
+// End-User's, for a Client that acts for them, or a machine Client's own,
+// whose sub is its client_id.
 //
-//	GET  /notes  the End-User's notes; needs the scope notes:read
+//	GET  /notes  the notes of the token's sub; needs the scope notes:read
 //	POST /notes  adds a note, from {"text": "..."}; needs notes:write
 package api
 
@@ -62,7 +64,7 @@ type Server struct {
 	mux  *http.ServeMux
 
 	mu    sync.Mutex
-	notes map[string][]string // by the End-User's sub
+	notes map[string][]string // by the token's sub
 }
 
 // New discovers pulsar's JWK Set from its discovery document at

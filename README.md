@@ -287,8 +287,10 @@ does not list with a reason, and leaves the results in
 [examples/](examples/README.md) holds consumers of pulsar in a Go module of
 their own, which does not require pulsar's: a web app, a confidential
 Client on the server that keeps tokens from the browser; an API, a
-Resource Server that verifies pulsar's access tokens itself; and a
-command-line public Client that signs in through a loopback redirect. Both
+Resource Server that verifies pulsar's access tokens itself; a
+command-line public Client that signs in through a loopback redirect; and
+a worker, a machine Client that gets an access token of its own by the
+client credentials grant, authenticating with `private_key_jwt`. All three
 Clients call the API. They use only `golang.org/x/oauth2`,
 `github.com/coreos/go-oidc` and `github.com/go-jose/go-jose`. With Docker
 (and Compose v2), openssl and Go installed:
@@ -309,7 +311,10 @@ refresh token, and the ID token appears only as `id_token_hint`: in the
 the form of pulsar's logout page. The CLI signs in with PKCE through a
 loopback redirect on a port the operating system chose, gets an access
 token for the API with `resource`, and calls the API, which accepts it.
-The API refuses no token, a token for UserInfo, a token at its `exp` by
+The worker signs a new client assertion for each token request, gets an
+access token for the API with no refresh token, whose `sub` and
+`client_id` are both `worker`, and calls the API, which accepts it and
+keeps the worker's notes apart from the End-User's. The API refuses no token, a token for UserInfo, a token at its `exp` by
 the API's clock, a changed or unsigned token and an ID token with 401,
 and a token without the route's scope with 403; and after `pulsar keys
 rotate` it accepts tokens signed with the new key. No browser runs: the

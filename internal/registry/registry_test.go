@@ -1,9 +1,13 @@
 package registry_test
 
 import (
+	"bytes"
+	"crypto"
 	"encoding/json/v2"
+	"os"
 	"testing"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/palebluedot4/pulsar/internal/registry"
@@ -102,8 +106,9 @@ func TestClientOrigins(t *testing.T) {
 
 // TestCommittedRegistries checks that the registry files the conformance
 // suite and the examples run pulsar with load, and that the example
-// End-User's published password, the web app example's published secret
-// and the CLI example's loopback redirect URI are accepted, since only
+// End-User's published password, the web app example's published secret,
+// the CLI example's loopback redirect URI and the worker example's
+// published private key are accepted, since only
 // make conformance and make examples, which need Docker, would otherwise
 // start pulsar with them.
 func TestCommittedRegistries(t *testing.T) {
@@ -130,6 +135,41 @@ func TestCommittedRegistries(t *testing.T) {
 	const webAppSecret = "fXVx4UH6F0awyDIESJsM21sLdOr_SDTYmQfHerTUPPY" //nolint:gosec // G101: published deliberately, for make examples only (SECURITY.md).
 	if _, ok, err := reg.AuthenticateClientSecret(t.Context(), registry.ClientSecretBasic, "webapp", webAppSecret); !ok || err != nil {
 		t.Errorf("AuthenticateClientSecret(client_secret_basic, webapp, the secret examples/README.md publishes) = %t, %v; want true, nil", ok, err)
+	}
+
+	worker, ok := reg.Client("worker")
+	if !ok {
+		t.Fatal(`Client("worker") not found`)
+	}
+	if !worker.AllowsGrant(registry.ClientCredentials) {
+		t.Errorf("worker.AllowsGrant(%s) = false, want true", registry.ClientCredentials)
+	}
+	// The worker example signs with the private key examples/worker-key.json
+	// publishes, so its public half must be the key registered for it.
+	data, err := os.ReadFile("../../examples/worker-key.json")
+	if err != nil {
+		t.Fatalf("os.ReadFile(examples/worker-key.json) error = %v, want nil", err)
+	}
+	var private jose.JSONWebKey
+	if err := private.UnmarshalJSON(data); err != nil {
+		t.Fatalf("examples/worker-key.json: UnmarshalJSON() error = %v, want nil", err)
+	}
+	public := private.Public()
+	want, err := public.Thumbprint(crypto.SHA256)
+	if err != nil {
+		t.Fatalf("examples/worker-key.json: Thumbprint() error = %v, want nil", err)
+	}
+	registered := worker.JWKS.Key(private.KeyID)
+	if len(registered) != 1 {
+		t.Fatalf("worker.JWKS.Key(%q) = %d keys, want 1", private.KeyID, len(registered))
+	}
+	got, err := registered[0].Thumbprint(crypto.SHA256)
+	if err != nil {
+		t.Fatalf("worker.JWKS.Key(%q): Thumbprint() error = %v, want nil", private.KeyID, err)
+	}
+	if !bytes.Equal(got, want) || registered[0].Algorithm != private.Algorithm {
+		t.Errorf("worker.JWKS.Key(%q) = a key of thumbprint %x and alg %s, want the public half of examples/worker-key.json, thumbprint %x and alg %s",
+			private.KeyID, got, registered[0].Algorithm, want, private.Algorithm)
 	}
 }
 
