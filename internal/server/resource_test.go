@@ -70,26 +70,53 @@ func resourceServerOnPage(t *testing.T, resp response) shownResourceServer {
 	return shown
 }
 
-// accessTokenFor returns the audience and scope claims of accessToken, as
-// a Resource Server reads them once it has verified the token.
-func accessTokenFor(t *testing.T, handler http.Handler, accessToken string) (aud, scope any) {
+// issuedFor is what a Resource Server reads of an access token, once it
+// has verified it, and the scope the token response says it holds.
+type issuedFor struct {
+	Aud, Scope, ResponseScope any
+}
+
+// issuedForOf returns what the access token of tokens is issued for.
+func issuedForOf(t *testing.T, handler http.Handler, tokens tokenResponse) issuedFor {
 	t.Helper()
-	claims := verify(t, handler, accessToken).claims
-	return claims["aud"], claims["scope"]
+	claims := verify(t, handler, tokens.AccessToken).claims
+	return issuedFor{Aud: claims["aud"], Scope: claims["scope"], ResponseScope: tokens.Scope}
+}
+
+// REQ-RESOURCE-1: no Resource Server's scope may be one the discovery
+// document lists, so that each OpenID Connect scope keeps its meaning,
+// however that list grows.
+func TestResourceServerScopesExcludeOpenIDConnect(t *testing.T) {
+	t.Parallel()
+
+	b := &browser{t: t, handler: newFlowHandlerWithoutDatabase(t)}
+	var discovery struct {
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+	resp := b.send(http.MethodGet, "/tenant/.well-known/openid-configuration", nil)
+	if err := json.Unmarshal([]byte(resp.body), &discovery); err != nil {
+		t.Fatalf("discovery document %q is not JSON: %v", resp.body, err)
+	}
+	for _, s := range discovery.ScopesSupported {
+		file := `{"resource_servers": [{"identifier": "` + ordersServer + `", "scopes": [{"scope": "` + s + `", "description": "x"}]}]}`
+		if _, err := registry.Parse([]byte(file)); err == nil {
+			t.Errorf("registry.Parse(a Resource Server with the scope %q) error = nil, want an error", s)
+		}
+	}
 }
 
 // REQ-RESOURCE-3, REQ-RESOURCE-5, REQ-RESOURCE-7, REQ-RESOURCE-8,
 // REQ-AT-8, REQ-AT-12, REQ-AT-13, REQ-BCP-8, REQ-BCP-14, REQ-BCP-15,
-// REQ-CORE-28: a Client asks, with resource, for an access
-// token for a Resource Server it may request, and for that Resource
-// Server's scopes beside OpenID Connect's. The consent page lists them,
-// with their descriptions, under the Resource Server's identifier. The
-// access token names the Resource Server alone as its audience, and holds
-// only its scopes, as the token response's scope says; UserInfo refuses
-// it, and the ID token is as it is without resource, with the claims the
-// claims parameter requests in it. Each refresh, with
-// the same resource or without one, and for the scope granted or a
-// narrower one, issues an access token for the same Resource Server.
+// REQ-CORE-28: a Client asks, with resource, for an access token for a
+// Resource Server it may request, and for that Resource Server's scopes
+// beside OpenID Connect's. The consent page lists them, with their
+// descriptions, under the Resource Server's identifier. The access token
+// names the Resource Server alone in aud, and holds only its scopes, as
+// the token response's scope says; UserInfo refuses it, and the ID token
+// is as it is without resource, with the claims the claims parameter
+// requests in it. Each refresh, with the same resource or without one,
+// and for the scope granted or a narrower one, issues an access token for
+// the same Resource Server.
 func TestResourceServerFlow(t *testing.T) {
 	t.Parallel()
 
@@ -158,23 +185,21 @@ func TestResourceServerFlow(t *testing.T) {
 			form.Set("resource", r.resource)
 		}
 		got := tokenResponseOf(t, rpNoPKCE.redeem(t, handler, form))
-		aud, scope := accessTokenFor(t, handler, got.AccessToken)
-		if aud != ordersServer || scope != r.wantScope || got.Scope != r.wantScope {
-			t.Errorf("refresh %s: access token aud, scope = %v, %v, response scope %q; want %s, %q", r.name, aud, scope, got.Scope, ordersServer, r.wantScope)
+		want := issuedFor{Aud: ordersServer, Scope: r.wantScope, ResponseScope: r.wantScope}
+		if diff := cmp.Diff(want, issuedForOf(t, handler, got)); diff != "" {
+			t.Errorf("refresh %s: access token mismatch (-want +got):\n%s", r.name, diff)
 		}
 		refreshToken = got.RefreshToken
 	}
 }
 
 // REQ-RESOURCE-3, REQ-RESOURCE-7, REQ-RESOURCE-8, REQ-AT-5, REQ-AT-13,
-// REQ-AT-14, REQ-BCP-14: the scopes a request may be granted are OpenID Connect's,
-// and those of the Resource Server its resource names; any other is
-// ignored, as a scope pulsar does not know is. So without resource, a
-// Resource Server's scope is ignored, and the access token is for pulsar's
-// UserInfo, as it is without that scope. With resource, another Resource
-// Server's scope is ignored, and a request for none of its scopes gets an
-// access token for the Resource Server without scope, as the token
-// response's empty scope says.
+// REQ-AT-14, REQ-BCP-14: the scopes a request may be granted are OpenID
+// Connect's, and those of the Resource Server its resource names; any
+// other is ignored, as a scope pulsar does not know is. So without
+// resource, a Resource Server's scope is ignored, and the access token is
+// for pulsar's UserInfo, as it is without that scope. With resource,
+// another Resource Server's scope is ignored.
 func TestResourceScopes(t *testing.T) {
 	t.Parallel()
 
@@ -185,24 +210,18 @@ func TestResourceScopes(t *testing.T) {
 		scope      string
 		wantPage   []string            // the scopes the consent page lists
 		wantServer shownResourceServer // the Resource Server the consent page shows
-		wantAud    string
-		wantScope  string // the access token's scope, and the token response's
+		want       issuedFor
 	}{
 		{
 			name: "a Resource Server's scope without resource", scope: "openid orders:read",
-			wantPage: []string{"openid"}, wantAud: loginIssuer, wantScope: "openid",
+			wantPage: []string{"openid"},
+			want:     issuedFor{Aud: loginIssuer, Scope: "openid", ResponseScope: "openid"},
 		},
 		{
 			name: "another Resource Server's scope", resource: ordersServer, scope: "openid orders:read billing:read",
 			wantPage:   []string{"openid", "orders:read"},
 			wantServer: shownResourceServer{Identifier: ordersServer, Scopes: map[string]string{"orders:read": "read your orders"}},
-			wantAud:    ordersServer, wantScope: "orders:read",
-		},
-		{
-			name: "none of the Resource Server's scopes", resource: ordersServer, scope: "openid profile",
-			wantPage:   []string{"openid", "profile"},
-			wantServer: shownResourceServer{Identifier: ordersServer},
-			wantAud:    ordersServer,
+			want:       issuedFor{Aud: ordersServer, Scope: "orders:read", ResponseScope: "orders:read"},
 		},
 	}
 	for _, tt := range tests {
@@ -221,17 +240,9 @@ func TestResourceScopes(t *testing.T) {
 				t.Errorf("consent page's Resource Server mismatch (-want +got):\n%s", diff)
 			}
 			form := codeForm(location(t, b.decide(resp, "allow")).Query().Get("code"))
-			tokens := tokenResponseOf(t, tokenRequest(t, handler, "rp", rpSecret, form))
-			claims := verify(t, handler, tokens.AccessToken).claims
-			gotScope, hasScope := claims["scope"]
-			if tt.wantScope == "" && hasScope {
-				t.Errorf("access token scope = %v, want none", gotScope)
-			}
-			if tt.wantScope != "" && gotScope != tt.wantScope {
-				t.Errorf("access token scope = %v, want %q", gotScope, tt.wantScope)
-			}
-			if claims["aud"] != tt.wantAud || tokens.Scope != tt.wantScope {
-				t.Errorf("access token aud = %v, response scope = %q; want %s, %q", claims["aud"], tokens.Scope, tt.wantAud, tt.wantScope)
+			got := issuedForOf(t, handler, tokenResponseOf(t, tokenRequest(t, handler, "rp", rpSecret, form)))
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("access token mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -262,7 +273,7 @@ func TestResourceConsentRemembered(t *testing.T) {
 }
 
 // REQ-RESOURCE-2, REQ-RESOURCE-6: once the registry no longer lets a
-// Client request a Resource Server, a code or refresh token granted for it
+// Client request a Resource Server, a code or refresh token issued for it
 // gets invalid_target, with resource or without; the Client cannot obtain
 // an access token for it any more. Restoring the registry restores them.
 func TestResourceServerNoLongerPermitted(t *testing.T) {
@@ -293,32 +304,39 @@ func TestResourceServerNoLongerPermitted(t *testing.T) {
 	}
 	withdrawn := newFlowHandlerFor(t, pool, reg)
 
-	forms := map[string]url.Values{
-		"code":          rpNoPKCE.form(code, ""),
-		"refresh token": refreshForm(refreshToken, ""),
+	tests := []struct {
+		name string
+		form url.Values
+	}{
+		{name: "code", form: rpNoPKCE.form(code, "")},
+		{name: "refresh token", form: refreshForm(refreshToken, "")},
 	}
-	for name, form := range forms {
-		for _, resource := range []string{"", ordersServer} {
-			withResource := maps.Clone(form)
-			if resource != "" {
-				withResource.Set("resource", resource)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, resource := range []string{"", ordersServer} {
+				form := maps.Clone(tt.form)
+				if resource != "" {
+					form.Set("resource", resource)
+				}
+				if got := tokenErrorCode(t, rpNoPKCE.redeem(t, withdrawn, form), http.StatusBadRequest); got != "invalid_target" {
+					t.Errorf("POST %s with resource %q, once rp may not request it: error = %q, want %q", tokenPath, resource, got, "invalid_target")
+				}
 			}
-			if got := tokenErrorCode(t, rpNoPKCE.redeem(t, withdrawn, withResource), http.StatusBadRequest); got != "invalid_target" {
-				t.Errorf("POST %s for a %s with resource %q, once rp may not request it: error = %q, want %q", tokenPath, name, resource, got, "invalid_target")
-			}
-		}
-		tokenResponseOf(t, rpNoPKCE.redeem(t, handler, form))
+			tokenResponseOf(t, rpNoPKCE.redeem(t, handler, tt.form))
+		})
 	}
 }
 
 // REQ-RESOURCE-2, REQ-RESOURCE-5, REQ-RESOURCE-6, REQ-RESOURCE-9,
-// REQ-BCP-8: a token
-// request, for a code or a refresh token, whose resource is not the one
-// the authorization was granted for, none included, or that sends more
-// than one, gets invalid_target in the JSON form of RFC 6749 §5.2. The
-// code or refresh token stays to be redeemed: the same request without
-// resource then issues an access token for the Resource Server granted,
-// or for pulsar's UserInfo if none was.
+// REQ-BCP-8: a token request, for a code or a refresh token, whose
+// resource is not the one the code or Refresh Token Family was issued
+// for, none included, or that sends more than one, gets invalid_target in
+// the JSON form of RFC 6749 §5.2, as does a refresh for a scope that holds
+// none of the Resource Server's scopes. The code or refresh token stays to
+// be redeemed: the same request without resource or scope then issues an
+// access token for the Resource Server, or for pulsar's UserInfo if there
+// is none.
 func TestResourceTokenErrors(t *testing.T) {
 	t.Parallel()
 
@@ -328,8 +346,10 @@ func TestResourceTokenErrors(t *testing.T) {
 		granted  string   // the authorization request's resource, if any
 		refresh  bool     // whether the request redeems a refresh token rather than a code
 		resource []string // the token request's resource
-		wantAud  string   // the audience of the access token the request without resource gets
+		scope    string   // the refresh's scope, if any
+		wantAud  string   // the aud of the access token the request without resource or scope gets
 	}{
+		{name: "refresh, none of the Resource Server's scopes", granted: ordersServer, refresh: true, scope: "openid offline_access", wantAud: ordersServer},
 		{name: "code, another resource", granted: ordersServer, resource: []string{billingServer}, wantAud: ordersServer},
 		{name: "code, a resource not granted", resource: []string{ordersServer}, wantAud: loginIssuer},
 		{name: "code, the resource twice", granted: ordersServer, resource: []string{ordersServer, ordersServer}, wantAud: ordersServer},
@@ -351,27 +371,32 @@ func TestResourceTokenErrors(t *testing.T) {
 				form = rpNoPKCE.form(rpNoPKCE.offlineCode(t, handler, set), "")
 			}
 
-			withResource := maps.Clone(form)
-			withResource["resource"] = tt.resource
-			if got := tokenErrorCode(t, rpNoPKCE.redeem(t, handler, withResource), http.StatusBadRequest); got != "invalid_target" {
-				t.Errorf("POST %s with resource %q error = %q, want %q", tokenPath, tt.resource, got, "invalid_target")
+			refused := maps.Clone(form)
+			if tt.resource != nil {
+				refused["resource"] = tt.resource
+			}
+			if tt.scope != "" {
+				refused.Set("scope", tt.scope)
+			}
+			if got := tokenErrorCode(t, rpNoPKCE.redeem(t, handler, refused), http.StatusBadRequest); got != "invalid_target" {
+				t.Errorf("POST %s with resource %q, scope %q: error = %q, want %q", tokenPath, tt.resource, tt.scope, got, "invalid_target")
 			}
 			got := tokenResponseOf(t, rpNoPKCE.redeem(t, handler, form))
-			if aud, _ := accessTokenFor(t, handler, got.AccessToken); aud != tt.wantAud {
-				t.Errorf("POST %s without resource after: access token aud = %v, want %s", tokenPath, aud, tt.wantAud)
+			if aud := issuedForOf(t, handler, got).Aud; aud != tt.wantAud {
+				t.Errorf("POST %s without resource or scope after: access token aud = %v, want %s", tokenPath, aud, tt.wantAud)
 			}
 		})
 	}
 }
 
 // REQ-RESOURCE-1, REQ-RESOURCE-2, REQ-RESOURCE-4, REQ-RESOURCE-9,
-// REQ-ISS-2: an
-// authorization request whose resource is not one Resource Server the
-// Client may request, by its identifier exactly as registered, gets
-// invalid_target at the redirect URI, with state and iss, before any
+// REQ-ISS-2: an authorization request whose resource is not one Resource
+// Server the Client may request, by its identifier exactly as registered,
+// gets invalid_target at the redirect URI, with state and iss, before any
 // login, by the Response Mode requested: one not registered, or registered
 // for another Client only; one that is not an absolute URI, or has a
-// fragment; and more than one, even the same one twice.
+// fragment; and more than one, even the same one twice. So does one that
+// asks for none of its Resource Server's scopes.
 func TestResourceAuthorizationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -379,6 +404,7 @@ func TestResourceAuthorizationErrors(t *testing.T) {
 	tests := []struct {
 		name     string
 		resource []string
+		scope    string // default "openid orders:read"
 	}{
 		{name: "not registered", resource: []string{"https://api.example/unknown"}},
 		{name: "registered for another Client", resource: []string{adminServer}},
@@ -390,13 +416,19 @@ func TestResourceAuthorizationErrors(t *testing.T) {
 		{name: "in another case", resource: []string{"https://API.example/orders"}},
 		{name: "two Resource Servers", resource: []string{ordersServer, billingServer}},
 		{name: "the same Resource Server twice", resource: []string{ordersServer, ordersServer}},
+		{name: "none of its scopes", resource: []string{ordersServer}, scope: "openid profile"},
+		{name: "only another Resource Server's scopes", resource: []string{ordersServer}, scope: "openid billing:read"},
 	}
 	want := url.Values{"error": {"invalid_target"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
 	for _, tt := range tests {
+		set := url.Values{"resource": tt.resource, "scope": {"openid orders:read"}}
+		if tt.scope != "" {
+			set.Set("scope", tt.scope)
+		}
 		t.Run(tt.name+"/query", func(t *testing.T) {
 			t.Parallel()
 			b := &browser{t: t, handler: handler}
-			resp := b.authorize(http.MethodGet, requestWith(url.Values{"resource": tt.resource}))
+			resp := b.authorize(http.MethodGet, requestWith(set))
 			if got := location(t, resp).Query().Get("error_description"); got == "" {
 				t.Errorf("error_description = %q, want a description", got)
 			}
@@ -407,7 +439,7 @@ func TestResourceAuthorizationErrors(t *testing.T) {
 		t.Run(tt.name+"/form_post", func(t *testing.T) {
 			t.Parallel()
 			b := &browser{t: t, handler: handler}
-			page := parseFormPost(t, b.authorize(http.MethodGet, withFormPost(url.Values{"resource": tt.resource})))
+			page := parseFormPost(t, b.authorize(http.MethodGet, withFormPost(set)))
 			page.params.Del("error_description")
 			if page.action != rpRedirectURI {
 				t.Errorf("form action = %q, want %q", page.action, rpRedirectURI)

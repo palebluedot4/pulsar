@@ -349,22 +349,29 @@ var errCodeNotRedeemable = errors.New("the authorization code cannot be redeemed
 // describes it to the Client.
 var errResourceNotGranted = errors.New("the resource is not the one granted")
 
-const resourceNotGranted = "The resource is not the one the authorization was granted for, or its Resource Server is no longer registered for this client."
+const resourceNotGranted = "The resource is not the one the code or refresh token was issued for, the client may no longer request its Resource Server, or the scope holds none of its scopes."
 
 // grantedResource returns the Resource Server whose identifier is granted,
 // that of a code or Refresh Token Family, or nil if it is "", for a token
 // request by client with the resource parameter requested, "" if it sent
-// none. It reports false if requested names another, or if client may no
-// longer request that Resource Server: the access token would then be for
-// no audience the End-User allowed (RFC 8707 §2.2).
-func (p *Provider) grantedResource(client *registry.Client, granted, requested string) (*registry.ResourceServer, bool) {
+// none, for an access token for scopes. It reports false if requested
+// names another Resource Server, or none was granted (RFC 8707 §2.2); if
+// client may no longer request that Resource Server; or if scopes hold
+// none of its scopes, an invalid combination of resource and scope (§2),
+// as a refresh for a narrower scope may ask for, or a Resource Server's
+// scopes changed in the registry may leave.
+func (p *Provider) grantedResource(client *registry.Client, granted, requested string, scopes []string) (*registry.ResourceServer, bool) {
 	switch {
 	case requested != "" && requested != granted:
 		return nil, false
 	case granted == "":
 		return nil, true
 	}
-	return p.registry.ResourceServer(client, granted)
+	s, ok := p.registry.ResourceServer(client, granted)
+	if !ok || !slices.ContainsFunc(scopes, s.HasScope) {
+		return nil, false
+	}
+	return s, true
 }
 
 // issueTokens redeems code, for client and redirectURI, and returns the
@@ -377,7 +384,7 @@ func (p *Provider) grantedResource(client *registry.Client, granted, requested s
 // The access token is for the Resource Server the code was issued for, if
 // any, which resource, the request's resource parameter, must name if it is
 // not "" (grantedResource). A resource refused leaves the code to be
-// redeemed, as RFC 8707 does not say it ends the grant.
+// redeemed, as RFC 8707 does not say that it uses the code up.
 //
 // A code that was redeemed before, presented again, revokes the tokens
 // issued from it (RFC 6749 §4.1.2): the Refresh Token Family it started,
@@ -471,7 +478,7 @@ func (p *Provider) issueTokens(ctx context.Context, client *registry.Client, cod
 		}
 		// Refusing rolls back marking the code redeemed.
 		var granted bool
-		if server, granted = p.grantedResource(client, row.Resource, resource); !granted {
+		if server, granted = p.grantedResource(client, row.Resource, resource, row.Scopes); !granted {
 			return errResourceNotGranted
 		}
 		// A code whose End-User has been removed from the registry is
@@ -582,7 +589,7 @@ var errScopeNotGranted = errors.New("the scope exceeds the scope granted")
 // gets here, since the Client cannot authenticate. The access token is for
 // the family's Resource Server, if any, which resource must name if it is
 // not "" (grantedResource), as RFC 8707 §2.1 applies the resource to the
-// whole grant.
+// "full authorization grant".
 //
 // A refresh token already used, presented again by its own Client while
 // its family lives, shows that it was stolen, and from whom pulsar cannot
@@ -652,14 +659,14 @@ func (p *Provider) refresh(ctx context.Context, client *registry.Client, refresh
 		if _, ok := p.registry.EndUser(row.Subject); !ok {
 			return errRefreshTokenNotRedeemable
 		}
-		var granted bool
-		if server, granted = p.grantedResource(client, row.Resource, resource); !granted {
-			return errResourceNotGranted
-		}
 		if len(scopes) == 0 {
 			scopes = row.Scopes
 		} else if !isSubset(scopes, row.Scopes) {
 			return errScopeNotGranted
+		}
+		var granted bool
+		if server, granted = p.grantedResource(client, row.Resource, resource, scopes); !granted {
+			return errResourceNotGranted
 		}
 		var userInfoClaims []byte
 		if claims, userInfoClaims, err = decodeStoredClaims(row.Claims); err != nil {
@@ -786,8 +793,8 @@ type issuance struct {
 // An access token for a Resource Server names its identifier, alone, as
 // its audience, and holds only its scopes, so that it allows no more than
 // that Resource Server needs and is refused anywhere else, UserInfo
-// included (RFC 8707 §2, §2.2; RFC 9068 §3; RFC 9700 §2.3). Its scope may
-// then be empty, and is left out. The token response's scope is the access
+// included (RFC 8707 §2, §2.2; RFC 9068 §3; RFC 9700 §2.3); it holds at
+// least one (grantedResource). The token response's scope is the access
 // token's (RFC 6749 §5.1). The ID token is the same either way.
 func (p *Provider) signTokens(client *registry.Client, t issuance, now time.Time) (*tokenResponse, error) {
 	exp := t.expiry
@@ -864,7 +871,7 @@ type accessTokenClaims struct {
 	ClientID string `json:"client_id"`
 	IssuedAt int64  `json:"iat"`
 	JTI      string `json:"jti"`
-	Scope    string `json:"scope,omitempty"`
+	Scope    string `json:"scope"`
 }
 
 // accessTokenHash returns the at_hash of an access token signed with

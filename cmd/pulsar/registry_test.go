@@ -258,6 +258,8 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "https identifier without host", registry: withIdentifier("https:///orders"), problem: "no host"},
 		{name: "duplicate identifier", registry: registryWithResourceServers(t, []entry{ordersServer(), with(billingServer, "identifier", "https://api.example/orders")}, nil), problem: "identifier \"https://api.example/orders\" is not unique"},
 		{name: "misspelled Resource Server member", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scope", []string{"orders:read"})}, nil), problem: "scope"},
+		{name: "Resource Server without scopes", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", nil)}, nil), problem: "at least one scope"},
+		{name: "Resource Server with empty scopes", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", []entry{})}, nil), problem: "at least one scope"},
 		{name: "scope without value", registry: withScope(entry{"description": "read your orders"}), problem: "scope is required"},
 		{name: "scope without description", registry: withScope(entry{"scope": "orders:read"}), problem: "description is required"},
 		{name: "scope with a space", registry: withScope(entry{"scope": "orders read", "description": "read your orders"}), problem: "RFC 6749"},
@@ -341,7 +343,7 @@ func TestRunAcceptsRegistry(t *testing.T) {
 				{"scope": "billing:read", "description": "read your invoices"},
 				{"scope": "https://api.example/billing.write", "description": "pay your invoices"},
 			}},
-			{"identifier": "https://api.example/reports?tenant=a", "scopes": []entry{}},
+			{"identifier": "https://api.example/reports?tenant=a", "scopes": []entry{{"scope": "reports", "description": "read your reports"}}},
 		},
 		"clients": []entry{
 			with(secretClient(), "resource_servers", []string{"https://api.example/orders", "urn:example:billing"}),

@@ -25,11 +25,11 @@
 //
 // A Resource Server is registered by its identifier, an absolute URI
 // without a fragment (RFC 8707 §2), which a Client sends as the resource
-// parameter and which an access token for it names as its audience. Its
-// scopes are its own, each with the description the consent page shows:
-// none is a scope OpenID Connect defines, or another Resource Server's, so
-// that a scope value names one Resource Server alone. resource_servers may
-// be left out.
+// parameter and which an access token for it names as its audience. It
+// lists at least one scope, and its scopes are its own, each with the
+// description the consent page shows: none is a scope OpenID Connect
+// defines, or another Resource Server's, so that a scope value names one
+// Resource Server alone. resource_servers may be left out.
 //
 // A Client may list post_logout_redirect_uris, to which pulsar returns
 // the End-User after logout (OpenID Connect RP-Initiated Logout 1.0 §3.1).
@@ -469,10 +469,13 @@ func newResourceServer(e resourceServerEntry) (*ResourceServer, error) {
 	if e.Identifier == "" {
 		return nil, errors.New("identifier is required")
 	}
-	// RFC 8707 §2 holds the resource parameter to the form RFC 6749
-	// §3.1.2 holds a redirect URI to: an absolute URI without a fragment.
-	if _, err := checkRedirectURI(e.Identifier); err != nil {
+	if _, err := checkAbsoluteURI(e.Identifier); err != nil {
 		return nil, fmt.Errorf("identifier: %w", err)
+	}
+	// An access token for a Resource Server holds at least one of its
+	// scopes, so it needs one.
+	if len(e.Scopes) == 0 {
+		return nil, errors.New("scopes must list at least one scope")
 	}
 	s := &ResourceServer{Identifier: e.Identifier, Scopes: make([]Scope, 0, len(e.Scopes))}
 	for i, sc := range e.Scopes {
@@ -515,12 +518,12 @@ func (r *Registry) checkResourceServers(identifiers []string) error {
 }
 
 // checkRedirectURIs checks each of list, the registry member name, as
-// checkRedirectURI does, and that none is listed twice, and returns them
+// checkAbsoluteURI does, and that none is listed twice, and returns them
 // parsed.
 func checkRedirectURIs(name string, list []string) ([]*url.URL, error) {
 	uris := make([]*url.URL, len(list))
 	for i, raw := range list {
-		u, err := checkRedirectURI(raw)
+		u, err := checkAbsoluteURI(raw)
 		if err != nil {
 			return nil, fmt.Errorf("%s[%d]: %w", name, i, err)
 		}
@@ -536,7 +539,7 @@ func checkRedirectURIs(name string, list []string) ([]*url.URL, error) {
 // over implies.
 var defaultPort = map[string]string{"https": "443", "http": "80"}
 
-// webOrigin returns the origin of u, a redirect URI that checkRedirectURI
+// webOrigin returns the origin of u, a redirect URI that checkAbsoluteURI
 // accepted, as a browser serializes it in an Origin header (RFC 6454
 // §6.1): the scheme and host in lowercase, an IP address in its shortest
 // form, and the port, as a number, only if it is not the scheme's
@@ -624,14 +627,16 @@ func checkAssertionKey(k jose.JSONWebKey) error {
 	return nil
 }
 
-// checkRedirectURI checks raw against RFC 6749 §3.1.2: an absolute URI,
-// as RFC 3986 §4.3 defines it, with no fragment. A custom scheme, as a
-// native app uses, is allowed; an http or https URI must name a host.
+// checkAbsoluteURI checks raw against the form RFC 6749 §3.1.2 requires of
+// a redirect URI, and RFC 8707 §2 of a Resource Server's identifier: an
+// absolute URI, as RFC 3986 §4.3 defines it, with no fragment. A custom
+// scheme, as a native app or a URN uses, is allowed; an http or https URI
+// must name a host.
 //
 // url.Parse accepts characters RFC 3986 does not, such as spaces, so raw
 // is first checked against the characters RFC 3986 §2 allows. It returns
 // raw parsed.
-func checkRedirectURI(raw string) (*url.URL, error) {
+func checkAbsoluteURI(raw string) (*url.URL, error) {
 	if i := strings.IndexFunc(raw, notURIChar); i >= 0 {
 		return nil, fmt.Errorf("%q is not a URI: RFC 3986 does not allow %q", raw, raw[i])
 	}

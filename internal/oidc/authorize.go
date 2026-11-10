@@ -458,6 +458,12 @@ func parseAuthorizationRequest(reg *registry.Registry, client *registry.Client, 
 	if !slices.Contains(scopes, "openid") {
 		return req, errInvalidScope, "The scope must include openid."
 	}
+	// An access token for a Resource Server allows at least one of its
+	// scopes; one that allowed none would be an invalid combination of
+	// resource and scope (RFC 8707 §2).
+	if resource != nil && !slices.ContainsFunc(scopes, resource.HasScope) {
+		return req, errInvalidTarget, "The scope must include a scope of the Resource Server the resource names."
+	}
 
 	// A value pulsar does not know is ignored, as OpenID Connect Core 1.0
 	// §3.1.2.1 allows, except that none admits no other.
