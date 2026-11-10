@@ -37,19 +37,24 @@ func main() {
 	apiURL := flag.String("api", envOr("API_URL", "http://127.0.0.1:8081"), "the API's URL (API_URL)")
 	flag.Parse()
 
-	if err := run(*issuer, *clientID, *keyFile, *resource, *apiURL); err != nil {
+	cfg := worker.Config{
+		Issuer:   *issuer,
+		ClientID: *clientID,
+		Resource: *resource,
+		Scopes:   []string{api.ScopeRead, api.ScopeWrite},
+	}
+	if err := run(cfg, *keyFile, *apiURL); err != nil {
 		fmt.Fprintf(os.Stderr, "worker: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(issuer, clientID, keyFile, resource, apiURL string) error {
+func run(cfg worker.Config, keyFile, apiURL string) error {
 	data, err := os.ReadFile(keyFile) //nolint:gosec // G304: the operator's own flag.
 	if err != nil {
 		return err
 	}
-	key, err := worker.ParseKey(data)
-	if err != nil {
+	if cfg.Key, err = worker.ParseKey(data); err != nil {
 		return err
 	}
 
@@ -58,13 +63,7 @@ func run(issuer, clientID, keyFile, resource, apiURL string) error {
 	ctx, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
 
-	ts, err := worker.NewTokenSource(ctx, worker.Config{
-		Issuer:   issuer,
-		ClientID: clientID,
-		Key:      key,
-		Resource: resource,
-		Scopes:   []string{api.ScopeRead, api.ScopeWrite},
-	})
+	ts, err := worker.NewTokenSource(ctx, cfg)
 	if err != nil {
 		return err
 	}

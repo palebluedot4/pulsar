@@ -1,7 +1,6 @@
 package registry_test
 
 import (
-	"bytes"
 	"crypto"
 	"encoding/json/v2"
 	"os"
@@ -154,22 +153,27 @@ func TestCommittedRegistries(t *testing.T) {
 	if err := private.UnmarshalJSON(data); err != nil {
 		t.Fatalf("examples/worker-key.json: UnmarshalJSON() error = %v, want nil", err)
 	}
+	// A key is compared by its RFC 7638 thumbprint, and its alg.
+	type key struct {
+		Thumbprint []byte
+		Algorithm  string
+	}
 	public := private.Public()
-	want, err := public.Thumbprint(crypto.SHA256)
+	thumbprint, err := public.Thumbprint(crypto.SHA256)
 	if err != nil {
 		t.Fatalf("examples/worker-key.json: Thumbprint() error = %v, want nil", err)
 	}
-	registered := worker.JWKS.Key(private.KeyID)
-	if len(registered) != 1 {
-		t.Fatalf("worker.JWKS.Key(%q) = %d keys, want 1", private.KeyID, len(registered))
+	want := []key{{Thumbprint: thumbprint, Algorithm: private.Algorithm}}
+	var got []key
+	for _, k := range worker.JWKS.Key(private.KeyID) {
+		thumbprint, err := k.Thumbprint(crypto.SHA256)
+		if err != nil {
+			t.Fatalf("worker.JWKS.Key(%q): Thumbprint() error = %v, want nil", private.KeyID, err)
+		}
+		got = append(got, key{Thumbprint: thumbprint, Algorithm: k.Algorithm})
 	}
-	got, err := registered[0].Thumbprint(crypto.SHA256)
-	if err != nil {
-		t.Fatalf("worker.JWKS.Key(%q): Thumbprint() error = %v, want nil", private.KeyID, err)
-	}
-	if !bytes.Equal(got, want) || registered[0].Algorithm != private.Algorithm {
-		t.Errorf("worker.JWKS.Key(%q) = a key of thumbprint %x and alg %s, want the public half of examples/worker-key.json, thumbprint %x and alg %s",
-			private.KeyID, got, registered[0].Algorithm, want, private.Algorithm)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("worker.JWKS.Key(%q) mismatch with the public half of examples/worker-key.json (-want +got):\n%s", private.KeyID, diff)
 	}
 }
 

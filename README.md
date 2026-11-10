@@ -314,8 +314,8 @@ token for the API with `resource`, and calls the API, which accepts it.
 The worker signs a new client assertion for each token request, gets an
 access token for the API with no refresh token, whose `sub` and
 `client_id` are both `worker`, and calls the API, which accepts it and
-keeps the worker's notes apart from the End-User's. The API refuses no token, a token for UserInfo, a token at its `exp` by
-the API's clock, a changed or unsigned token and an ID token with 401,
+keeps the worker's notes apart from the End-User's. The API refuses no
+token, a token for UserInfo, a token at its `exp` by the API's clock, a changed or unsigned token and an ID token with 401,
 and a token without the route's scope with 403; and after `pulsar keys
 rotate` it accepts tokens signed with the new key. No browser runs: the
 tests act as one with Go's HTTP client.

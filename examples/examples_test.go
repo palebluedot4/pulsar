@@ -133,11 +133,9 @@ func TestCLICallsAPI(t *testing.T) {
 // accepts it. The response holds no refresh token and no ID token
 // (REQ-OAUTH-49). The token's sub and client_id are the worker's client_id
 // (REQ-AT-15), and its aud the API's identifier (REQ-RESOURCE-3). A second
-// token request succeeds, so the worker signed a new assertion for it,
-// since pulsar refuses one whose jti it has seen (REQ-JWTAUTH-6). The
-// API keeps notes by sub, and the worker's are kept apart from the
-// End-User's, since no client_id can be an End-User's Subject
-// (REQ-BCP-17).
+// token request succeeds, which it would not with the first's assertion,
+// whose jti pulsar has seen. The API keeps notes by sub, and the worker's
+// are kept apart from the End-User's.
 func TestWorkerCallsAPI(t *testing.T) {
 	t.Parallel()
 
