@@ -10,7 +10,8 @@ serves at once, and meanwhile applies its migrations and loads its signing
 keys, generating the first one if the database holds none.
 
 - Until both are done, `/readyz`, the JWK Set and every protocol endpoint
-  and page but discovery answer 503. pulsar exits if either fails.
+  and page but discovery and cross-origin preflights answer 503. pulsar
+  exits if either fails.
 - After that, `/readyz` answers 200 while a ping through its connection
   pool succeeds, and 503 when one fails. `/livez` answers 200 while the
   process serves.
@@ -46,24 +47,26 @@ PULSAR_ISSUER=http://localhost:8080 \
 The new key is published before it signs, and the old one stays published
 until every token it signed has expired:
 
-| When, after the key is stored | What happens                                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Within 1 minute               | Every replica publishes the new key in its JWK Set, at its next reload                                   |
-| 2 minutes                     | Every replica signs with the new key: one reload interval plus the JWK Set's one-minute cache            |
-| 13 minutes                    | The old key leaves the JWK Set: the ten-minute token lifetime plus a reload interval, after 2            |
-| 10 hours and 3 minutes        | pulsar stops accepting `id_token_hint`s the old key signed at logout ([behavior.md](behavior.md#logout)) |
+| When, after the key is stored | What happens                                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Within 1 minute               | Every replica publishes the new key in its JWK Set, at its next reload                                                       |
+| 2 minutes                     | Every replica signs with the new key: one reload interval plus the JWK Set's one-minute cache                                |
+| 13 minutes                    | The old key leaves the JWK Set, at each replica's next reload: the ten-minute token lifetime plus a reload interval, after 2 |
+| 10 hours and 3 minutes        | pulsar stops accepting `id_token_hint`s the old key signed at logout ([behavior.md](behavior.md#logout))                     |
 
 So, provided every replica reloads on time and Clients honor
 `Cache-Control`, every replica, and every JWK Set a Client has cached, has
 the new key before it signs anything.
 
+- Run it only once every replica runs a version of pulsar with this
+  schedule, since an earlier one signs with a new key at once.
 - Run it on a host whose clock agrees with the replicas'.
 - It refuses a database pulsar has never started against, and a
   `PULSAR_SECRET` other than the one the keys are stored under.
 - It does not revoke a key. A leaked key stays in the JWK Set, so Clients
-  accept tokens signed with it, for at least thirteen minutes after a
-  rotation, and pulsar accepts `id_token_hint`s signed with it for ten
-  hours and three minutes.
+  accept tokens signed with it for at least 13 minutes after a rotation,
+  and pulsar accepts `id_token_hint`s signed with it for 10 hours and 3
+  minutes.
 
 ## Making a Client secret
 

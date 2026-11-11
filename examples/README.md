@@ -56,24 +56,23 @@ port must be free.
 
 Over the wire, with `x/oauth2`, `go-oidc` and `go-jose` on the other side:
 
-- The web app's authorization request carries a PKCE `code_challenge` by
-  `S256`, a `state`, a `nonce`, `offline_access` with `prompt=consent`, and
-  `resource`. It refuses a response to its callback with another `state`.
-  The End-User signs in on pulsar's login page and allows the request on
-  its consent page; the web app redeems the code with its secret, verifies
-  the ID token, and adds and lists a note through the API. When its access
-  token has expired by its clock, which the test moves forward rather than
-  wait ten minutes, it refreshes it, and the API accepts the new one;
-  twice, so the second refresh uses the refresh token the first returned.
-  Signing in again in the same browser, on pulsar's consent page alone,
-  replaces the session, and the replaced session's last refresh token then
-  gets `invalid_grant`. Its logout revokes its refresh token, and sends
-  the browser to pulsar's logout endpoint with the ID token as
-  `id_token_hint`, its `post_logout_redirect_uri` and a `state`. A return
-  with another `state` is refused. The End-User confirms on pulsar's logout
-  page, and pulsar sends them back with the `state`. Then the web app's
-  last refresh token, which it never redeemed, gets `invalid_grant`, and an
-  authorization request with `prompt=none` in the same browser gets `login_required`.
+- The web app's authorization request carries a PKCE `code_challenge` by `S256`,
+  a `state`, a `nonce`, `offline_access` with `prompt=consent`, and `resource`.
+  It refuses a response to its callback with another `state`. The End-User signs
+  in on pulsar's login page and allows the request on its consent page; the web
+  app redeems the code with its secret, verifies the ID token, and adds and
+  lists a note through the API. When its access token has expired by its clock,
+  which the test moves forward rather than wait ten minutes, it refreshes it,
+  and the API accepts the new one; twice, so the second refresh uses the refresh
+  token the first returned. Signing in again in the same browser, on pulsar's
+  consent page alone, replaces the session, and the replaced session's last
+  refresh token then gets `invalid_grant`. Its logout revokes its refresh token,
+  and sends the browser to pulsar's logout endpoint with the ID token as
+  `id_token_hint`, its `post_logout_redirect_uri` and a `state`. A return with
+  another `state` is refused. The End-User confirms on pulsar's logout page, and
+  pulsar sends them back with the `state`. Then the web app's last refresh
+  token, which it never redeemed, gets `invalid_grant`, and an authorization
+  request with `prompt=none` in the same browser gets `login_required`.
 - No response the browser receives in that test holds an access or
   refresh token, and the ID token appears only as `id_token_hint`: in the
   `Location` of the web app's redirect to pulsar's logout endpoint, and in
@@ -92,12 +91,12 @@ Over the wire, with `x/oauth2`, `go-oidc` and `go-jose` on the other side:
   identifier. A second token request, with a new assertion, succeeds.
   After the End-User adds a note through the CLI and the worker adds one
   of its own, each lists only its own.
-- The API refuses, with 401 and a Bearer challenge: no token; a token of
-  another scheme; a token pulsar issued for its own UserInfo; a token at
-  its `exp`, by the API's clock, which the test sets to that time rather
-  than wait ten minutes; a token whose claims were changed; one with `alg`
-  `none`; and an ID token. It refuses a valid token without the route's
-  scope with 403 and `insufficient_scope`. It answers 503, not `invalid_token`, when it cannot
+- The API refuses, with 401 and a Bearer challenge: no token; a token of another
+  scheme; a token pulsar issued for its own UserInfo; a token at its `exp`, by
+  the API's clock, which the test sets to that time rather than wait ten
+  minutes; a token whose claims were changed; one with `alg` `none`; and an ID
+  token. It refuses a valid token without the route's scope with 403 and
+  `insufficient_scope`. It answers 503, not `invalid_token`, when it cannot
   reach pulsar's JWK Set to check a token.
 - After `pulsar keys rotate`, once pulsar signs with the new key, the API,
   which cached pulsar's JWK Set before, accepts a token signed with the new

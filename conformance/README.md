@@ -34,7 +34,11 @@ Form Post Basic plan, the last two with the variants
 `server_metadata=discovery` and `client_registration=static_client`, and
 then the RP-Initiated Logout plan, with `response_type=code` and
 `client_registration=static_client`; that plan sets its other variants
-itself. The Form Post Basic plan is the Basic OP plan's modules with
+itself. The Config OP plan checks the discovery document and the JWK Set.
+The Basic OP plan signs an End-User in through the authorization code flow,
+with static Clients and discovery, and checks the responses of the
+authorization, token and UserInfo endpoints. The Form Post Basic plan is
+the Basic OP plan's modules with
 `response_mode=form_post` on every authorization request; it checks that
 every response, errors too, arrives at the callback by POST. Its
 configuration is `config-basic.json` but for its `description` and the

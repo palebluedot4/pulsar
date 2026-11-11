@@ -78,10 +78,10 @@ holds one for the API alone.
 ## What it does not do
 
 - It keeps sessions and their tokens in memory, without limit and with no
-  lifetime of their own: each lasts until logout, a new sign-in in the
-  same browser, or an error answer to a refresh, and a session the
-  End-User leaves lasts until the web app stops, which loses them all.
-  RFC 10017 §6.1.2.3 recommends server-side sessions only in small-scale scenarios.
+  lifetime of their own: each lasts until logout, a new sign-in in the same
+  browser, or an error answer to a refresh, and a session the End-User leaves
+  lasts until the web app stops, which loses them all. RFC 10017 §6.1.2.3
+  recommends server-side sessions only in small-scale scenarios.
 - It ignores the ID token a refresh may return, and keeps the one from
   sign-in for `id_token_hint`, which pulsar accepts after it expires.
 - It serves plain `http`, for `localhost` alone, where a browser keeps

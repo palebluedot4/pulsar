@@ -12,14 +12,14 @@ Refresh Token Family are defined in [GLOSSARY.md](../GLOSSARY.md).
 | ------------------------------------ | ----------------------------------------------------------- | ------------------------------- |
 | Authorization code                   | 60 seconds                                                  | `internal/oidc/provider.go`     |
 | ID token and access token            | 10 minutes                                                  | `internal/oidc/provider.go`     |
-| Refresh Token Family                 | 30 days from the code that started it                       | `internal/oidc/provider.go`     |
+| Refresh Token Family                 | 30 days from the redemption of the code that started it     | `internal/oidc/provider.go`     |
 | Login Session                        | 30 minutes idle, 10 hours at most                           | `internal/login/login.go`       |
 | Client assertion                     | `exp` at most an hour ahead; one minute of leeway on `nbf`  | `internal/oidc/assertion.go`    |
 | Count of failed logins               | Forgotten a day after the last attempt                      | `internal/guessing/guessing.go` |
 | Signing keys: reload by each replica | Every minute                                                | `internal/signing/signing.go`   |
 | JWK Set cache (`Cache-Control`)      | 1 minute                                                    | `internal/signing/signing.go`   |
 | Discovery cache (`Cache-Control`)    | 1 hour                                                      | `internal/oidc/discovery.go`    |
-| Expired records deleted              | Every 15 minutes, by each replica (see [Cleanup](#cleanup)) | `internal/oidc/deletion.go`     |
+| Expired records deleted              | Every 15 minutes, by each replica (see [Cleanup](#cleanup)) | `cmd/pulsar/main.go`            |
 
 Key rotation has its own schedule, in
 [operations.md](operations.md#rotating-the-signing-key).
@@ -30,9 +30,9 @@ Key rotation has its own schedule, in
   the issuer. It answers any origin.
 - The JWK Set answers any origin. It holds the public keys pulsar signs
   with, which are RS256 keys.
-- Both answer at once. Until the migrations are applied and the signing
-  keys loaded, the JWK Set, like every protocol endpoint and page, answers
-  503; discovery does not wait.
+- Until the migrations are applied and the signing keys loaded, the JWK
+  Set answers 503, as do every protocol endpoint and page but their
+  cross-origin preflights. Discovery answers from the start.
 
 ## Authorization endpoint
 
@@ -101,7 +101,8 @@ Client sends only its `client_id`.
 - A `private_key_jwt` assertion must name pulsar's issuer as its sole
   audience, as RFC 10070 requires, so one naming the token endpoint is
   refused ([ADR 0006](adr/0006-client-assertions-name-the-issuer-as-sole-audience.md)).
-  It may be signed with RS256, PS256 or ES256, and each is accepted once.
+  It may be signed with RS256, PS256 or ES256, and each assertion is
+  accepted once.
 - Client secrets are not throttled, since anyone could hold up a Client
   whose failed attempts were counted.
 - Each replica runs at most as many Argon2id verifications at once, for
@@ -215,10 +216,12 @@ or POST (OpenID Connect RP-Initiated Logout 1.0).
   one of its redirect URIs.
 - UserInfo also answers a confidential Client from the origins of its own
   redirect URIs.
-- A confidential Client gets no such headers at the token and revocation
-  endpoints, since a browser cannot keep its secret. RFC 10017 recommends a
-  backend-for-frontend, a confidential Client on the server, over a Client
-  that runs in the browser.
+- A confidential Client may not call the token and revocation endpoints
+  from a browser, since a browser cannot keep its secret. RFC 10017
+  recommends a backend-for-frontend, a confidential Client on the server,
+  over a Client that runs in the browser.
+- A request from a browser on an origin the Client may not use is refused
+  with 400 and `invalid_request`.
 - Discovery and the JWK Set answer any origin. The authorization endpoint
   answers none.
 
@@ -230,7 +233,8 @@ pulsar reads the registry at startup
 - While an End-User is out of the registry, no code or refresh token issued
   for them is redeemed, and UserInfo refuses their access tokens.
 - A Client out of the registry cannot authenticate, so it redeems neither.
-  UserInfo still accepts its access tokens until they expire.
+  UserInfo still accepts its access tokens until they expire, but not from
+  a browser on another origin.
 - Removal revokes nothing, so an End-User or Client added back has the
   tokens not yet expired again.
 

@@ -37,7 +37,7 @@ at startup. The comment of
 - Client secrets and passwords appear in it only as Argon2id hashes in the
   PHC string format; [operations.md](operations.md) says how to make them.
 - A Resource Server is registered by its identifier, an absolute URI
-  without a fragment other than the issuer, with at least one scope, each
+  without a fragment that is not the issuer, with at least one scope, each
   with a description. None of its scopes may be one of OpenID Connect's or
   another Resource Server's.
 - Each Client lists the Resource Servers it may request.

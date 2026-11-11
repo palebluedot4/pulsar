@@ -15,31 +15,29 @@ violates.
 
 ## Conformance test files
 
-The files in `conformance/` run the OpenID conformance suite against a
-throwaway pulsar on a Docker network that `make conformance` creates and
-removes. Any credential committed there is for that testing only and is
-published deliberately: never use one anywhere else. These are the Client
-secrets and the End-User password in `config-basic.json`,
-`config-formpost.json` and `config-logout.json`, and their Argon2id hashes
-in `registry.json`. The TLS key and `PULSAR_SECRET` of each run are
-generated for it and never committed. The
-suite runs in its development mode, whose API needs no authentication, so
-the stack publishes no port to the host.
+The files in `conformance/` run the OpenID conformance suite against a throwaway
+pulsar on a Docker network that `make conformance` creates and removes. Any
+credential committed there is for that testing only and is published
+deliberately: never use one anywhere else. These are the Client secrets and the
+End-User password in `config-basic.json`, `config-formpost.json` and
+`config-logout.json`, and their Argon2id hashes in `registry.json`. The TLS key
+and `PULSAR_SECRET` of each run are generated for it and never committed. The
+suite runs in its development mode, whose API needs no authentication, so the
+stack publishes no port to the host.
 
 ## Example credentials
 
 `examples/registry.json` registers an End-User whose password,
 `examples-password`, is published in `examples/README.md`,
-`examples/examples_test.go` and `internal/registry/registry_test.go`, and
-the web app example's Client, whose
-secret is published in `examples/README.md`, `examples/webapp_test.go` and
-`internal/registry/registry_test.go`, with its Argon2id hash in the
-registry, and the worker example's Client, whose private key is
-published in `examples/worker-key.json`, with its public key in the
-registry. They are for the throwaway pulsar that `make examples` runs, and
-for that testing only: never use them, or that registry, anywhere else.
-The `PULSAR_SECRET` of each run is generated for it and never committed.
-The stack publishes pulsar's port on the host's loopback interface alone.
+`examples/examples_test.go` and `internal/registry/registry_test.go`, and the
+web app example's Client, whose secret is published in `examples/README.md`,
+`examples/webapp_test.go` and `internal/registry/registry_test.go`, with its
+Argon2id hash in the registry, and the worker example's Client, whose private
+key is published in `examples/worker-key.json`, with its public key in the
+registry. They are for the throwaway pulsar that `make examples` runs, and for
+that testing only: never use them, or that registry, anywhere else. The
+`PULSAR_SECRET` of each run is generated for it and never committed. The stack
+publishes pulsar's port on the host's loopback interface alone.
 
 ## Supported versions
 
