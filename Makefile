@@ -314,25 +314,33 @@ eval: ## Run a plugin's evals (PLUGIN=right-sizing); uses plan usage or API cred
 		--max-cost-usd $(EVAL_MAX_COST_USD) --no-publish $(EVAL_FLAGS) \
 		--allow-tools Write WebSearch WebFetch
 
-# Mutation testing (#5): gremlins changes one operator at a time in each
-# package and runs the tests; a mutant they do not notice lived. It is a
-# measurement, never a gate: the default packages took 79 minutes. Nothing
-# else may use the test database meanwhile, so one worker, always. Why each
-# flag, what the scores mean, and those recorded so far:
-# docs/mutation-testing.md. JSON results go to mutation/, one file a
-# package. gremlins runs the go first on PATH, so $(GO)'s goes first.
+# Mutation testing (#5): go-mutesting changes the code one mutant at a time
+# and scripts/mutation-exec.sh runs the tests; a mutant they do not notice
+# lived. It is a measurement, never a gate: the default packages took almost
+# six hours. The mutants are written over the source, so they run in a
+# working tree of their own, checked out at HEAD and removed afterwards; and
+# one at a time, since nothing else may use the test database meanwhile. Why,
+# what the scores mean, and those recorded so far: docs/mutation-testing.md.
+# Each package's report and log go to mutation/. The exec runs the go first
+# on PATH, so $(GO)'s goes first.
 MUTATION_PACKAGES ?= internal/oidc internal/registry internal/signing
 
-mutation: ## Mutation testing of the security-critical packages; slow, not a gate
+mutation: ## Mutation testing of the security-critical packages at HEAD; slow, not a gate
 	@mkdir -p mutation
 	@set -e; PATH="$$($(GO) env GOROOT)/bin:$$PATH"; export PATH; \
+	out=$$(pwd)/mutation; tree=$$(mktemp -d "$${TMPDIR:-/tmp}/pulsar-mutation.XXXXXX"); \
+	trap 'git worktree remove --force "$$tree"' EXIT; \
+	git worktree add --quiet --detach "$$tree" HEAD; \
+	echo "mutating $$(git rev-parse --short HEAD)"; \
 	for p in $(MUTATION_PACKAGES); do \
-		echo "gremlins unleash $$p"; \
-		$(GO) clean -testcache; \
-		$(TOOL) gremlins unleash --integration --coverpkg ./... \
-			--exclude-files '(^|/)internal/queries/' --workers 1 \
-			--output "mutation/$$(basename "$$p").json" "$$p"; \
-	done
+		name=$$(basename "$$p"); \
+		echo "$$(date +%H:%M) go-mutesting $$p"; \
+		(cd "$$tree" && $(TOOL) go-mutesting --config=scripts/go-mutesting.yml \
+			--exec=scripts/mutation-exec.sh "./$$p" >"$$out/$$name.log" 2>&1 \
+			&& mv report.json "$$out/$$name.json"); \
+		tail -n 1 "$$out/$$name.log"; \
+	done; \
+	echo "$$(date +%H:%M) done"
 
 print-%: ## Print a variable, e.g. make print-GOLANGCI_LINT
 	@echo $($*)

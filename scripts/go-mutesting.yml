@@ -1,0 +1,8 @@
+# go-mutesting's configuration for make mutation (docs/mutation-testing.md).
+# internal/oidc has no test files of its own, so files without tests are
+# mutated too; scripts/mutation-exec.sh runs every package's tests.
+skip_without_test: false
+skip_with_build_tags: false
+json_output: true
+silent_mode: false
+exclude_dirs: []
