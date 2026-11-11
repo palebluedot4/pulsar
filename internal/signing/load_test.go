@@ -162,7 +162,10 @@ func TestLoadRefusesAlteredRetiredKey(t *testing.T) {
 }
 
 // thumbprintOf returns the kid the key set gives pub: its RFC 7638
-// thumbprint with SHA-256, base64url-encoded.
+// thumbprint with SHA-256, base64url-encoded. It is computed here, not by
+// the key set's own function, which takes RSA keys only, so that a P-256
+// key can be stored under its thumbprint too, and so that a kid the key
+// set computed some other way would show.
 func thumbprintOf(t *testing.T, pub crypto.PublicKey) string {
 	t.Helper()
 	b, err := (&jose.JSONWebKey{Key: pub}).Thumbprint(crypto.SHA256)
