@@ -20,20 +20,27 @@
 // tests, succeed.
 //
 //   - [FailOn] makes every INSERT, UPDATE or DELETE on one table fail, by a
-//     trigger that raises an exception (SQLSTATE P0001). The failure is
+//     trigger that raises an exception ([RaiseException]). The failure is
 //     immediate. An INSERT ... ON CONFLICT DO UPDATE fails under INSERT.
-//   - [Hold] holds a lock, taken by a LOCK TABLE or SELECT ... FOR UPDATE
-//     statement, on a connection of its own; a pool opened on the URL that
-//     [WithLockTimeout] returns gives up waiting for it (SQLSTATE 55P03).
-//     It is for reads, which no trigger fires on. Which statements wait is
-//     PostgreSQL's table of conflicting lock modes: ACCESS EXCLUSIVE stops
-//     a plain SELECT, and a row lock FOR UPDATE stops a SELECT ... FOR
-//     UPDATE or FOR NO KEY UPDATE of that row.
+//   - [Hold] holds a lock, taken by a LOCK TABLE, SELECT ... FOR UPDATE or
+//     pg_advisory_xact_lock statement, on a connection of its own; a pool
+//     opened on the URL that [WithLockTimeout] returns gives up waiting for
+//     it ([LockNotAvailable]). It is for reads, which no trigger fires on.
+//     Which statements wait is PostgreSQL's table of conflicting lock
+//     modes: ACCESS EXCLUSIVE stops a plain SELECT, and a row lock FOR
+//     UPDATE stops a SELECT ... FOR UPDATE or FOR NO KEY UPDATE of that row.
 //
 // PostgreSQL aborts a transaction at its first error: every later
 // statement fails, and COMMIT rolls back. So code that ignores the error
-// of a statement inside a transaction still fails when it commits, which a
-// test of that statement's failure shows.
+// of a statement inside a transaction still fails, at the next statement
+// or when it commits, which a test of that statement's failure shows.
+//
+// Other ways were set aside. A role without a privilege needs a role on
+// the server, and binds no superuser, which the role of
+// PULSAR_TEST_DATABASE_URL may be. Closing the pool, or renaming a table,
+// fails every later step that uses it, not one. A pgx tracer that cancels
+// a query fails it in pgx, without PostgreSQL, so the transaction is not
+// aborted as a failure of PostgreSQL's would be.
 package postgrestest
 
 import (
@@ -184,9 +191,17 @@ func FailOn(tb testing.TB, databaseURL, op, table string) {
 }
 
 // lockTimeout is how long a pool opened on the URL WithLockTimeout returns
-// waits for a lock: long enough for any lock not held by Hold, which in a
-// test's own database is held only for a statement, and short enough to
-// keep a test that waits for one quick.
+// waits for a lock: long enough for a lock that pulsar's own transactions
+// hold, each until it commits within a request, and short enough to keep a
+// test that waits for Hold's quick.
+
+// The SQLSTATEs of the failures FailOn and Hold make: the exception the
+// trigger raises, and a statement that waited for a lock longer than
+// lock_timeout.
+const (
+	RaiseException   = "P0001"
+	LockNotAvailable = "55P03"
+)
 const lockTimeout = 200 * time.Millisecond
 
 // WithLockTimeout returns databaseURL with lock_timeout set, so that each

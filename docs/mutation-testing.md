@@ -309,19 +309,26 @@ The tests are in `internal/server/database_failure_test.go`, with
 `TestLoadDatabaseFailure` and `TestRotateDatabaseFailure` in
 `internal/signing`. Each of the 48 was then run again by hand against
 them, and against `TestUserInfoServerError`,
-`TestConsentDecisionAfterFailure` and `TestRotateRefuses`: each classed as
-needing a test was killed, and each of the others lived.
+`TestConsentDecisionAfterFailure` and `TestRotateRefuses`: each classed
+below as now tested was killed, and each of the others lived.
 
 PostgreSQL aborts a transaction at its first error: every later statement
 fails, and COMMIT rolls back. A mutant that ignores the error of a
 statement inside a transaction therefore fails at the next statement or at
-the commit, and the request gets the response it would have.
+the commit, and the request gets the response it would have. Only the
+error pulsar logs differs: the aborted transaction's (SQLSTATE 25P02), or
+pgx's report that the commit rolled back, rather than the statement's,
+which PostgreSQL's own log still records. Such a mutant is classed
+equivalent where that is all it changes for a request; where the error
+is what the operator reads to learn why a replica did not start, at
+`signing.go:394`, it is not.
 
-| Class                    | `internal/oidc` | `internal/signing` |
-| ------------------------ | --------------: | -----------------: |
-| Needs a test, now tested |              25 |                  4 |
-| Equivalent               |               8 |                  3 |
-| Cannot fail              |               8 |                  0 |
+| Class                          | `internal/oidc` | `internal/signing` |
+| ------------------------------ | --------------: | -----------------: |
+| Needs a test, now tested       |              25 |                  5 |
+| Equivalent                     |               8 |                  1 |
+| Needs a test, none can kill it |               0 |                  1 |
+| Cannot fail                    |               8 |                  0 |
 
 Needs a test, now tested, with what the mutant answered instead:
 
@@ -342,26 +349,32 @@ Needs a test, now tested, with what the mutant answered instead:
   752: `invalid_grant` for a refresh token whose family was not locked
 - `internal/signing/signing.go`: 176, 403: an error of `Load` that says the
   database holds no key, when the first key was not stored; 227: a key
-  `Rotate` reports as stored, which was not; 445: an error of `Rotate`
-  that says the database holds no key, when the keys were not read
+  `Rotate` reports as stored, which was not; 394: an error of `Load` that
+  says a transaction was aborted, when the lock that key generation is
+  under was not taken; 445: an error of `Rotate` that says the database
+  holds no key, when the keys were not read
 
 Equivalent. A case of `TestTokenDatabaseFailure`, `TestUserInfoServerError`
-or `TestLoadDatabaseFailure` makes each statement fail but those at
-`signing.go:394` and `397`, for which the reasoning is the evidence:
+or `TestLoadDatabaseFailure` makes each statement fail:
 
-| Line                              | Ignores the error of                                        | Why it is equivalent                                                                                 |
-| --------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `internal/oidc/token.go:490`      | locking a code presented again                              | The transaction, aborted, commits nothing, and the request gets `server_error`                       |
-| `internal/oidc/token.go:496`      | revoking a code's tokens                                    | The next statement fails, in the aborted transaction                                                 |
-| `internal/oidc/token.go:540`      | starting a Refresh Token Family                             | As above                                                                                             |
-| `internal/oidc/token.go:543`      | recording the refresh token                                 | As above                                                                                             |
-| `internal/oidc/token.go:761`      | marking the refresh token used                              | As above                                                                                             |
-| `internal/oidc/token.go:789`      | recording the replacement refresh token                     | As above                                                                                             |
-| `internal/oidc/token.go:828`      | revoking a Refresh Token Family                             | As above                                                                                             |
-| `internal/oidc/userinfo.go:263`   | reading an access token's record                            | The claims read are then nil, which do not decode, so UserInfo answers 500 all the same              |
-| `internal/signing/signing.go:372` | looking for a stored key                                    | `Load` looks again in its transaction, which fails the same way                                      |
-| `internal/signing/signing.go:394` | taking the lock key generation is under                     | The next statement fails, in the aborted transaction, and `Load` with it, though with SQLSTATE 25P02 |
-| `internal/signing/signing.go:397` | looking again, in the transaction (`err != nil` to `false`) | The insertion that follows fails, in the aborted transaction                                         |
+| Line                              | Ignores the error of                    | Why it is equivalent                                                                    |
+| --------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------- |
+| `internal/oidc/token.go:490`      | locking a code presented again          | The transaction, aborted, commits nothing, and the request gets `server_error`          |
+| `internal/oidc/token.go:496`      | revoking a code's tokens                | The next statement fails, in the aborted transaction                                    |
+| `internal/oidc/token.go:540`      | starting a Refresh Token Family         | As above                                                                                |
+| `internal/oidc/token.go:543`      | recording the refresh token             | As above                                                                                |
+| `internal/oidc/token.go:761`      | marking the refresh token used          | As above                                                                                |
+| `internal/oidc/token.go:789`      | recording the replacement refresh token | As above                                                                                |
+| `internal/oidc/token.go:828`      | revoking a Refresh Token Family         | As above                                                                                |
+| `internal/oidc/userinfo.go:263`   | reading an access token's record        | The claims read are then nil, which do not decode, so UserInfo answers 500 all the same |
+| `internal/signing/signing.go:372` | looking for a stored key                | `Load` looks again in its transaction, which fails the same way                         |
+
+Needs a test, none can kill it: at `signing.go:397`, `err != nil`
+replaced with `false` ignores the error of looking for a stored key again,
+inside the transaction. Like the mutant at 394, it makes `Load` fail with
+SQLSTATE 25P02 rather than the read's error, so it would need a test; but
+no test can make that read fail and not the same read at line 370 just
+before it, which returns first.
 
 Cannot fail:
 

@@ -212,10 +212,10 @@ func TestConsentDecisionExpires(t *testing.T) {
 	})
 }
 
-// REQ-CORE-16, REQ-CORE-28: a decision is not left to answer a later
-// request when the request it was made for fails. The code for a request
-// with prompt=consent cannot be stored, so it gets server_error; the same
-// request sent again shows the consent page.
+// REQ-CORE-16, REQ-CORE-28, REQ-OAUTH-51: a decision is not left to
+// answer a later request when the request it was made for fails. The code
+// for a request with prompt=consent cannot be stored, so it gets
+// server_error; the same request sent again shows the consent page.
 //
 // The failure is made by renaming the table of authorization codes, and
 // naming it back, so that the request can then be sent again; the trigger
