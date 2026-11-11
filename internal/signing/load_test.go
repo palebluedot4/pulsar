@@ -8,12 +8,14 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
@@ -184,5 +186,66 @@ func storeKey(t *testing.T, pool *pgxpool.Pool, kid string, der []byte) {
 		"INSERT INTO signing_keys (kid, sealed_private_key, created_at, activates_at) VALUES ($1, $2, now(), now())",
 		kid, sealed); err != nil {
 		t.Fatalf("store signing key: %v", err)
+	}
+}
+
+// sqlState returns the SQLSTATE of the PostgreSQL error err wraps, or ""
+// if it wraps none.
+func sqlState(err error) string {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return ""
+	}
+	return pgErr.Code
+}
+
+// The SQLSTATEs of the failures postgrestest makes: an exception a trigger
+// raises, and a statement that waited for a lock past lock_timeout.
+const (
+	raiseException   = "P0001"
+	lockNotAvailable = "55P03"
+)
+
+// Load fails when PostgreSQL does, and its error is PostgreSQL's, which
+// the operator reads to learn why the replica did not start: not that the
+// database holds no key, when the key could not be stored or the keys
+// could not be read. It cites no requirement: no clause in scope says how
+// an OP stores its keys.
+func TestLoadDatabaseFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		breakStep func(t *testing.T, databaseURL string)
+		want      string // the SQLSTATE of Load's error
+	}{
+		{
+			name: "first key not stored",
+			breakStep: func(t *testing.T, databaseURL string) {
+				t.Helper()
+				postgrestest.FailOn(t, databaseURL, "INSERT", "signing_keys")
+			},
+			want: raiseException,
+		},
+		{
+			name: "keys not read",
+			breakStep: func(t *testing.T, databaseURL string) {
+				t.Helper()
+				postgrestest.Hold(t, databaseURL, "LOCK TABLE signing_keys IN ACCESS EXCLUSIVE MODE")
+			},
+			want: lockNotAvailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.NewDatabase(t)
+			pool := postgrestest.Open(t, postgrestest.WithLockTimeout(t, databaseURL))
+			tt.breakStep(t, databaseURL)
+			err := signing.New(pool, secret).Load(t.Context())
+			if got := sqlState(err); got != tt.want {
+				t.Errorf("Load() with the %s: error = %v, want one with SQLSTATE %s", tt.name, err, tt.want)
+			}
+		})
 	}
 }
