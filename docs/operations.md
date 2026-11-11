@@ -18,18 +18,8 @@ keys, generating the first one if the database holds none.
 - The Login Session cookie is `Secure`, which browsers keep over plain
   http only on `localhost`.
 
-```sh
-# Once per database; every later start needs the same value.
-export PULSAR_SECRET="$(openssl rand -base64 32)"
-PULSAR_ISSUER=http://localhost:8080 \
-  PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
-  PULSAR_REGISTRY=conformance/registry.json \
-  go run ./cmd/pulsar
-```
-
-`conformance/registry.json` lists only the conformance suite's Clients,
-which redirect to the suite, and an End-User whose password is published;
-name a registry of your own to sign anyone in.
+The README's [Quickstart](../README.md#quickstart) starts it on a local
+database.
 
 ## Rotating the signing key
 

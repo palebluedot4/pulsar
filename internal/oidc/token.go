@@ -330,11 +330,11 @@ func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*regis
 }
 
 // authenticateSecret authenticates the Client whose client_id and secret
-// these are, if it registered method. A Client secret is at least 256
-// random bits, as `pulsar client-secret` makes one and ADR 0005 requires
-// of one made elsewhere, so that guessing cannot find one, as RFC 6749
-// §10.10 and RFC 6819 §5.1.4.2.2 have it, and its attempts are not
-// counted, as an End-User's are: a count would let anyone who knows a
+// these are, if it registered method. ADR 0005 requires a Client secret
+// of at least 256 random bits, as `pulsar client-secret` makes, so that
+// guessing cannot find one, as RFC 6749 §10.10 and RFC 6819 §5.1.4.2.2
+// have it; pulsar cannot check a secret made elsewhere. Its attempts are
+// not counted, as an End-User's are: a count would let anyone who knows a
 // client_id, which is public, hold up that Client's token requests
 // (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
 //
