@@ -3,7 +3,7 @@
 [![CI](https://github.com/palebluedot4/pulsar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/palebluedot4/pulsar/actions/workflows/ci.yml?query=branch%3Amain)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/palebluedot4/pulsar/badge)](https://scorecard.dev/viewer/?uri=github.com/palebluedot4/pulsar)
 
-An OpenID Connect Provider in Go, built by AI agents under a harness in
+An OpenID Provider in Go, built by AI agents under a harness in
 which every control names the evidence behind it. The provider is the
 artifact; the method is the subject. Each normative statement it
 implements is quoted under an ID, and a test cites the IDs it proves.
@@ -16,15 +16,17 @@ implements is quoted under an ID, and a test cites the IDs it proves.
 ## Evidence
 
 - **Conformance.** CI runs four plans of the OpenID conformance suite
-  (`release-v5.3.4`) on every pull request and push to `main`. On 2026-11-11, at commit
-  `088d7d5` on `main`, all four finished with no unexpected result:
+  (`release-v5.3.4`) on every pull request and push to `main`. On
+  2026-11-11, at commit `088d7d5` on `main`, all four finished with no
+  unexpected result:
   - Config OP: 1 module passed.
   - Basic OP: 29 of 35 modules passed. One warned, since pulsar never
     returns `acr`; one was skipped, since pulsar supports no request
     objects; four ended in `REVIEW`.
-  - Form Post Basic: the same, but that the request-object module, which
-    puts `response_mode` only inside the request object, fails its
-    form-post checks before it skips.
+  - Form Post Basic: 29 passed, one warned and four ended in `REVIEW`, as
+    in Basic OP. The request-object module failed: it puts
+    `response_mode` only inside the request object, which pulsar does not
+    read.
   - RP-Initiated Logout: 3 of 11 modules passed; eight ended in `REVIEW`.
 
   `REVIEW` leaves a page for a person to judge, and no person has yet
@@ -41,6 +43,10 @@ implements is quoted under an ID, and a test cites the IDs it proves.
 - **Interoperability.** [examples/](examples/README.md) holds a web app, an
   API, a command-line app and a worker that use `golang.org/x/oauth2`,
   `go-oidc` and `go-jose` against pulsar over the network, in CI.
+- **Evals.** The one skill written here,
+  [right-sizing](plugins/right-sizing/README.md), was evaluated before it
+  was adopted; [its results](plugins/right-sizing/evals/results.md) record
+  what it changed.
 
 ## Quickstart
 
@@ -70,6 +76,9 @@ own ([configuration.md](docs/configuration.md#the-registry)), or follow
 
 ## What it implements
 
+[docs/behavior.md](docs/behavior.md) describes what pulsar does with each,
+by endpoint.
+
 | Specification                                                                                                  | What pulsar implements                                                                         | Requirements                                                                     |
 | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)                               | Authorization code flow, ID token, UserInfo, `prompt`, `max_age`, `claims`; no request objects | [core](docs/requirements/openid-connect-core-1.0.md)                             |
@@ -93,11 +102,15 @@ own ([configuration.md](docs/configuration.md#the-registry)), or follow
 | [RFC 10070](https://www.rfc-editor.org/rfc/rfc10070) JWT Client Authentication Updates                         | The issuer as a client assertion's sole audience                                               | [rfc10070](docs/requirements/rfc10070.md)                                        |
 
 Deliberately not implemented, each with its reason in
-[AGENTS.md](AGENTS.md#deliberately-not-doing): implicit and hybrid flows,
-Dynamic Client Registration, Client ID Metadata Documents, introspection,
-token exchange, PAR, DPoP, mTLS, Back-Channel and front-channel logout,
-session management, and signing algorithms other than RS256. There is no
-sign-up, password reset, MFA, social login, SAML or admin UI.
+[AGENTS.md](AGENTS.md#deliberately-not-doing):
+
+- implicit and hybrid flows;
+- Dynamic Client Registration and Client ID Metadata Documents;
+- introspection, token exchange, and MCP authorization beyond RFC 8707;
+- PAR, DPoP and mTLS;
+- front-channel and back-channel logout, and session management;
+- signing with ES256 or EdDSA;
+- sign-up, password reset, MFA, social login, SAML and an admin UI.
 
 ## Documentation
 
@@ -136,16 +149,13 @@ Resource Servers verify access tokens themselves, against the JWK Set.
 evidence for each, and [docs/research/](docs/research/) holds the dated
 surveys the decisions rest on. Since #66, each pull request's description
 but Dependabot's records what its three reviews found, fixed and left
-unchanged. The one skill written here,
-[right-sizing](plugins/right-sizing/README.md), was evaluated before it was
-adopted; [its results](plugins/right-sizing/evals/results.md) record what
-it changed.
+unchanged.
 
 ## Verifying it
 
-With Go, Node.js, pnpm, jq and Claude Code installed, and a PostgreSQL
-server whose URL, for a role that may create databases, is in
-`PULSAR_TEST_DATABASE_URL`:
+Install Go, Node.js, pnpm, jq and Claude Code. Set
+`PULSAR_TEST_DATABASE_URL` to a PostgreSQL server, for a role that may
+create databases. Then:
 
 ```sh
 make setup        # once per clone: pinned tools, git hooks, Claude Code plugins

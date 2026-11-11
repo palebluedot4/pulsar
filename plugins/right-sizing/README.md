@@ -17,11 +17,10 @@ the skill as released on `main`:
 /plugin install right-sizing --marketplace palebluedot4/pulsar
 ```
 
-Inside this repository it is enabled in `.claude/settings.json` and
-installed at project scope by `make setup`; enabling it alone did not load
-it (#68). A new
-version reaches users when `version` in `.claude-plugin/plugin.json` is
-bumped on `main`; until then they keep the version they have.
+Inside this repository it is enabled in `.claude/settings.json` and installed at
+project scope by `make setup`; enabling it alone did not load it (#68). A new
+version reaches users when `version` in `.claude-plugin/plugin.json` is bumped
+on `main`; until then they keep the version they have.
 
 Run the evals from the repository root with `make eval PLUGIN=right-sizing`.
 

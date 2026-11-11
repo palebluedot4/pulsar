@@ -305,13 +305,14 @@ Database or I/O failure, classed again below:
 
 #100 classed these 48 again once a test could make PostgreSQL fail at one
 step of a request: a trigger that raises on a write, or a lock held past
-`lock_timeout` for a read, as `internal/postgres/postgrestest` describes.
-The tests are in `internal/server/database_failure_test.go`, with
+`lock_timeout` for a read, as `internal/postgres/postgrestest` describes. The
+tests are in `internal/server/database_failure_test.go`, with
 `TestLoadDatabaseFailure`, `TestLoadDatabaseFailureOnSecondLook` and
-`TestRotateDatabaseFailure` in `internal/signing`. Each of the 48 was then
-run again by hand against them, and against `TestLogoutNotEnded`, `TestUserInfoServerError`,
-`TestConsentDecisionAfterFailure` and `TestRotateRefuses`: each classed
-below as now tested was killed, and each of the others lived.
+`TestRotateDatabaseFailure` in `internal/signing`. Each of the 48 was then run
+again by hand against them, and against `TestLogoutNotEnded`,
+`TestUserInfoServerError`, `TestConsentDecisionAfterFailure` and
+`TestRotateRefuses`: each classed below as now tested was killed, and each of
+the others lived.
 
 PostgreSQL aborts a transaction at its first error: every later statement
 fails, and COMMIT rolls back. A mutant that ignores the error of a

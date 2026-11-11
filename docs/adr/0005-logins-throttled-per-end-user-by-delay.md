@@ -53,11 +53,11 @@ instead, and are not counted. The evidence is in
 - Each replica times the delays by its own clock, so they hold as long as
   the replicas' clocks agree, as the signing key schedule does
   ([ADR 0003](0003-signing-keys-generated-and-stored-encrypted.md)).
-- A Client secret must be at least 256 bits from a cryptographically
-  strong random source, as `docs/operations.md` says. RFC 6819 §5.1.4.2.2 has the
-  authorization server generate it, and `pulsar client-secret` does
-  (#61); pulsar sees only a secret's hash, so it cannot tell whether one
-  made elsewhere meets that.
+- A Client secret must be at least 256 bits from a cryptographically strong
+  random source, as `docs/operations.md` says. RFC 6819 §5.1.4.2.2 has the
+  authorization server generate it, and `pulsar client-secret` does (#61);
+  pulsar sees only a secret's hash, so it cannot tell whether one made elsewhere
+  meets that.
 - pulsar does not claim to meet NIST SP 800-63B-4 §3.2.2, which requires
   disabling an authenticator after at most 100 consecutive failures.
 - Separately, each replica runs at most as many Argon2id verifications at

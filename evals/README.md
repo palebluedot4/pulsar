@@ -30,8 +30,8 @@ auto-updates off for the run (`docs/harness.md`).
   `claude plugin eval` loads only the plugin under test. Run them with
   `make eval PLUGIN=<name>`, which pins the models and a cost ceiling and
   compares runs with and without the plugin. Raw runs land in the plugin's
-  gitignored `evals/results/`; a short `results.md` beside the cases records what each
-  run showed.
+  gitignored `evals/results/`; a short `results.md` beside the cases records
+  what each run showed.
 - **Repository controls** (`AGENTS.md`, hooks, gates) cannot be evaluated
   that way, since the plugin evaluator loads no project configuration. They
   are not evaluated at all: each names other evidence in `docs/harness.md`,
