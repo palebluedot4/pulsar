@@ -394,16 +394,16 @@ func verify(t *testing.T, handler http.Handler, token string) jwt {
 	return jwt{alg: h.Algorithm, kid: h.KeyID, typ: typ, claims: claims}
 }
 
-// REQ-CORE-2, REQ-CORE-3, REQ-CORE-4, REQ-CORE-7, REQ-CORE-10,
-// REQ-CORE-11, REQ-CORE-12, REQ-CORE-13, REQ-OAUTH-3, REQ-OAUTH-4,
-// REQ-OAUTH-9, REQ-OAUTH-13, REQ-OAUTH-21, REQ-ISS-2, REQ-AT-1, REQ-AT-2,
-// REQ-AT-3, REQ-AT-4, REQ-AT-5, REQ-BCP-4: a Client sends an End-User
-// without a Login Session to the authorization endpoint, by GET or POST;
-// the End-User signs in and returns to it; the Client redeems the code
-// for an ID token that verifies against the JWK Set and an access token.
-// A second request from the signed-in browser skips the login page. No
-// cache may keep the redirect to the login page, which carries the
-// request's parameters, nor the response, which carries the code.
+// REQ-CORE-2, REQ-CORE-3, REQ-CORE-4, REQ-CORE-7, REQ-CORE-10, REQ-CORE-11,
+// REQ-CORE-12, REQ-CORE-13, REQ-OAUTH-3, REQ-OAUTH-4, REQ-OAUTH-9,
+// REQ-OAUTH-13, REQ-OAUTH-21, REQ-ISS-2, REQ-AT-1, REQ-AT-2, REQ-AT-3,
+// REQ-AT-4, REQ-AT-5, REQ-BCP-4: a Client sends an End-User without a Login
+// Session to the authorization endpoint, by GET or POST; the End-User signs
+// in and returns to it; the Client redeems the code for an ID token that
+// verifies against the JWK Set and an access token. A second request from
+// the signed-in browser skips the login page. No cache may keep the
+// redirect to the login page, which carries the request's parameters, nor
+// the response, which carries the code.
 func TestAuthorizationCodeFlow(t *testing.T) {
 	t.Parallel()
 
@@ -523,13 +523,13 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 	}
 }
 
-// REQ-CORE-4, REQ-CORE-14: an authorization request a Client sends by
-// POST from its own site arrives without the Login Session cookie, which
-// is SameSite=Lax. It is sent back to the authorization endpoint by GET,
-// once, with the same parameters, by a redirect no cache may keep, a
-// navigation on which the browser sends the cookie; that request is answered as any other. So a signed-in
-// End-User gets a code, with prompt=none too, and one not signed in is
-// sent to log in, or with prompt=none gets login_required.
+// REQ-CORE-4, REQ-CORE-14: an authorization request a Client sends by POST
+// from its own site arrives without the Login Session cookie, which is
+// SameSite=Lax. It is sent back to the authorization endpoint by GET, once,
+// with the same parameters, by a redirect no cache may keep, a navigation
+// on which the browser sends the cookie; that request is answered as any
+// other. So a signed-in End-User gets a code, with prompt=none too, and one
+// not signed in is sent to log in, or with prompt=none gets login_required.
 func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
 	t.Parallel()
 

@@ -50,8 +50,8 @@ run it again alone (below).
   failed, the mutant did not compile or a test timed out. The script
   builds the mutated package first and skips a mutant that does not
   compile; runs every package's tests, not only the mutated one's, because
-  `internal/oidc` has no tests of its own and `internal/server` tests it
-  over HTTP; and reports a timeout (`TIMED OUT`, after
+  most of `internal/oidc` is tested only by `internal/server`, over HTTP;
+  and reports a timeout (`TIMED OUT`, after
   `MUTATION_TEST_TIMEOUT`, 90 seconds by default, per package) and a full
   database apart from kills. Packages a mutant cannot reach keep their
   cached results.
@@ -59,8 +59,9 @@ run it again alone (below).
   source file and puts the original back when it exits, so whatever else
   reads that working tree meanwhile, an editor, another session, a Stop
   hook's `make check`, would see the mutant.
-- **`scripts/go-mutesting.yml`**: `skip_without_test: false`, since
-  `internal/oidc` has no test files, and JSON output.
+- **`scripts/go-mutesting.yml`**: `skip_without_test: false`, since most
+  files of `internal/oidc` have no test file of their own, and JSON
+  output.
 - **One mutant at a time.** go-mutesting runs them in sequence; the
   database above is why it matters.
 - **`$(GO)`'s toolchain first on `PATH`.** The script runs the `go` it finds
@@ -126,7 +127,8 @@ full database.
 
 go-mutesting at `9ce5f73`, through `scripts/mutation-exec.sh`, Go 1.27.3,
 PostgreSQL 17.2 (Postgres.app), at `94074e6`, whose code in the three
-packages is that of the gremlins run below; 5 hours 41 minutes.
+packages is that of the gremlins run below; 5 hours 41 minutes. The
+scores are those of the tests before #97 added any.
 
 | Package             | Killed | Lived | Did not compile | Timed out | Test efficacy |
 | ------------------- | -----: | ----: | --------------: | --------: | ------------: |
@@ -149,6 +151,28 @@ there: in each, another step already refuses or filters what the mutant
 lets through, with the same response, or the case it changes cannot
 arise.
 
+| Line                                | Mutant                                  | Why it is equivalent                                                                                  |
+| ----------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `internal/oidc/authorize.go:466`    | a Resource Server's scope check removed | The consent page and the tokens issued keep only the scopes of the Resource Server requested          |
+| `internal/oidc/logout.go:99`        | `&& known` replaced with `true`         | A Login Session with an End-User means the cookie was sent, so `known` is true whenever `ok` is       |
+| `internal/oidc/revocation.go:64`    | the request's read error ignored        | Its parameters are then nil, so the request fails for want of `token` with the same `invalid_request` |
+| `internal/oidc/token.go:127`        | the request's read error ignored        | As above, for want of `grant_type`                                                                    |
+| `internal/oidc/token.go:172`        | the body's read error ignored           | As above                                                                                              |
+| `internal/oidc/token.go:116`        | `retryAfter > 0` to `> 1`               | A duration of one nanosecond is never set                                                             |
+| `internal/registry/registry.go:290` | the `http://` prefix check removed      | Without it the scheme ends the host, which then has an empty port, and is refused                     |
+| `internal/registry/registry.go:313` | the bracket check's `return` removed    | The registry refuses an IPv4 address in brackets, and `url.Parse` an IPv6 one without                 |
+| `internal/registry/registry.go:312` | the IPv6 half of the check replaced     | As above                                                                                              |
+| `internal/registry/registry.go:312` | the IPv4 half of the check replaced     | As above                                                                                              |
+| `internal/registry/registry.go:823` | `!k.Valid()` replaced with `false`      | go-jose refuses a JWK that is not valid when it decodes the JWK Set                                   |
+| `internal/signing/signing.go:261`   | the error of `Active` ignored           | The zero key that follows makes signing fail with an error all the same                               |
+| `internal/signing/signing.go:527`   | the PKCS #8 decoding error ignored      | The nil key that follows is refused as not an RSA key                                                 |
+
+Where a line appears in two classes, its mutants differ. At
+`internal/oidc/authorize.go:624`, `max_age > 1` is tested; `>= 0` and
+`> -1` change only `max_age=0`, which `needsLogin` handles apart. At
+`internal/oidc/token.go:116`, `>= 0` and `> -1` are tested, `> 1` is in
+the table above.
+
 | Class                   | `internal/oidc` | `internal/registry` | `internal/signing` |
 | ----------------------- | --------------: | ------------------: | -----------------: |
 | Needs a test            |              41 |                  48 |                  9 |
@@ -161,9 +185,9 @@ Each of the 98 that needed a test was then run again by hand, with the
 new tests, against the tests of the packages that reach it, and each was
 killed. One, at `internal/oidc/claims.go:231`, which turns the `continue`
 after the sub Claim into a `break`, is killed only if sub is not the
-last of the claims requested that is read; the test requests eight
-others, so it is killed unless the parameter's members are read in an
-order that puts sub last.
+last of the claims requested that is read, in an order Go does not fix;
+`TestClaimsParameterSubAmongOthers` sends eight others three times, so
+that it misses the mutant about once in 700 runs.
 
 The lines they changed, by class; a line appears once for each mutant.
 
@@ -288,6 +312,13 @@ mutated are built from.
 
 Mutants that lived, and the one that timed out, with the line each changed.
 The go-mutesting run above classifies a mutant at each of these lines.
+go-mutesting has no negation, so the negation mutants were applied again
+by hand after #97's tests: those at `internal/oidc/authorize.go:345` and
+`logout.go:106` and `173`, which write an error after a page written
+whole, and at `token.go:116`, are killed; those at `token.go:872` and
+`internal/signing/signing.go:193` change only whether a line is logged,
+and the one at `revocation.go:88` only the order in which the token is
+looked up, which the go-mutesting mutants of that line show equivalent.
 
 | Position                             | Mutator                      | Line                                                                                     |
 | ------------------------------------ | ---------------------------- | ---------------------------------------------------------------------------------------- |

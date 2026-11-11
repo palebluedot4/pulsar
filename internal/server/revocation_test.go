@@ -1,7 +1,6 @@
 package server
 
 import (
-	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +24,14 @@ const revocationPath = "/tenant/revoke"
 // Authorization header if clientID is "".
 func newRevocationRequest(t *testing.T, clientID, secret string, form url.Values) *http.Request {
 	t.Helper()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+revocationPath, strings.NewReader(form.Encode()))
+	return newRevocationRequestWithBody(t, clientID, secret, form.Encode())
+}
+
+// newRevocationRequestWithBody is newRevocationRequest with body, as it
+// is, for its form-encoded body.
+func newRevocationRequestWithBody(t *testing.T, clientID, secret, body string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://op.example"+revocationPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if clientID != "" {
 		req.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(secret))
@@ -570,12 +576,11 @@ func TestRevocationAssertionReplay(t *testing.T) {
 }
 
 // REQ-REVOKE-2, REQ-REVOKE-4, REQ-REVOKE-14, REQ-OAUTH-5, REQ-OAUTH-15: a
-// revocation request without token, that repeats a parameter, or whose
-// body is not a form, by its media type or its escapes, fails with
-// invalid_request, before its Client
-// authenticates, so that a client assertion sent with it authenticates
-// the corrected request. The endpoint answers no method but POST, and
-// OPTIONS for a preflight.
+// revocation request without token, that repeats a parameter, or whose body
+// is not a form, by its media type or its escapes, fails with
+// invalid_request, before its Client authenticates, so that a client
+// assertion sent with it authenticates the corrected request. The endpoint
+// answers no method but POST, and OPTIONS for a preflight.
 func TestRevocationRequestErrors(t *testing.T) {
 	t.Parallel()
 
@@ -612,8 +617,7 @@ func TestRevocationRequestErrors(t *testing.T) {
 	t.Run("body with a malformed escape", func(t *testing.T) {
 		t.Parallel()
 		accessToken := accessTokenOf(t, handler, "rp")
-		req := newRevocationRequest(t, "rp", rpSecret, revocationForm(accessToken, ""))
-		req.Body = io.NopCloser(strings.NewReader(revocationForm(accessToken, "").Encode() + "&%zz"))
+		req := newRevocationRequestWithBody(t, "rp", rpSecret, revocationForm(accessToken, "").Encode()+"&%zz")
 		b := &browser{t: t, handler: handler}
 		if got := revocationErrorCode(t, b.do(req), http.StatusBadRequest); got != "invalid_request" {
 			t.Errorf("POST %s with a malformed escape error = %q, want %q", revocationPath, got, "invalid_request")
@@ -659,10 +663,7 @@ func TestRevocationBodySize(t *testing.T) {
 	request := func(t *testing.T, accessToken string, size int) *http.Request {
 		t.Helper()
 		body := revocationForm(accessToken, "").Encode() + "&pad="
-		body += strings.Repeat("a", size-len(body))
-		req := newRevocationRequest(t, "rp", rpSecret, nil)
-		req.Body = io.NopCloser(strings.NewReader(body))
-		return req
+		return newRevocationRequestWithBody(t, "rp", rpSecret, body+strings.Repeat("a", size-len(body)))
 	}
 
 	t.Run("64 KiB", func(t *testing.T) {

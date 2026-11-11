@@ -181,14 +181,14 @@ func TestCORSPreflight(t *testing.T) {
 }
 
 // REQ-BROWSER-1, REQ-DISC-20: a public Client redeems its code from the
-// origin of its redirect URI, and reads the response, an error included.
-// A request from any other origin, or from a confidential Client's
-// origin, even one that names the Client by client_id, gets
-// invalid_request without CORS headers, before the code is
-// redeemed or a refresh token rotated: a token request is sent without a
-// preflight, so its sender cannot read the response. So does one whose
-// Client is not known, or that names two origins. A request with no
-// origin, as a Client that is not a browser sends, is answered as before.
+// origin of its redirect URI, and reads the response, an error included. A
+// request from any other origin, or from a confidential Client's origin,
+// even one that names the Client by client_id, gets invalid_request without
+// CORS headers, before the code is redeemed or a refresh token rotated: a
+// token request is sent without a preflight, so its sender cannot read the
+// response. So does one whose Client is not known, or that names two
+// origins. A request with no origin, as a Client that is not a browser
+// sends, is answered as before.
 func TestTokenCORS(t *testing.T) {
 	t.Parallel()
 

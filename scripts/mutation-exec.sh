@@ -3,8 +3,8 @@
 # Tests one mutant for go-mutesting, which runs it with the mutant's file in
 # MUTATE_CHANGED, the file it replaces in MUTATE_ORIGINAL and its package in
 # MUTATE_PACKAGE (docs/mutation-testing.md). Unlike go-mutesting's own exec,
-# it runs every package's tests, not only the mutated package's:
-# internal/oidc has no tests of its own, internal/server tests it over HTTP.
+# it runs every package's tests, not only the mutated package's: most of
+# internal/oidc is tested only by internal/server, over HTTP.
 # Packages the mutant cannot reach keep their cached results.
 #
 # Exit status, as go-mutesting reads it: 0 the tests failed, so the mutant

@@ -496,8 +496,9 @@ None yet.
   avito-tech/go-mutesting, pinned by commit in `tools/go.mod`, in place of
   gremlins, which is removed. Over the same code, gremlins ran 397 mutants
   and left 125 unrun; go-mutesting ran all 1,366, including the `case`
-  conditions and each term of `&&` and `||`, and found every position
-  where a gremlins mutant lived. It writes mutants over the source, so
+  conditions and each term of `&&` and `||`, and at every line where a
+  gremlins mutant lived, a go-mutesting mutant lived too, on that line or
+  in the body of the `if` it begins. It writes mutants over the source, so
   `make mutation` runs it in a working tree of its own at HEAD, and
   `scripts/mutation-exec.sh` tests each mutant, so that one that does not
   compile is skipped rather than killed. The survey is in
