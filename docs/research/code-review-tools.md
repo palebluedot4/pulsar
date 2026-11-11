@@ -235,10 +235,15 @@ mattpocock-skills@claude-plugins-official --scope project` moved the copy
   `lastUpdated` set to a week earlier, so that no throttle applied, the
   install still refreshed the copy under `DISABLE_AUTOUPDATER=1` and
   `DISABLE_UPDATES=1`, and did not under
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. The documentation describes
-  these variables only for the background pass, so this is observed
-  behavior of 2.1.319, not a documented contract. An earlier run that
-  seemed to show `DISABLE_UPDATES=1` holding fell inside that throttle.
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. An earlier run that seemed
+  to show `DISABLE_UPDATES=1` holding fell inside that throttle. As read on
+  2026-11-11, the plugin loading page documents both findings: the refresh
+  before a `name@marketplace` install "doesn't depend on the marketplace's
+  auto-update setting or on `DISABLE_AUTOUPDATER`", and it is skipped when
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set or the marketplace was
+  refreshed within the last 30 seconds, the throttle above. It does not
+  name `DISABLE_UPDATES`, so that variable's part is still observed only,
+  in 2.1.319. <https://code.claude.com/docs/en/plugins/loading>
 
 An explicit `claude plugin marketplace update pulsar` still refreshed a
 copy one commit behind under that variable, and `claude plugin marketplace

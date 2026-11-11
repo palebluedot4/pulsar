@@ -172,10 +172,11 @@ consequences follow; neither is a sandbox setting.
 The official marketplace is frozen with `"autoUpdate": false`: plugins stay
 at whatever version was last installed, which is not a pin to a recorded
 version, and change only when updated on purpose, with a changelog entry.
-`autoUpdate` alone does not hold it: with Claude Code 2.1.319, `claude
-plugin install` refreshes the marketplace it installs from whatever its
-`autoUpdate` says, unless `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is
-set. `make setup` sets it, and fails if an install changes the copy of a
+`autoUpdate` alone does not hold it: `claude plugin install` refreshes the
+marketplace it installs from whatever its `autoUpdate` says, unless
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set, as observed with
+Claude Code 2.1.319 and documented as read on 2026-11-11
+(`docs/research/code-review-tools.md`). `make setup` sets it, and fails if an install changes the copy of a
 marketplace with auto-update off anyway (#92).
 This repository's own marketplace, `pulsar`, does update itself: it only ever
 moves to what has merged on `main`, and a plugin's new version takes effect
@@ -468,3 +469,11 @@ None yet.
   conditions of a `case` clause, so gremlins never runs their mutants; the
   first run counted 111 of them as not covered, leaving them out of test
   efficacy, many of them PKCE, client assertion and redirect URI checks.
+- From a recheck of the AI-practice sources by a separate session (same
+  model), every claim read again at its source on 2026-11-11:
+  `docs/research/ai-development.md` lists what it corrected. Two touch this
+  file's controls. The refresh before a plugin install, which #92 recorded
+  as observed and not documented, is now documented, except for
+  `DISABLE_UPDATES`. gremlins v0.6.0 counts a mutant that does not compile
+  as killed (its #321), so `docs/mutation-testing.md` now reads each test
+  efficacy as an upper bound.

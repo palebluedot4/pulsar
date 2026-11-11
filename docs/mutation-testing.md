@@ -93,6 +93,13 @@ changed `internal/oidc`.
   declarations. A mutant there is never run, however thoroughly the tests
   exercise it: it lowers mutator coverage and is left out of test efficacy,
   so no score says whether the tests would catch it.
+- **Test efficacy is an upper bound.** In v0.6.0, a mutant that does not
+  compile is counted as killed: `go test` exits 1 on a build failure, as it
+  does on a failing test, so gremlins' "not viable" status is never reached
+  ([#321](https://github.com/go-gremlins/gremlins/issues/321), open as of
+  2026-11-11). Some killed mutants may be ones no test had to catch. The
+  `case` conditions above are
+  [#298](https://github.com/go-gremlins/gremlins/issues/298), also open.
 - Scores compare only at the same gremlins version, which each run below
   records. Dependabot updates gremlins with the other tools in
   `tools/go.mod`, and a release may change its default mutators or how it
@@ -117,7 +124,9 @@ cleared the cache only for the baseline.
 | `internal/registry` |     94 |     9 |         1 |          48 |        91.26% |           68.21% |
 | `internal/signing`  |     44 |     2 |         0 |           5 |        95.65% |           90.20% |
 
-Test efficacy leaves out much of what #5 names. Of the 125 mutants not
+Each test efficacy is an upper bound: how many of the killed mutants did
+not compile is not known (above). Test efficacy also leaves out much of
+what #5 names. Of the 125 mutants not
 covered, 111 are conditions of `case` clauses (64 in `internal/oidc`, 47 in
 `internal/registry`) and 13 are in package-level declarations; one alone,
 the `Retry-After` header at `internal/oidc/token.go:117`, is in a statement
