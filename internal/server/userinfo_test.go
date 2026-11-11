@@ -323,8 +323,8 @@ func TestUserInfoTokenExpires(t *testing.T) {
 // REQ-BEARER-3, REQ-BEARER-4, REQ-BEARER-6, REQ-CORE-41: a request that
 // sends no access token, or credentials by another scheme, gets 401 with a
 // challenge and no error code; one that sends a token by two methods, or
-// twice, or a Bearer header without one, gets 400 with invalid_request. A
-// token in the query is not read.
+// twice, or a Bearer header without one, or a form body that cannot be
+// read, gets 400 with invalid_request. A token in the query is not read.
 func TestUserInfoRequestErrors(t *testing.T) {
 	t.Parallel()
 
@@ -365,6 +365,11 @@ func TestUserInfoRequestErrors(t *testing.T) {
 		{
 			name: "access_token repeated in the body", method: http.MethodPost,
 			body:       form(url.Values{"access_token": {accessToken, accessToken}}),
+			wantStatus: http.StatusBadRequest, wantError: "invalid_request",
+		},
+		{
+			name: "body with a malformed escape", method: http.MethodPost,
+			body:       strings.NewReader(url.Values{"access_token": {accessToken}}.Encode() + "&%zz"),
 			wantStatus: http.StatusBadRequest, wantError: "invalid_request",
 		},
 		{

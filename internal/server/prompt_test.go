@@ -156,6 +156,7 @@ func TestForcedLogin(t *testing.T) {
 		{name: "prompt=login consent", set: url.Values{"prompt": {"login consent"}}, wait: time.Second, wantLogin: true, wantConsent: true},
 		{name: "max_age=0", set: url.Values{"max_age": {"0"}}, wantLogin: true},
 		{name: "max_age exceeded", set: url.Values{"max_age": {"60"}}, wait: 61 * time.Second, wantLogin: true},
+		{name: "max_age=1 exceeded", set: url.Values{"max_age": {"1"}}, wait: 2 * time.Second, wantLogin: true},
 		{name: "max_age not exceeded", set: url.Values{"max_age": {"60"}}, wait: 60 * time.Second},
 		{name: "max_age beyond int64", set: url.Values{"max_age": {"99999999999999999999"}}, wait: 20 * time.Minute},
 	}
@@ -312,6 +313,46 @@ func TestMaxAgeWithConsentPage(t *testing.T) {
 			t.Errorf("ID token auth_time = %d, want %d, the login's", got, start)
 		}
 	})
+}
+
+// REQ-CORE-20: a consent page that follows a login made before the
+// request, not for it, does not stand for the re-authentication max_age
+// asks for: if max_age is exceeded by the time the End-User decides there,
+// the decision sends them to log in rather than issuing a code.
+func TestMaxAgeExceededOnConsentPage(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.ResolveHost(t, postgrestest.NewDatabase(t))
+	synctest.Test(t, func(t *testing.T) {
+		b := &browser{t: t, handler: newBubbleFlowHandler(t, databaseURL)}
+		wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
+		page := b.authorize(http.MethodGet, requestWith(url.Values{"scope": {"openid profile email"}, "max_age": {"60"}}))
+		time.Sleep(61 * time.Second)
+		if u := location(t, b.decide(page, "allow")); u.Path != loginPath {
+			t.Errorf("allowed 61 seconds after a login for max_age=60 redirected to %q, want the login page %q", u, loginPath)
+		}
+	})
+}
+
+// REQ-CORE-24: a request whose id_token_hint names another End-User than
+// the one who signs in for it ends with login_required; sent again, it
+// sends the browser to the login form again, rather than failing at once.
+func TestIDTokenHintOtherEndUserAgain(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	bob := &browser{t: t, handler: handler}
+	hint := idToken(t, handler, bob.decide(bob.signInAs(bob.authorize(http.MethodGet, authorizationParams()), "bob", bobPassword), "allow"))
+
+	b := &browser{t: t, handler: handler}
+	wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "alice's request")
+	params := requestWith(url.Values{"id_token_hint": {hint}})
+	if got := errorResponse(t, b.reauthenticate(b.authorize(http.MethodGet, params))).Get("error"); got != "login_required" {
+		t.Fatalf("request for bob, alice signs in again: error = %q, want %q", got, "login_required")
+	}
+	if u := location(t, b.authorize(http.MethodGet, params)); u.Path != loginPath {
+		t.Errorf("the same request sent again redirected to %q, want the login page %q", u, loginPath)
+	}
 }
 
 // REQ-CORE-19: a signed-in End-User with a Consent who sends a request

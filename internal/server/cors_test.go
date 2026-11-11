@@ -183,7 +183,8 @@ func TestCORSPreflight(t *testing.T) {
 // REQ-BROWSER-1, REQ-DISC-20: a public Client redeems its code from the
 // origin of its redirect URI, and reads the response, an error included.
 // A request from any other origin, or from a confidential Client's
-// origin, gets invalid_request without CORS headers, before the code is
+// origin, even one that names the Client by client_id, gets
+// invalid_request without CORS headers, before the code is
 // redeemed or a refresh token rotated: a token request is sent without a
 // preflight, so its sender cannot read the response. So does one whose
 // Client is not known, or that names two origins. A request with no
@@ -282,6 +283,18 @@ func TestTokenCORS(t *testing.T) {
 		}
 		if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
 			t.Errorf("POST %s by rp from %q CORS headers mismatch (-want +got):\n%s", tokenPath, rpOrigin, diff)
+		}
+
+		// Naming itself by client_id as well, so that the request's Client
+		// is known before it authenticates.
+		named := maps.Clone(form)
+		named.Set("client_id", "rp")
+		resp = send(t, rpNoPKCE, named, rpOrigin)
+		if got := tokenErrorCode(t, resp, http.StatusBadRequest); got != "invalid_request" {
+			t.Errorf("POST %s by rp with its client_id from %q error = %q, want %q", tokenPath, rpOrigin, got, "invalid_request")
+		}
+		if diff := cmp.Diff(noCORS("Origin"), corsHeaders(resp)); diff != "" {
+			t.Errorf("POST %s by rp with its client_id from %q CORS headers mismatch (-want +got):\n%s", tokenPath, rpOrigin, diff)
 		}
 
 		// Without an origin, as from rp's server.

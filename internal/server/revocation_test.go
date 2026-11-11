@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -570,7 +571,8 @@ func TestRevocationAssertionReplay(t *testing.T) {
 
 // REQ-REVOKE-2, REQ-REVOKE-4, REQ-REVOKE-14, REQ-OAUTH-5, REQ-OAUTH-15: a
 // revocation request without token, that repeats a parameter, or whose
-// body is not a form fails with invalid_request, before its Client
+// body is not a form, by its media type or its escapes, fails with
+// invalid_request, before its Client
 // authenticates, so that a client assertion sent with it authenticates
 // the corrected request. The endpoint answers no method but POST, and
 // OPTIONS for a preflight.
@@ -607,6 +609,18 @@ func TestRevocationRequestErrors(t *testing.T) {
 		})
 	}
 
+	t.Run("body with a malformed escape", func(t *testing.T) {
+		t.Parallel()
+		accessToken := accessTokenOf(t, handler, "rp")
+		req := newRevocationRequest(t, "rp", rpSecret, revocationForm(accessToken, ""))
+		req.Body = io.NopCloser(strings.NewReader(revocationForm(accessToken, "").Encode() + "&%zz"))
+		b := &browser{t: t, handler: handler}
+		if got := revocationErrorCode(t, b.do(req), http.StatusBadRequest); got != "invalid_request" {
+			t.Errorf("POST %s with a malformed escape error = %q, want %q", revocationPath, got, "invalid_request")
+		}
+		wantAccepted(t, handler, "after a revocation with a malformed escape", claimsOf(aliceProfile), []string{accessToken})
+	})
+
 	t.Run("body not a form", func(t *testing.T) {
 		t.Parallel()
 		accessToken := accessTokenOf(t, handler, "rp")
@@ -629,4 +643,44 @@ func TestRevocationRequestErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A request to the revocation endpoint, as to the token endpoint, is read
+// up to 64 KiB of form-encoded body: a revocation request of that size is
+// answered, and one a byte longer fails with invalid_request and revokes
+// nothing. It cites no requirement: no clause in scope bounds the size of
+// a request.
+func TestRevocationBodySize(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	// request returns a revocation request for accessToken whose body is
+	// size bytes long, padded by a parameter the endpoint ignores.
+	request := func(t *testing.T, accessToken string, size int) *http.Request {
+		t.Helper()
+		body := revocationForm(accessToken, "").Encode() + "&pad="
+		body += strings.Repeat("a", size-len(body))
+		req := newRevocationRequest(t, "rp", rpSecret, nil)
+		req.Body = io.NopCloser(strings.NewReader(body))
+		return req
+	}
+
+	t.Run("64 KiB", func(t *testing.T) {
+		t.Parallel()
+		accessToken := accessTokenOf(t, handler, "rp")
+		b := &browser{t: t, handler: handler}
+		wantRevocationOK(t, b.do(request(t, accessToken, 64<<10)))
+		if got := userInfoError(t, userInfo(t, handler, getHeader, accessToken), http.StatusUnauthorized); got != "invalid_token" {
+			t.Errorf("UserInfo with the access token revoked by a request of 64 KiB error = %q, want %q", got, "invalid_token")
+		}
+	})
+	t.Run("a byte more", func(t *testing.T) {
+		t.Parallel()
+		accessToken := accessTokenOf(t, handler, "rp")
+		b := &browser{t: t, handler: handler}
+		if got := revocationErrorCode(t, b.do(request(t, accessToken, 64<<10+1)), http.StatusBadRequest); got != "invalid_request" {
+			t.Errorf("POST %s with a body of 64 KiB and a byte error = %q, want %q", revocationPath, got, "invalid_request")
+		}
+		wantAccepted(t, handler, "after a revocation of 64 KiB and a byte", claimsOf(aliceProfile), []string{accessToken})
+	})
 }

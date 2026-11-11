@@ -881,3 +881,38 @@ func TestLogoutHintSignedByRetiredKey(t *testing.T) {
 		}
 	})
 }
+
+// The confirmation page is shown for the End-User whom the request's
+// Login Session cookie names, or for no one if it names none, and its form
+// carries their Subject, so that confirming counts only for them: so it is
+// for a request by GET, and for a POST that carries the cookie, as one
+// from pulsar's own origin does. Only a POST without the cookie, as from a
+// Client's site, gets a page for whoever is signed in when it is answered
+// (TestLogout). It cites no requirement: no clause in scope says for whom
+// a confirmation counts.
+func TestLogoutPageEndUser(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	type shown struct {
+		SignedIn string
+		EndUser  []string
+	}
+
+	t.Run("GET, signed out", func(t *testing.T) {
+		t.Parallel()
+		b := &browser{t: t, handler: handler}
+		page := parseLogoutPage(t, b.logout(http.MethodGet, url.Values{}))
+		if diff := cmp.Diff(shown{EndUser: []string{""}}, shown{SignedIn: page.signedIn, EndUser: page.hidden["end_user"]}); diff != "" {
+			t.Errorf("logout confirmation page by GET, signed out, mismatch (-want +got):\n%s", diff)
+		}
+	})
+	t.Run("POST with the cookie", func(t *testing.T) {
+		t.Parallel()
+		b, hint := signedInWithHint(t, handler)
+		page := parseLogoutPage(t, b.send(http.MethodPost, logoutPath, url.Values{"id_token_hint": {hint}}))
+		if diff := cmp.Diff(shown{SignedIn: "alice", EndUser: []string{aliceSubject}}, shown{SignedIn: page.signedIn, EndUser: page.hidden["end_user"]}); diff != "" {
+			t.Errorf("logout confirmation page by POST with the cookie mismatch (-want +got):\n%s", diff)
+		}
+	})
+}
