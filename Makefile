@@ -120,12 +120,19 @@ sqlc-check: ## Fail if the generated query code is stale
 
 # The official golang image pins GOTOOLCHAIN=local, so the Dockerfile builds
 # only while its Go release is the one go.mod names; make verify never builds
-# the image, so this keeps the two in step.
+# the image, so this keeps the two in step. tools/go.mod and examples/go.mod
+# name the same release, so that a Go security fix, which moves go.mod, does
+# not leave CI's examples job, which takes its Go from examples/go.mod, on
+# the release it fixes.
 GO_MOD_VERSION := $(shell awk '$$1 == "go" { print $$2 }' go.mod)
 
-dockerfile-check: ## Fail if the Dockerfile's Go release is not the one go.mod names
+dockerfile-check: ## Fail if the Dockerfile or another module names another Go release than go.mod
 	@grep -q '^FROM golang:$(GO_MOD_VERSION)-' Dockerfile \
 		|| { echo "Dockerfile: the golang image must be Go $(GO_MOD_VERSION), the release go.mod names" >&2; exit 1; }
+	@for m in tools/go.mod $(EXAMPLES)/go.mod; do \
+		awk '$$1 == "go" { print $$2 }' $$m | grep -qx '$(GO_MOD_VERSION)' \
+			|| { echo "$$m: the go line must be $(GO_MOD_VERSION), the release go.mod names" >&2; exit 1; }; \
+	done
 
 repocheck: ## Requirement traceability and TODO(#N) form
 	$(GO) run ./internal/cmd/repocheck
