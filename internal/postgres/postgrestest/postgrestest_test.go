@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/palebluedot4/pulsar/internal/postgres"
 	"github.com/palebluedot4/pulsar/internal/postgres/postgrestest"
 )
@@ -108,6 +110,92 @@ func TestUnreachableURL(t *testing.T) {
 	}
 	if port >= 1024 {
 		t.Errorf("UnreachableURL() port = %d, want one below 1024, outside every ephemeral range", port)
+	}
+}
+
+// FailOn makes one kind of statement on one table fail with an error
+// PostgreSQL raises, and leaves every other statement alone.
+func TestFailOn(t *testing.T) {
+	t.Parallel()
+
+	const insert = "INSERT INTO consents (subject, client_id, scopes) VALUES ('s', 'c', '{openid}') ON CONFLICT DO NOTHING"
+	// In this order, so that the row the UPDATE and the DELETE act on is
+	// still there when each runs, and a row trigger fires.
+	statements := []struct{ op, sql string }{
+		{op: "INSERT", sql: insert},
+		{op: "UPDATE", sql: "UPDATE consents SET scopes = '{openid}'"},
+		{op: "DELETE", sql: "DELETE FROM consents"},
+	}
+	for _, failing := range statements {
+		op := failing.op
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.NewDatabase(t)
+			pool := postgrestest.Open(t, databaseURL)
+			if op != "INSERT" {
+				if _, err := pool.Exec(t.Context(), insert); err != nil {
+					t.Fatal(err)
+				}
+			}
+			postgrestest.FailOn(t, databaseURL, op, "consents")
+			for _, s := range statements {
+				_, err := pool.Exec(t.Context(), s.sql)
+				var pgErr *pgconn.PgError
+				switch {
+				case s.op == op && (!errors.As(err, &pgErr) || pgErr.Code != raiseException):
+					t.Errorf("after FailOn(%s, consents): %s error = %v, want SQLSTATE %s", op, s.op, err, raiseException)
+				case s.op != op && err != nil:
+					t.Errorf("after FailOn(%s, consents): %s error = %v, want nil", op, s.op, err)
+				}
+			}
+			if _, err := pool.Exec(t.Context(), "DELETE FROM login_sessions"); err != nil {
+				t.Errorf("after FailOn(%s, consents): DELETE on another table error = %v, want nil", op, err)
+			}
+		})
+	}
+}
+
+// raiseException is the SQLSTATE of an exception PL/pgSQL raises without
+// naming one.
+const raiseException = "P0001"
+
+// lockNotAvailable is the SQLSTATE of a statement that waited for a lock
+// longer than lock_timeout.
+const lockNotAvailable = "55P03"
+
+// Hold keeps a lock that a statement of a pool opened with WithLockTimeout
+// gives up waiting for, until it is released.
+func TestHold(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.NewDatabase(t)
+	pool := postgrestest.Open(t, postgrestest.WithLockTimeout(t, databaseURL))
+	const query = "SELECT count(*) FROM consents"
+	release := postgrestest.Hold(t, databaseURL, "LOCK TABLE consents IN ACCESS EXCLUSIVE MODE")
+	var n int
+	err := pool.QueryRow(t.Context(), query).Scan(&n)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != lockNotAvailable {
+		t.Errorf("%s while the lock is held: error = %v, want SQLSTATE %s", query, err, lockNotAvailable)
+	}
+	release()
+	if err := pool.QueryRow(t.Context(), query).Scan(&n); err != nil {
+		t.Errorf("%s once the lock is released: error = %v, want nil", query, err)
+	}
+}
+
+// A statement that Hold cannot run fails the test, rather than leaving it
+// to go on without the lock.
+func TestHoldFailsOnBadStatement(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(childEnv) == "1" {
+		postgrestest.Hold(t, postgrestest.NewDatabase(t), "LOCK TABLE no_such_table")
+		return
+	}
+	out, err := runChild(t, "TestHoldFailsOnBadStatement", os.Getenv("PULSAR_TEST_DATABASE_URL"))
+	if err == nil || !strings.Contains(string(out), "--- FAIL") {
+		t.Errorf("Hold() with a table that does not exist: test error = %v, want it to fail:\n%s", err, out)
 	}
 }
 

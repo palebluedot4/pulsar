@@ -11,6 +11,29 @@
 // database or a stale template. Each test's database is dropped when the
 // test ends; templates are kept for the next run (docs/harness.md says how
 // to drop them).
+//
+// # Making a statement fail
+//
+// A test of how pulsar handles a failure of PostgreSQL makes PostgreSQL
+// itself fail, at the step under test, in the test's own database; it
+// mocks nothing. Statements that ran before that step, and those of other
+// tests, succeed.
+//
+//   - [FailOn] makes every INSERT, UPDATE or DELETE on one table fail, by a
+//     trigger that raises an exception (SQLSTATE P0001). The failure is
+//     immediate. An INSERT ... ON CONFLICT DO UPDATE fails under INSERT.
+//   - [Hold] holds a lock, taken by a LOCK TABLE or SELECT ... FOR UPDATE
+//     statement, on a connection of its own; a pool opened on the URL that
+//     [WithLockTimeout] returns gives up waiting for it (SQLSTATE 55P03).
+//     It is for reads, which no trigger fires on. Which statements wait is
+//     PostgreSQL's table of conflicting lock modes: ACCESS EXCLUSIVE stops
+//     a plain SELECT, and a row lock FOR UPDATE stops a SELECT ... FOR
+//     UPDATE or FOR NO KEY UPDATE of that row.
+//
+// PostgreSQL aborts a transaction at its first error: every later
+// statement fails, and COMMIT rolls back. So code that ignores the error
+// of a statement inside a transaction still fails when it commits, which a
+// test of that statement's failure shows.
 package postgrestest
 
 import (
@@ -23,6 +46,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -126,6 +150,89 @@ func UnreachableURL(tb testing.TB) string {
 	return "postgres://pulsar@127.0.0.1:1/pulsar?sslmode=disable&connect_timeout=1"
 }
 
+// failFunction is the trigger function FailOn installs: it raises an
+// exception that names the statement and the table.
+const failFunction = `CREATE OR REPLACE FUNCTION postgrestest_fail() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+	RAISE EXCEPTION 'postgrestest: % on % fails', TG_OP, TG_TABLE_NAME;
+END
+$$`
+
+// FailOn makes every statement of kind op, "INSERT", "UPDATE" or "DELETE",
+// on table in the database at databaseURL fail from now until the test
+// ends, with an exception that a trigger raises before the row changes.
+// Other statements on table, and statements on other tables, are not
+// affected.
+func FailOn(tb testing.TB, databaseURL, op, table string) {
+	tb.Helper()
+	switch op {
+	case "INSERT", "UPDATE", "DELETE":
+	default:
+		tb.Fatalf("postgrestest: FailOn(%q): op must be INSERT, UPDATE or DELETE", op)
+	}
+	ctx, cancel := context.WithTimeout(tb.Context(), setupTimeout)
+	defer cancel()
+	trigger := "postgrestest_fail_" + strings.ToLower(op)
+	err := execOn(ctx, databaseURL,
+		failFunction,
+		"CREATE TRIGGER "+ident(trigger)+" BEFORE "+op+" ON "+ident(table)+" FOR EACH ROW EXECUTE FUNCTION postgrestest_fail()",
+	)
+	if err != nil {
+		tb.Fatalf("postgrestest: FailOn(%s, %s): %v", op, table, err)
+	}
+}
+
+// lockTimeout is how long a pool opened on the URL WithLockTimeout returns
+// waits for a lock: long enough for any lock not held by Hold, which in a
+// test's own database is held only for a statement, and short enough to
+// keep a test that waits for one quick.
+const lockTimeout = 200 * time.Millisecond
+
+// WithLockTimeout returns databaseURL with lock_timeout set, so that each
+// statement of a pool opened on it gives up waiting for a lock that [Hold]
+// holds, and fails, rather than waiting until Hold releases it.
+func WithLockTimeout(tb testing.TB, databaseURL string) string {
+	tb.Helper()
+	u, err := url.Parse(databaseURL)
+	if err != nil {
+		tb.Fatalf("postgrestest: parse database URL: %v", err)
+	}
+	q := u.Query()
+	// pgx sends a parameter it does not know itself to PostgreSQL as a run-time parameter when it connects.
+	q.Set("lock_timeout", fmt.Sprintf("%dms", lockTimeout.Milliseconds()))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// Hold runs statement, which takes a lock, in a transaction on a
+// connection of its own to the database at databaseURL, and holds the lock
+// until release is called or the test ends.
+func Hold(tb testing.TB, databaseURL, statement string) (release func()) {
+	tb.Helper()
+	ctx := context.WithoutCancel(tb.Context())
+	setup, cancel := context.WithTimeout(ctx, setupTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(setup, databaseURL)
+	if err != nil {
+		tb.Fatalf("postgrestest: Hold: connect: %v", err)
+	}
+	tx, err := conn.Begin(setup)
+	if err == nil {
+		_, err = tx.Exec(setup, statement)
+	}
+	if err != nil {
+		_ = conn.Close(ctx) // The lock was not taken; there is nothing to keep.
+		tb.Fatalf("postgrestest: Hold(%q): %v", statement, err)
+	}
+	release = sync.OnceFunc(func() {
+		// Closing the connection ends the transaction, and its locks with it.
+		_ = conn.Close(ctx)
+	})
+	tb.Cleanup(release)
+	return release
+}
+
 func serverURL(tb testing.TB) *url.URL {
 	tb.Helper()
 	raw := os.Getenv(envURL)
@@ -166,14 +273,23 @@ func withServer(ctx context.Context, server *url.URL, f func(*pgx.Conn) error) e
 
 // exec runs each statement in turn on a new connection to server.
 func exec(ctx context.Context, server *url.URL, statements ...string) error {
-	return withServer(ctx, server, func(conn *pgx.Conn) error {
-		for _, sql := range statements {
-			if _, err := conn.Exec(ctx, sql); err != nil {
-				return err
-			}
+	return execOn(ctx, server.String(), statements...)
+}
+
+// execOn runs each statement in turn on a new connection to the database
+// at databaseURL.
+func execOn(ctx context.Context, databaseURL string, statements ...string) error {
+	conn, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx) //nolint:errcheck // Closing after use; a failure loses nothing.
+	for _, sql := range statements {
+		if _, err := conn.Exec(ctx, sql); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // create clones tmpl into a new database, dropped when the test ends, and
