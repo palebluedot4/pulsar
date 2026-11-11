@@ -4,15 +4,17 @@ Surveyed 2026-11-04. Sources are weighted Anthropic and OpenAI first, then
 Google, then AWS, with IETF/OpenID specifications governing the product itself.
 Anything not confirmed against a primary source is marked **UNVERIFIED**.
 Five claims were corrected on 2026-11-09, after `docs/research/evals.md`
-rechecked them against their sources.
+rechecked them against their sources, and more on 2026-11-11, listed under
+"Corrected 2026-11-11" at the end.
 
 ## The one-line consensus
 
 The field now judges AI-assisted engineering by two questions: can you prove
 the agent's output is correct, and can you prove your harness is what made it
 correct? A large set of controls with no evidence that any of them helps is
-read as "harness theater" — Canva's interview guide calls the pattern an
-"AI Showcase" red flag.
+read as "harness theater". Canva's interview guide lists a near relative,
+"AI Showcase" (a candidate who demonstrates the tool and loses sight of the
+task), among "Common approaches that don't shine".
 
 ## Consensus practices, strongest first
 
@@ -34,8 +36,13 @@ read as "harness theater" — Canva's interview guide calls the pattern an
    - DORA 2025: AI amplifies what a team already has; "working in small
      batches" is one of the seven AI capabilities.
      <https://research.google/pubs/dora-2025-state-of-ai-assisted-software-development-report/>
-   - Addy Osmani, "Own the Outer Loop", 2026-07-15. Notes that auth and
-     security work needs closer supervision of agents.
+   - Addy Osmani, "AI writes code faster. Your job is still to prove it
+     works.", 2026-01-07: "If code touches auth, payments, secrets, or
+     untrusted input", require "a human threat model review plus a security
+     tool pass before merge". <https://addyosmani.com/blog/code-review-ai/>
+     His "Own the Outer Loop" (2026-07-15) goes further than this item:
+     agents may "choose, route, merge, and escalate safely inside a policy",
+     while a person owns the consequences.
      <https://addyosmani.com/blog/own-the-outer-loop/>
 3. **Enforce invariants mechanically; use prose only for guidance.**
    - Anthropic separates deterministic controls (hooks, deny rules, CI) from
@@ -67,8 +74,12 @@ read as "harness theater" — Canva's interview guide calls the pattern an
    - Anthropic, "Beyond permission prompts", 2025-10-20: sandboxing cut
      permission prompts by 84%.
      <https://www.anthropic.com/engineering/claude-code-sandboxing>
-   - Aikido "PromptPwnd" (Dec 2025): AI agents in GitHub Actions leaking
-     secrets through prompt injection.
+   - Aikido "PromptPwnd" (2025-12-04): prompt injection through issue and
+     pull request text into AI agents in CI. Gemini CLI's action leaked
+     secrets; for Claude Code's action, Aikido calls leaking a privileged
+     `GITHUB_TOKEN` "_almost_ always possible" only where untrusted users can
+     trigger it (`allowed_non_write_users: "*"`), which the default forbids.
+     <https://www.aikido.dev/blog/promptpwnd-github-actions-ai-agents>
 7. **Structure long runs.** Initializer session; a feature list that starts
    all-failing where the agent may change only the `passes` field; one feature
    per session; a progress file; a clean commit at the end. Editing or removing
@@ -86,13 +97,20 @@ read as "harness theater" — Canva's interview guide calls the pattern an
      (2026-02-05). <https://www.anthropic.com/engineering/infrastructure-noise>
      Pin models and repeat runs.
 9. **Feedback flywheel.** Every repeated agent mistake becomes a harness
-   change (Hashimoto; Böckeler; Radar "Feedback flywheel", _Assess_).
+   change, and rules that no longer earn their place are removed
+   (Hashimoto; Böckeler; Radar "Feedback flywheel", _Assess_ in April 2026,
+   _Trial_ in Vol. 35: "The flywheel needs to remove as well as add.").
+   <https://www.thoughtworks.com/radar/techniques/feedback-flywheel>
 10. **Check the quality of AI-written tests.** Böckeler rates behavior
-    harnesses the weakest category; Radar puts mutation testing in _Trial_;
-    Kent Beck (June 2025) reports agents deleting tests to make them "pass";
+    harnesses the weakest category; Radar puts mutation testing in _Adopt_
+    (Vol. 35; _Trial_ in April 2026); Kent Beck (2025-06-25) names as a
+    warning sign "the genie was cheating, for example by disabling or
+    deleting tests"
+    (<https://newsletter.kentbeck.com/p/augmented-coding-beyond-the-vibes>);
     agentic property-based testing found real NumPy bugs (arXiv 2510.09907).
 11. **Parallelize only truly independent work, each agent in its own
-    checkout.** Radar puts "coding agent swarms" in _Caution_.
+    checkout.** Radar put "coding agent swarms" in _Caution_ in April 2026;
+    Vol. 35 does not repeat the blip.
 12. **Agents in CI and on schedules, with budgets** (claude-code-action,
     OpenAI's recurring cleanup agents).
 13. **Track cost and telemetry** — supporting evidence, not a headline.
@@ -224,7 +242,14 @@ identities.
   a session's first message); others do not. `enabledPlugins` cannot pin a
   version; a marketplace entry can pin `sha`. `code-review` sets
   `"version": "1.0.1"` in its manifest since 2026-10-26; `mattpocock-skills`
-  is pinned by SHA in the catalog. `DISABLE_AUTOUPDATER` / `DISABLE_UPDATES` freeze updates.
+  is pinned by SHA in the catalog. `DISABLE_AUTOUPDATER`, `DISABLE_UPDATES`
+  and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turn off the background
+  update pass unless `FORCE_AUTOUPDATE_PLUGINS=1` is set. They do not freeze
+  every update: `claude plugin install name@marketplace` refreshes that
+  marketplace first, and that refresh "doesn't depend on the marketplace's
+  auto-update setting or on `DISABLE_AUTOUPDATER`"; it is skipped under
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, or within 30 seconds of the
+  last refresh.
   <https://code.claude.com/docs/en/plugins/loading.md>
 - Consequence for evals: record the Claude Code version, model IDs and plugin
   SHAs with every result, and freeze updates while running a comparison.
@@ -325,8 +350,9 @@ lightest) and team rituals versus a single developer orchestrating agents.
 - Heavy spec-driven development: Böckeler warns "spec-as-source" combines
   model-driven rigidity with LLM non-determinism (2025-10-15); Spec Kit and
   OpenSpec are only _Assess_ on the Radar.
-- Ralph loops (_Assess_; its author recommends greenfield only), agent swarms
-  and "dark factory" autonomy (_Caution_).
+- Ralph loops (_Assess_; its author recommends greenfield only) and coding
+  agent swarms (_Caution_, April 2026). "Dark factory" autonomy is not a
+  Radar blip; no Vol. 35 technique carries the name.
 - Throughput as a productivity measure (_Caution_). METR (2026-02-24) calls
   the data from its new experiment, started in August 2025, "an unreliable
   signal" of AI tools' current productivity effect, because of selection
@@ -357,8 +383,10 @@ marketplace", not "the most endorsed".
 ## Hiring signals
 
 - Canva AI interview guide (2025-10-20): scores problem-solving, technical
-  depth and ownership, and AI collaboration; red flags "AI Showcase", "Feature
-  Marathon", "Hands-Off". <https://www.canva.dev/blog/engineering/ai-interview-success/>
+  depth and ownership, and AI collaboration; under "Common approaches that
+  don't shine" it lists "AI Showcase", "Feature Marathon" and "Hands-Off".
+  The guide does not use the words "red flag".
+  <https://www.canva.dev/blog/engineering/ai-interview-success/>
 - Karat rubric (2026): "AI Proficiency" means recognizing wrong AI output,
   testing it and adapting it.
   <https://karat.com/resource/human-ai-technical-interview-rubrics/>
@@ -419,7 +447,9 @@ author's), then checked against primary sources.
   lets Go tools reach macOS's TLS trust service when traffic passes through a
   MITM proxy with a custom CA, and "reduces security by opening a potential
   data exfiltration path". A marketplace's `autoUpdate` decides for that
-  marketplace, but `DISABLE_AUTOUPDATER=1` still switches every update off.
+  marketplace whether the background pass updates it, and
+  `DISABLE_AUTOUPDATER=1` switches that pass off, not the refresh before an
+  install (see "Plugins: declaration and updates" above).
   <https://code.claude.com/docs/en/settings-reference>
 - **GitHub Copilot cloud agent** opens pull requests under its own app
   identity, pushes only to `copilot/` branches, and "prevents the user who
@@ -438,6 +468,32 @@ author's), then checked against primary sources.
   `Generated-by:` or `Co-authored-by:`. The Linux kernel decided at its
   2026-10-08 Maintainers Summit to remove its `Assisted-by:` requirement.
   <https://lwn.net/Articles/1099594/>
+
+## Corrected 2026-11-11
+
+Rechecked against the sources by a session that had not written them, in
+the same model; every source below was read again on 2026-11-11.
+
+- **Osmani.** The auth and security point was cited to "Own the Outer
+  Loop", which mentions neither; it is from "AI writes code faster. Your
+  job is still to prove it works." (2026-01-07).
+- **Canva.** The guide never says "red flag"; the three approaches sit under
+  "Common approaches that don't shine".
+- **Radar rings.** Feedback flywheel and mutation testing were given their
+  April 2026 rings, _Assess_ and _Trial_, though Vol. 35 (2026-11-04), cited
+  further down this file, has them in _Trial_ and _Adopt_.
+- **Kent Beck.** Agents deleting tests to make them "pass" is Gergely
+  Orosz's summary (Pragmatic Engineer, 2025-06-11), not Beck's words; his
+  own are now quoted.
+- **"Dark factory".** It was listed as a Radar _Caution_ blip; the Radar has
+  no blip by that name.
+- **Update variables, twice.** "`DISABLE_AUTOUPDATER` / `DISABLE_UPDATES`
+  freeze updates" and "`DISABLE_AUTOUPDATER=1` still switches every update
+  off": the plugin loading page documents that the refresh before an
+  install depends on neither `autoUpdate` nor `DISABLE_AUTOUPDATER`, as
+  #92 observed.
+- **PromptPwnd.** The condition under which Claude Code's action is
+  exposed was missing.
 
 ## Still unverified
 
