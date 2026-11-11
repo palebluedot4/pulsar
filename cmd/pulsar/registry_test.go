@@ -169,9 +169,10 @@ func TestRunRefusesRegistry(t *testing.T) {
 	// process-wide source forbids.
 	ecKey, errEC := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	p384Key, errP384 := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	rsa1024Key, errRSA := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // G403: a key too small, for the registry to refuse.
+	rsa1024Key, errRSA := rsa.GenerateKey(rand.Reader, 1024)     //nolint:gosec // G403: a key too small, for the registry to refuse.
+	rsa2047Key, errRSA2047 := rsa.GenerateKey(rand.Reader, 2047) //nolint:gosec // G403: a key one bit short of 2048, for the registry to refuse.
 	edKey, _, errEd := ed25519.GenerateKey(rand.Reader)
-	if err := errors.Join(errEC, errP384, errRSA, errEd); err != nil {
+	if err := errors.Join(errEC, errP384, errRSA, errRSA2047, errEd); err != nil {
 		t.Fatal(err)
 	}
 	publicJWKS := jwks(t, &ecKey.PublicKey)
@@ -227,7 +228,7 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "secret hash not Argon2id", registry: registryJSON(t, []entry{with(secretClient(), "client_secret_hash", "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy")}, nil), problem: "client_secret_hash"},
 		{name: "private_key_jwt client without JWKS", registry: registryJSON(t, []entry{with(jwtClient, "jwks", nil)}, nil), problem: "jwks"},
 		{name: "private_key_jwt client with empty JWKS", registry: registryJSON(t, []entry{with(jwtClient, "jwks", map[string]any{"keys": []any{}})}, nil), problem: "jwks"},
-		{name: "private_key_jwt client with private key", registry: registryJSON(t, []entry{with(jwtClient, "jwks", privateJWKS)}, nil), problem: "jwks"},
+		{name: "private_key_jwt client with private key", registry: registryJSON(t, []entry{with(jwtClient, "jwks", privateJWKS)}, nil), problem: "not a valid public key"},
 		{name: "private_key_jwt client with secret hash", registry: registryJSON(t, []entry{with(jwtClient, "client_secret_hash", testHash)}, nil), problem: "client_secret_hash"},
 		{name: "private_key_jwt key without alg", registry: withKey(&ecKey.PublicKey, "", "sig"), problem: "alg is required"},
 		{name: "private_key_jwt key for ES384", registry: withKey(&p384Key.PublicKey, "ES384", "sig"), problem: "alg \"ES384\""},
@@ -237,6 +238,7 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "private_key_jwt EC key for RS256", registry: withKey(&ecKey.PublicKey, "RS256", "sig"), problem: "RSA key"},
 		{name: "private_key_jwt P-384 key for ES256", registry: withKey(&p384Key.PublicKey, "ES256", "sig"), problem: "P-256 key"},
 		{name: "private_key_jwt 1024-bit RSA key", registry: withKey(&rsa1024Key.PublicKey, "PS256", "sig"), problem: "at least 2048 bits"},
+		{name: "private_key_jwt 2047-bit RSA key", registry: withKey(&rsa2047Key.PublicKey, "PS256", "sig"), problem: "at least 2048 bits"},
 		{name: "public client with secret hash", registry: registryJSON(t, []entry{with(publicClient, "client_secret_hash", testHash)}, nil), problem: "client_secret_hash"},
 		{name: "public client with JWKS", registry: registryJSON(t, []entry{with(publicClient, "jwks", publicJWKS)}, nil), problem: "jwks"},
 		{name: "client without redirect URIs", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", nil)}, nil), problem: "redirect_uris"},
@@ -247,7 +249,11 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "redirect URI not a URI", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example:port/"})}, nil), problem: "redirect_uris"},
 		{name: "redirect URI with a space", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example/a b"})}, nil), problem: "redirect_uris"},
 		{name: "redirect URI with angle brackets", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example/<x>"})}, nil), problem: "redirect_uris"},
+		{name: "redirect URI starting with an angle bracket", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"<https://rp.example/callback>"})}, nil), problem: "RFC 3986 does not allow"},
+		{name: "redirect URI with braces", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example/{x}"})}, nil), problem: "RFC 3986 does not allow"},
+		{name: "redirect URI with a caret", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https://rp.example/a^b"})}, nil), problem: "RFC 3986 does not allow"},
 		{name: "https redirect URI without host", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"https:///callback"})}, nil), problem: "redirect_uris"},
+		{name: "http redirect URI without host", registry: registryJSON(t, []entry{with(secretClient(), "redirect_uris", []string{"http:///callback"})}, nil), problem: "no host"},
 		{name: "relative post-logout redirect URI", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"/signed-out"})}, nil), problem: "post_logout_redirect_uris[0]"},
 		{name: "post-logout redirect URI with fragment", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https://rp.example/signed-out#top"})}, nil), problem: "post_logout_redirect_uris[0]"},
 		{name: "post-logout redirect URI not a URI", registry: registryJSON(t, []entry{with(secretClient(), "post_logout_redirect_uris", []string{"https://rp.example/a b"})}, nil), problem: "post_logout_redirect_uris[0]"},
@@ -259,6 +265,9 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "Subject in uppercase", registry: registryJSON(t, nil, []entry{with(alice, "sub", "7C9E6679-7425-40DE-944B-E07FC1F90AE7")}), problem: "sub"},
 		{name: "Subject in braces", registry: registryJSON(t, nil, []entry{with(alice, "sub", "{7c9e6679-7425-40de-944b-e07fc1f90ae7}")}), problem: "sub"},
 		{name: "Subject without hyphens", registry: registryJSON(t, nil, []entry{with(alice, "sub", "7c9e6679742540de944be07fc1f90ae7")}), problem: "sub"},
+		{name: "Subject with another character for a hyphen", registry: registryJSON(t, nil, []entry{with(alice, "sub", "7c9e6679_7425-40de-944b-e07fc1f90ae7")}), problem: "sub"},
+		{name: "Subject with a character below 0", registry: registryJSON(t, nil, []entry{with(alice, "sub", "7c9e667/-7425-40de-944b-e07fc1f90ae7")}), problem: "sub"},
+		{name: "Subject with a letter after f", registry: registryJSON(t, nil, []entry{with(alice, "sub", "7c9e667g-7425-40de-944b-e07fc1f90ae7")}), problem: "sub"},
 		{name: "duplicate Subject", registry: registryJSON(t, nil, []entry{alice, with(bob, "sub", alice["sub"])}), problem: "is not unique"},
 		{name: "End-User without username", registry: registryJSON(t, nil, []entry{with(alice, "username", nil)}), problem: "username is required"},
 		{name: "duplicate username", registry: registryJSON(t, nil, []entry{alice, with(bob, "username", "alice")}), problem: "username \"alice\" is not unique"},
@@ -298,13 +307,15 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "scope with a space", registry: withScope(entry{"scope": "orders read", "description": "read your orders"}), problem: "RFC 6749"},
 		{name: "scope with a quotation mark", registry: withScope(entry{"scope": `orders"read`, "description": "read your orders"}), problem: "RFC 6749"},
 		{name: "scope with a backslash", registry: withScope(entry{"scope": `orders\read`, "description": "read your orders"}), problem: "RFC 6749"},
+		{name: "scope starting with a quotation mark", registry: withScope(entry{"scope": `"orders`, "description": "read your orders"}), problem: "RFC 6749"},
+		{name: "scope with a character after the tilde", registry: withScope(entry{"scope": "orders\u007f", "description": "read your orders"}), problem: "RFC 6749"},
 		{name: "scope openid", registry: withScope(entry{"scope": "openid", "description": "x"}), problem: "OpenID Connect"},
 		{name: "scope profile", registry: withScope(entry{"scope": "profile", "description": "x"}), problem: "OpenID Connect"},
 		{name: "scope email", registry: withScope(entry{"scope": "email", "description": "x"}), problem: "OpenID Connect"},
 		{name: "scope address", registry: withScope(entry{"scope": "address", "description": "x"}), problem: "OpenID Connect"},
 		{name: "scope phone", registry: withScope(entry{"scope": "phone", "description": "x"}), problem: "OpenID Connect"},
 		{name: "scope offline_access", registry: withScope(entry{"scope": "offline_access", "description": "x"}), problem: "OpenID Connect"},
-		{name: "scope listed twice", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", []entry{{"scope": "orders:read", "description": "a"}, {"scope": "orders:read", "description": "b"}})}, nil), problem: "scopes[1]"},
+		{name: "scope listed twice", registry: registryWithResourceServers(t, []entry{with(ordersServer(), "scopes", []entry{{"scope": "orders:read", "description": "a"}, {"scope": "orders:read", "description": "b"}})}, nil), problem: `scopes[1]: scope "orders:read" is listed twice`},
 		{name: "scope of another Resource Server", registry: registryWithResourceServers(t, []entry{ordersServer(), with(billingServer, "scopes", []entry{{"scope": "orders:read", "description": "x"}})}, nil), problem: "https://api.example/orders"},
 		{name: "client naming an unknown Resource Server", registry: permitting("https://api.example/billing"), problem: "resource_servers[0]"},
 		{name: "client naming a Resource Server twice", registry: permitting("https://api.example/orders", "https://api.example/orders"), problem: "resource_servers[1]"},
@@ -332,6 +343,7 @@ func TestRunRefusesRegistry(t *testing.T) {
 		{name: "machine client with scopes separated by two spaces", registry: withMachine("scope", "orders:read  orders:read"), problem: "single spaces"},
 		{name: "machine client with a leading space", registry: withMachine("scope", " orders:read"), problem: "single spaces"},
 		{name: "machine client with a scope that is not a scope-token", registry: withMachine("scope", `orders"read`), problem: "RFC 6749"},
+		{name: "machine client with a scope starting outside scope-token", registry: withMachine("scope", `"orders:read`), problem: "RFC 6749"},
 		{name: "machine client without Resource Servers", registry: withMachine("resource_servers", nil), problem: `"orders:read"`},
 	}
 	for _, tt := range tests {
@@ -409,7 +421,10 @@ func TestRunAcceptsRegistry(t *testing.T) {
 				{"scope": "billing:read", "description": "read your invoices"},
 				{"scope": "https://api.example/billing.write", "description": "pay your invoices"},
 			}},
-			{"identifier": "https://api.example/reports?tenant=a", "scopes": []entry{{"scope": "reports", "description": "read your reports"}}},
+			{"identifier": "https://api.example/reports?tenant=a", "scopes": []entry{
+				{"scope": "reports", "description": "read your reports"},
+				{"scope": "!reports~", "description": "read every report"},
+			}},
 			{"identifier": loopbackIssuer + "/", "scopes": []entry{{"scope": "local", "description": "use the local service"}}},
 		},
 		"clients": []entry{
@@ -421,13 +436,14 @@ func TestRunAcceptsRegistry(t *testing.T) {
 				"https://rp.example/callback?tenant=a",
 				"com.example.app:/oauth2redirect",
 				"http://127.0.0.1:8080/callback",
+				"https://rp.example/Zz9",
 			}), "post_logout_redirect_uris", []string{
 				"https://rp.example/signed-out?tenant=a",
 				"com.example.app:/signed-out",
 			}),
 			with(with(secretClient(), "client_id", "listed"), "grant_types", []string{"refresh_token", "authorization_code"}),
 			with(with(machineClient(), "resource_servers", []string{"https://api.example/orders", "urn:example:billing"}), "scope", "orders:read https://api.example/billing.write"),
-			with(with(with(with(machineClient(), "client_id", "7c9e6679742540de944be07fc1f90ae7"), "client_secret_hash", nil), "token_endpoint_auth_method", "private_key_jwt"), "jwks", jwks(t, &ecKey.PublicKey)),
+			with(with(with(with(machineClient(), "client_id", "7c9e6679742540de944be07fc1f90ae7"), "client_secret_hash", nil), "token_endpoint_auth_method", "private_key_jwt"), "jwks", jwksFor(t, &ecKey.PublicKey, "ES256", "")),
 		},
 		"end_users": []entry{
 			with(endUser(), "claims", map[string]any{
