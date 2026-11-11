@@ -47,3 +47,52 @@ func TestNewClientSecret(t *testing.T) { //nolint:paralleltest // cryptotest.Set
 		t.Errorf("parsePasswordHash(NewClientSecret() hash) mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// parsePasswordHash accepts a hash at each limit RFC 9106 §3.1 sets on the
+// inputs a PHC string carries, m of at least 8p KiB, a salt of at least 8
+// bytes and a tag of at least 4, and at pulsar's own, m of at most 2 GiB,
+// t and m that fit in 32 bits and p in 8, as x/crypto/argon2 takes them;
+// and refuses one past each. It cites no requirement: RFC 9106 is not among
+// the specifications in scope.
+func TestParsePasswordHashLimits(t *testing.T) {
+	t.Parallel()
+
+	b64 := func(n int) string { return base64.RawStdEncoding.EncodeToString(make([]byte, n)) }
+	phc := func(params string, salt, key int) string {
+		return "$argon2id$v=19$" + params + "$" + b64(salt) + "$" + b64(key)
+	}
+	tests := []struct {
+		name string
+		hash string
+		ok   bool
+	}{
+		{name: "m of 8p", hash: phc("m=8,t=1,p=1", 16, 32), ok: true},
+		{name: "m of 8p for p of 2", hash: phc("m=16,t=1,p=2", 16, 32), ok: true},
+		{name: "m below 8p for p of 2", hash: phc("m=15,t=1,p=2", 16, 32)},
+		{name: "m of 2 GiB", hash: phc("m=2097152,t=1,p=1", 16, 32), ok: true},
+		{name: "m above 2 GiB", hash: phc("m=2097153,t=1,p=1", 16, 32)},
+		{name: "t of 2^32-1", hash: phc("m=8,t=4294967295,p=1", 16, 32), ok: true},
+		{name: "t of 2^32", hash: phc("m=8,t=4294967296,p=1", 16, 32)},
+		{name: "p of 255", hash: phc("m=2040,t=1,p=255", 16, 32), ok: true},
+		{name: "p of 256", hash: phc("m=2048,t=1,p=256", 16, 32)},
+		{name: "salt of 8 bytes", hash: phc("m=8,t=1,p=1", 8, 32), ok: true},
+		{name: "salt of 7 bytes", hash: phc("m=8,t=1,p=1", 7, 32)},
+		{name: "tag of 4 bytes", hash: phc("m=8,t=1,p=1", 16, 4), ok: true},
+		{name: "tag of 3 bytes", hash: phc("m=8,t=1,p=1", 16, 3)},
+		{name: "tag with a character outside base64", hash: phc("m=8,t=1,p=1", 16, 32) + "!"},
+		{name: "parameters without names", hash: phc("8,1,1", 16, 32)},
+		{name: "text before the first $", hash: "x" + phc("m=8,t=1,p=1", 16, 32)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parsePasswordHash(tt.hash)
+			switch {
+			case tt.ok && err != nil:
+				t.Errorf("parsePasswordHash(%q) error = %v, want nil", tt.hash, err)
+			case !tt.ok && err == nil:
+				t.Errorf("parsePasswordHash(%q) error = nil, want an error", tt.hash)
+			}
+		})
+	}
+}

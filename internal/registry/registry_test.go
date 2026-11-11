@@ -178,7 +178,10 @@ func TestCommittedRegistries(t *testing.T) {
 }
 
 // REQ-NATIVE-1: a public Client's loopback IP redirect URI is allowed with
-// any port, and a confidential Client's only exactly as registered.
+// any port, and a confidential Client's only exactly as registered. A
+// loopback IP redirect URI is one §7.3 describes: http, and a loopback
+// address with no zone; any other public Client's redirect URI is allowed
+// only exactly as registered.
 func TestAllowsRedirectURI(t *testing.T) {
 	t.Parallel()
 
@@ -186,7 +189,13 @@ func TestAllowsRedirectURI(t *testing.T) {
 	reg, err := registry.Parse([]byte(`{"clients": [
 		{"client_id": "native", "token_endpoint_auth_method": "none", "redirect_uris": ["http://127.0.0.1/callback"]},
 		{"client_id": "confidential", "token_endpoint_auth_method": "client_secret_basic", "client_secret_hash": "` + hash + `",
-		 "redirect_uris": ["http://127.0.0.1:3000/callback"]}
+		 "redirect_uris": ["http://127.0.0.1:3000/callback"]},
+		{"client_id": "no-path", "token_endpoint_auth_method": "none", "redirect_uris": ["http://127.0.0.1:3000"]},
+		{"client_id": "ipv6", "token_endpoint_auth_method": "none", "redirect_uris": ["http://[::1]:3000/callback"]},
+		{"client_id": "https", "token_endpoint_auth_method": "none", "redirect_uris": ["https://127.0.0.1:3000/callback"]},
+		{"client_id": "lan", "token_endpoint_auth_method": "none", "redirect_uris": ["http://192.0.2.1:3000/callback"]},
+		{"client_id": "localhost", "token_endpoint_auth_method": "none", "redirect_uris": ["http://localhost:3000/callback"]},
+		{"client_id": "zone", "token_endpoint_auth_method": "none", "redirect_uris": ["http://[::1%25lo0]:3000/callback"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
@@ -201,6 +210,12 @@ func TestAllowsRedirectURI(t *testing.T) {
 		{clientID: "confidential", requested: "http://127.0.0.1:3000/callback", want: true},
 		{clientID: "confidential", requested: "http://127.0.0.1:49152/callback", want: false},
 		{clientID: "confidential", requested: "http://127.0.0.1/callback", want: false},
+		{clientID: "no-path", requested: "http://127.0.0.1:49152", want: true},
+		{clientID: "ipv6", requested: "http://[::1]:49152/callback", want: true},
+		{clientID: "https", requested: "https://127.0.0.1:49152/callback", want: false},
+		{clientID: "lan", requested: "http://192.0.2.1:49152/callback", want: false},
+		{clientID: "localhost", requested: "http://localhost:49152/callback", want: false},
+		{clientID: "zone", requested: "http://[::1%25lo0]:49152/callback", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.clientID+" "+tt.requested, func(t *testing.T) {
