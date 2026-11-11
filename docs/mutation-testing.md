@@ -128,7 +128,10 @@ full database.
     mutate.
   - **Database or I/O failure**: it removes the handling of a failure of
     PostgreSQL, of saving a session, or of writing a page. A test would
-    have to make PostgreSQL fail at that step, without a mock (#100).
+    have to make PostgreSQL fail at that step, without a mock. #100 gave
+    tests the means, which `internal/postgres/postgrestest` describes, and
+    put each such mutant in one of the classes above (below, "Failures of
+    PostgreSQL").
 - Scores compare only at the same go-mutesting commit and with the same
   exec script, which each run below records.
 
@@ -285,7 +288,7 @@ Log or capacity only:
 - `internal/registry/registry.go`: 479, 479, 479, 480, 480
 - `internal/signing/signing.go`: 193, 193, 194
 
-Database or I/O failure (#100):
+Database or I/O failure, classed again below:
 
 - `internal/oidc/authorize.go`: 217, 218, 225, 226, 303, 303, 318, 318, 346,
   347
@@ -296,6 +299,78 @@ Database or I/O failure (#100):
   752, 761, 786, 789, 828
 - `internal/oidc/userinfo.go`: 263, 267
 - `internal/signing/signing.go`: 176, 227, 372, 394, 397, 403, 445
+
+#### Failures of PostgreSQL (#100)
+
+#100 classed these 48 again once a test could make PostgreSQL fail at one
+step of a request: a trigger that raises on a write, or a lock held past
+`lock_timeout` for a read, as `internal/postgres/postgrestest` describes.
+The tests are in `internal/server/database_failure_test.go`, with
+`TestLoadDatabaseFailure` and `TestRotateDatabaseFailure` in
+`internal/signing`. Each of the 48 was then run again by hand against
+them, and against `TestUserInfoServerError`,
+`TestConsentDecisionAfterFailure` and `TestRotateRefuses`: each classed as
+needing a test was killed, and each of the others lived.
+
+PostgreSQL aborts a transaction at its first error: every later statement
+fails, and COMMIT rolls back. A mutant that ignores the error of a
+statement inside a transaction therefore fails at the next statement or at
+the commit, and the request gets the response it would have.
+
+| Class                    | `internal/oidc` | `internal/signing` |
+| ------------------------ | --------------: | -----------------: |
+| Needs a test, now tested |              25 |                  4 |
+| Equivalent               |               8 |                  3 |
+| Cannot fail              |               8 |                  0 |
+
+Needs a test, now tested, with what the mutant answered instead:
+
+- `internal/oidc/authorize.go`: 217, 218, Login Session not read: a panic,
+  or an empty page; 225, 226, Login Session not saved: the code all the
+  same, or an empty page; 303, 303, Consent not stored: the code without
+  it, or an empty page; 318, 318, Consent not read: the consent page, or
+  an empty page
+- `internal/oidc/logout.go`: 80, 80, 145, 145, Login Session not read: a
+  panic, or an empty page; 103, 103, Login Session not saved: the
+  confirmation page, or an empty page; 161, 161, 164, 164, Login Session
+  not saved or not ended: the redirect to the Client's post-logout
+  redirect URI, or an empty page; 256: an empty page for each of them
+- `internal/oidc/revocation.go`: 103, 126: 200, which tells the Client
+  that a token not revoked is
+- `internal/oidc/token.go`: 231, 593: 200 with a body of `null`; 503:
+  `invalid_grant` for a code issued without PKCE that was not redeemed;
+  752: `invalid_grant` for a refresh token whose family was not locked
+- `internal/signing/signing.go`: 176, 403: an error of `Load` that says the
+  database holds no key, when the first key was not stored; 227: a key
+  `Rotate` reports as stored, which was not; 445: an error of `Rotate`
+  that says the database holds no key, when the keys were not read
+
+Equivalent. A case of `TestTokenDatabaseFailure`, `TestUserInfoServerError`
+or `TestLoadDatabaseFailure` makes each statement fail but those at
+`signing.go:394` and `397`, for which the reasoning is the evidence:
+
+| Line                              | Ignores the error of                                        | Why it is equivalent                                                                                 |
+| --------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `internal/oidc/token.go:490`      | locking a code presented again                              | The transaction, aborted, commits nothing, and the request gets `server_error`                       |
+| `internal/oidc/token.go:496`      | revoking a code's tokens                                    | The next statement fails, in the aborted transaction                                                 |
+| `internal/oidc/token.go:540`      | starting a Refresh Token Family                             | As above                                                                                             |
+| `internal/oidc/token.go:543`      | recording the refresh token                                 | As above                                                                                             |
+| `internal/oidc/token.go:761`      | marking the refresh token used                              | As above                                                                                             |
+| `internal/oidc/token.go:789`      | recording the replacement refresh token                     | As above                                                                                             |
+| `internal/oidc/token.go:828`      | revoking a Refresh Token Family                             | As above                                                                                             |
+| `internal/oidc/userinfo.go:263`   | reading an access token's record                            | The claims read are then nil, which do not decode, so UserInfo answers 500 all the same              |
+| `internal/signing/signing.go:372` | looking for a stored key                                    | `Load` looks again in its transaction, which fails the same way                                      |
+| `internal/signing/signing.go:394` | taking the lock key generation is under                     | The next statement fails, in the aborted transaction, and `Load` with it, though with SQLSTATE 25P02 |
+| `internal/signing/signing.go:397` | looking again, in the transaction (`err != nil` to `false`) | The insertion that follows fails, in the aborted transaction                                         |
+
+Cannot fail:
+
+| Line                                                   | Ignores                                                                         | Why it cannot fail                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `internal/oidc/authorize.go:346`, `347`                | the error of writing the consent page                                           | `login`'s `writePage` renders a page into a buffer and ignores the error of writing it, the browser having gone, so it fails only if the template does not execute; the consent page's executes in every test that shows the page, with fields that are always set |
+| `internal/oidc/logout.go:107`, `174`                   | the error of writing a logout page                                              | As above, for the logout pages                                                                                                                                                                                                                                     |
+| `internal/oidc/token.go:355`                           | an error of authenticating a Client by its secret other than `registry.ErrBusy` | `AuthenticateClientSecret` returns no other error                                                                                                                                                                                                                  |
+| `internal/oidc/token.go:526`, `786`, `userinfo.go:267` | the error of decoding the claims stored                                         | They are claims pulsar encoded, in a `jsonb` column nothing else writes                                                                                                                                                                                            |
 
 ### 2026-11-10, gremlins
 
