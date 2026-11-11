@@ -96,7 +96,7 @@ func parseLogoutPage(t *testing.T, resp response) logoutPage {
 		t.Fatalf("status = %d, want %d and the logout confirmation page; Location %q, body %q", resp.status, http.StatusOK, resp.header.Get("Location"), resp.body)
 	}
 	action := consentAction.FindStringSubmatch(resp.body)
-	if action == nil {
+	if action == nil || !wholePage(resp) {
 		t.Fatalf("body = %q, want the logout confirmation page", resp.body)
 	}
 	u, err := url.Parse(html.UnescapeString(action[1]))
@@ -124,7 +124,7 @@ func outcome(t *testing.T, resp response) string {
 		t.Fatalf("status = %d, want %d and a page; Location %q", resp.status, http.StatusOK, resp.header.Get("Location"))
 	}
 	m := logoutOutcome.FindStringSubmatch(resp.body)
-	if m == nil {
+	if m == nil || !wholePage(resp) {
 		t.Fatalf("body = %q, want a page that says whether the End-User is signed out", resp.body)
 	}
 	return m[1]

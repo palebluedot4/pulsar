@@ -83,12 +83,13 @@ func TestVerifyRefusesAlteredJWT(t *testing.T) {
 	}
 }
 
-// REQ-JWA-1: a stored key that is not an RSA key of at least 2048 bits is
-// refused when the key set loads, rather than signed with. So is a key
-// stored under a kid that is not its thumbprint, which the JWK Set would
-// publish under that kid; that case cites no requirement: no clause in
-// scope says how an OP stores its keys.
-func TestLoadRefusesStoredKey(t *testing.T) {
+// REQ-JWA-1: a stored RSA key of fewer than 2048 bits is refused when the
+// key set loads, rather than signed with, and one of 2048 bits, stored as
+// the key set stores one, loads. Refused too are a key that is not RSA,
+// and a key stored under a kid that is not its thumbprint, which the JWK
+// Set would publish under that kid; those cases cite no requirement: no
+// clause in scope says how an OP stores its keys.
+func TestLoadStoredKey(t *testing.T) {
 	t.Parallel()
 
 	rsa1024, err1024 := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // G403: a key too small, for Load to refuse.
@@ -105,7 +106,9 @@ func TestLoadRefusesStoredKey(t *testing.T) {
 		name string
 		kid  string
 		key  crypto.Signer
+		ok   bool
 	}{
+		{name: "an RSA key of 2048 bits", kid: thumbprintOf(t, rsaKey.Public()), key: rsaKey, ok: true},
 		{name: "an RSA key of 1024 bits", kid: thumbprintOf(t, rsa1024.Public()), key: rsa1024},
 		{name: "a P-256 key", kid: thumbprintOf(t, p256.Public()), key: p256},
 		{name: "a kid that is another key's thumbprint", kid: thumbprintOf(t, other.Public()), key: rsaKey},
@@ -119,7 +122,11 @@ func TestLoadRefusesStoredKey(t *testing.T) {
 				t.Fatalf("MarshalPKCS8PrivateKey() error = %v", err)
 			}
 			storeKey(t, pool, tt.kid, der)
-			if err := signing.New(pool, secret).Load(t.Context()); err == nil {
+			err = signing.New(pool, secret).Load(t.Context())
+			switch {
+			case tt.ok && err != nil:
+				t.Errorf("Load() with %s stored error = %v, want nil", tt.name, err)
+			case !tt.ok && err == nil:
 				t.Errorf("Load() with %s stored error = nil, want an error", tt.name)
 			}
 		})

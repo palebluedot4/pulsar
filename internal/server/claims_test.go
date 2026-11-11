@@ -104,18 +104,6 @@ func TestClaimsParameter(t *testing.T) {
 			name: "sub from UserInfo with another value", scope: "openid", claims: `{"userinfo": {"sub": {"value": "` + bobSubject + `"}}}`,
 			wantIDToken: none, wantUserInfo: claimsOf(),
 		},
-		{
-			// The members are many, so that sub, in whichever order they
-			// are read, is seldom the last.
-			name: "sub with a value, and other claims", scope: "openid",
-			claims: `{"id_token": {"sub": {"value": "` + aliceSubject + `"}, "name": null, "given_name": null, "family_name": null,
-				"nickname": null, "website": null, "gender": null, "locale": null, "zoneinfo": null}}`,
-			wantIDToken: map[string]any{
-				"name": "Alice Smith", "given_name": "Alice", "family_name": "Smith", "nickname": "Ally",
-				"website": "https://alice.example", "gender": "female", "locale": "en-US", "zoneinfo": "Europe/Paris",
-			},
-			wantUserInfo: claimsOf(),
-		},
 		{name: "an empty object", scope: "openid", claims: `{}`, wantIDToken: none, wantUserInfo: claimsOf()},
 		{name: "null members", scope: "openid", claims: `{"userinfo": null, "id_token": null}`, wantIDToken: none, wantUserInfo: claimsOf()},
 	}
@@ -130,6 +118,30 @@ func TestClaimsParameter(t *testing.T) {
 				t.Errorf("UserInfo claims mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// REQ-CORE-42, REQ-CORE-48: a claims parameter that requests the sub Claim
+// in the ID token with the End-User's value, and other claims beside it,
+// gets those claims in the ID token too. Its members are read in no set
+// order, so the request asks for eight claims beside sub, and is sent three
+// times: were the reading to stop at sub, the test would miss it only if
+// sub were read last all three times, about once in 700 runs.
+func TestClaimsParameterSubAmongOthers(t *testing.T) {
+	t.Parallel()
+
+	handler := newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))
+	claims := `{"id_token": {"sub": {"value": "` + aliceSubject + `"}, "name": null, "given_name": null, "family_name": null,
+		"nickname": null, "website": null, "gender": null, "locale": null, "zoneinfo": null}}`
+	want := map[string]any{
+		"name": "Alice Smith", "given_name": "Alice", "family_name": "Smith", "nickname": "Ally",
+		"website": "https://alice.example", "gender": "female", "locale": "en-US", "zoneinfo": "Europe/Paris",
+	}
+	for i := range 3 {
+		_, idToken := issuedTokens(t, handler, requestWith(url.Values{"scope": {"openid"}, "claims": {claims}}))
+		if diff := cmp.Diff(want, requestedIDTokenClaims(t, handler, idToken)); diff != "" {
+			t.Errorf("request %d: ID token claims mismatch (-want +got):\n%s", i+1, diff)
+		}
 	}
 }
 
@@ -171,11 +183,11 @@ func TestClaimsParameterInvalid(t *testing.T) {
 	}
 }
 
-// REQ-CORE-28, REQ-CORE-47: a claim requested through the claims
-// parameter is released only with the End-User's Consent to the scope
-// that requests it. The consent page asks for that scope, and allowing it
-// remembers it. A claim requested with an empty set of values, which no
-// value matches, asks for no scope.
+// REQ-CORE-28, REQ-CORE-47: a claim requested through the claims parameter
+// is released only with the End-User's Consent to the scope that requests
+// it. The consent page asks for that scope, and allowing it remembers it. A
+// claim requested with an empty set of values, which no value matches, asks
+// for no scope.
 func TestClaimsParameterConsent(t *testing.T) {
 	t.Parallel()
 
@@ -199,11 +211,11 @@ func TestClaimsParameterConsent(t *testing.T) {
 // REQ-CORE-48: a request for the sub Claim in the ID token with a value
 // gets a positive response only for the End-User that value names, as
 // id_token_hint does (TestIDTokenHint): the one signed in, or one who signs
-// in for the request. One for another End-User gets login_required, at
-// once with prompt=none, and otherwise once the End-User who signs in is
-// not the one it names. Combined with an id_token_hint that names another
-// End-User, it is invalid_request. A request for the sub Claim without a
-// value names no End-User.
+// in for the request. One for another End-User gets login_required, at once
+// with prompt=none, and otherwise once the End-User who signs in is not the
+// one it names. Combined with an id_token_hint that names another End-User,
+// it is invalid_request. A request for the sub Claim without a value names
+// no End-User.
 func TestClaimsParameterSubValue(t *testing.T) {
 	t.Parallel()
 

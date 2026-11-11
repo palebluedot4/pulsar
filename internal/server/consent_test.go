@@ -50,7 +50,7 @@ func parseConsentPage(t *testing.T, resp response) consentPage {
 	}
 	client := consentClient.FindStringSubmatch(resp.body)
 	action := consentAction.FindStringSubmatch(resp.body)
-	if client == nil || action == nil {
+	if client == nil || action == nil || !wholePage(resp) {
 		t.Fatalf("body = %q, want the consent page", resp.body)
 	}
 	u, err := url.Parse(html.UnescapeString(action[1]))
@@ -311,6 +311,12 @@ func TestConsentDeniedAgain(t *testing.T) {
 		t.Fatalf("denied request error = %q, want %q", got, "access_denied")
 	}
 	parseConsentPage(t, b.authorize(http.MethodGet, authorizationParams()))
+}
+
+// wholePage reports whether resp's body is one page of pulsar's, ending
+// where its template ends, with nothing written after it.
+func wholePage(resp response) bool {
+	return strings.HasSuffix(resp.body, "</html>\n")
 }
 
 // requestWith returns authorizationParams with each parameter of set set

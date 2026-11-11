@@ -796,11 +796,11 @@ func TestRefreshTokenRegistryRemovals(t *testing.T) {
 // records due are next deleted after its tokens can no longer be revoked:
 // once the access token issued from it has expired, or, if it started a
 // Refresh Token Family, once the family has ended, whatever the code's own
-// expiry; or once the family has been revoked, by a refresh token
-// presented again, by one revoked at the revocation endpoint, or by the
-// code redeemed again. A family is kept until it
-// ends, revoked or not, and then deleted, with its refresh tokens, the
-// first of which the test looks for. Issuing tokens deletes neither.
+// expiry; or once the family has been revoked, by a refresh token presented
+// again, by one revoked at the revocation endpoint, or by the code redeemed
+// again. A family is kept until it ends, revoked or not, and then deleted,
+// with its refresh tokens, the first of which the test looks for. Issuing
+// tokens deletes neither.
 func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 	t.Parallel()
 
