@@ -140,61 +140,76 @@ that never frees; it timed out again with 300 seconds.
 
 At every line where a gremlins mutant lived, those of gremlins' negation
 included, a go-mutesting mutant lived too, on that line or in the body of
-the `if` it begins. Of the mutants that lived:
+the `if` it begins.
+
+Each mutant that lived was classed by reading the code, and each one
+classed as needing a test got one, in the commits of #97. Writing them
+showed 13 to be equivalent after all, which the classes below count
+there: in each, another step already refuses or filters what the mutant
+lets through, with the same response, or the case it changes cannot
+arise.
 
 | Class                   | `internal/oidc` | `internal/registry` | `internal/signing` |
 | ----------------------- | --------------: | ------------------: | -----------------: |
-| Needs a test            |              47 |                  53 |                 11 |
-| Equivalent              |              38 |                  19 |                  7 |
+| Needs a test            |              41 |                  48 |                  9 |
+| Equivalent              |              44 |                  24 |                  9 |
 | Cannot fail             |              23 |                   0 |                 14 |
 | Log or capacity only    |              12 |                   5 |                  3 |
 | Database or I/O failure |              41 |                   0 |                  7 |
 
+Each of the 98 that needed a test was then run again by hand, with the
+new tests, against the tests of the packages that reach it, and each was
+killed. One, at `internal/oidc/claims.go:231`, which turns the `continue`
+after the sub Claim into a `break`, is killed only if sub is not the
+last of the claims requested that is read; the test requests eight
+others, so it is killed unless the parameter's members are read in an
+order that puts sub last.
+
 The lines they changed, by class; a line appears once for each mutant.
 
-Needs a test:
+Needs a test, now tested:
 
-- `internal/oidc/authorize.go`: 209, 255, 274, 279, 295, 431, 466, 624,
-  702, 702, 703
+- `internal/oidc/authorize.go`: 209, 255, 274, 279, 295, 431, 624, 702, 702,
+  703
 - `internal/oidc/claims.go`: 222, 231, 233, 233, 234
 - `internal/oidc/cors.go`: 110
 - `internal/oidc/formpost.go`: 65
 - `internal/oidc/issuer.go`: 49, 81
-- `internal/oidc/logout.go`: 77, 77, 99
+- `internal/oidc/logout.go`: 77, 77
 - `internal/oidc/params.go`: 12, 12, 12, 12, 31, 37
 - `internal/oidc/pkce.go`: 32, 32, 32
-- `internal/oidc/revocation.go`: 64, 135, 141
-- `internal/oidc/token.go`: 116, 116, 116, 117, 117, 127, 172, 247, 326
+- `internal/oidc/revocation.go`: 135, 141
+- `internal/oidc/token.go`: 116, 116, 117, 117, 247, 326
 - `internal/oidc/userinfo.go`: 150, 150, 150
-- `internal/registry/argon2.go`: 17, 17, 18, 18, 25, 47, 55, 55, 56, 56,
-  65, 65, 65, 67, 76, 78, 81, 82, 99
-- `internal/registry/registry.go`: 290, 293, 294, 308, 308, 309, 312, 312,
-  313, 676, 676, 721, 721, 726, 739, 739, 739, 823, 823, 824, 826, 850,
-  876, 876, 888, 903, 903, 903, 903, 903, 937, 938, 941, 941
-- `internal/signing/signing.go`: 242, 261, 289, 308, 338, 469, 511, 527,
-  530, 531, 538
+- `internal/registry/argon2.go`: 17, 17, 18, 18, 25, 47, 55, 55, 56, 56, 65,
+  65, 65, 67, 76, 78, 81, 82, 99
+- `internal/registry/registry.go`: 293, 294, 308, 308, 309, 676, 676, 721,
+  721, 726, 739, 739, 739, 823, 824, 826, 850, 876, 876, 888, 903, 903, 903,
+  903, 903, 937, 938, 941, 941
+- `internal/signing/signing.go`: 242, 289, 308, 338, 469, 511, 530, 531, 538
 
 Equivalent:
 
 - `internal/oidc/assertion.go`: 88, 96, 102, 112, 116
-- `internal/oidc/authorize.go`: 146, 315, 496, 501, 527, 597, 624, 624, and
-  one `case` body already empty
+- `internal/oidc/authorize.go`: 146, 315, 466, 496, 501, 527, 597, 624, 624,
+  and one `case` body already empty
 - `internal/oidc/claims.go`: one `case` body already empty
 - `internal/oidc/formpost.go`: 87
 - `internal/oidc/issuer.go`: 31, 47, 81
-- `internal/oidc/logout.go`: 245
+- `internal/oidc/logout.go`: 99, 245
 - `internal/oidc/params.go`: 26
 - `internal/oidc/pkce.go`: one `case` body already empty
 - `internal/oidc/provider.go`: 38, 38
-- `internal/oidc/revocation.go`: 54, 88, 88, and one `case` body already
+- `internal/oidc/revocation.go`: 54, 64, 88, 88, and one `case` body already
   empty
-- `internal/oidc/token.go`: 319, 324, 492, 945, 945, 945
+- `internal/oidc/token.go`: 116, 127, 172, 319, 324, 492, 945, 945, 945
 - `internal/oidc/userinfo.go`: 109, 213, 239, and one `case` body already
   empty
 - `internal/registry/argon2.go`: 54, 54, 58, 99, 103
-- `internal/registry/registry.go`: 293, 293, 299, 299, 525, 525, 610, 798,
-  798, 883, 984, 1018, 1018, and one `case` body already empty
-- `internal/signing/signing.go`: 246, 248, 334, 375, 382, 382, 507
+- `internal/registry/registry.go`: 290, 293, 293, 299, 299, 312, 312, 313,
+  525, 525, 610, 798, 798, 823, 883, 984, 1018, 1018, and one `case` body
+  already empty
+- `internal/signing/signing.go`: 246, 248, 261, 334, 375, 382, 382, 507, 527
 
 Cannot fail:
 
@@ -218,12 +233,12 @@ Log or capacity only:
 - `internal/registry/registry.go`: 479, 479, 479, 480, 480
 - `internal/signing/signing.go`: 193, 193, 194
 
-Database or I/O failure:
+Database or I/O failure (#100):
 
-- `internal/oidc/authorize.go`: 217, 218, 225, 226, 303, 303, 318, 318,
-  346, 347
-- `internal/oidc/logout.go`: 80, 80, 103, 103, 107, 145, 145, 161, 161,
-  164, 164, 174, 256
+- `internal/oidc/authorize.go`: 217, 218, 225, 226, 303, 303, 318, 318, 346,
+  347
+- `internal/oidc/logout.go`: 80, 80, 103, 103, 107, 145, 145, 161, 161, 164,
+  164, 174, 256
 - `internal/oidc/revocation.go`: 103, 126
 - `internal/oidc/token.go`: 231, 355, 490, 496, 503, 526, 540, 543, 593,
   752, 761, 786, 789, 828
