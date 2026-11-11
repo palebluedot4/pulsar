@@ -92,14 +92,14 @@ changed `internal/oidc`.
   between the `switch` and the clause's body, nor for package-level
   declarations. A mutant there is never run, however thoroughly the tests
   exercise it: it lowers mutator coverage and is left out of test efficacy,
-  so no score says whether the tests would catch it.
+  so no score says whether the tests would catch it. The `case` conditions
+  are [#298](https://github.com/go-gremlins/gremlins/issues/298), open as
+  of 2026-11-11.
 - **Test efficacy is an upper bound.** In v0.6.0, a mutant that does not
   compile is counted as killed: `go test` exits 1 on a build failure, as it
   does on a failing test, so gremlins' "not viable" status is never reached
   ([#321](https://github.com/go-gremlins/gremlins/issues/321), open as of
-  2026-11-11). Some killed mutants may be ones no test had to catch. The
-  `case` conditions above are
-  [#298](https://github.com/go-gremlins/gremlins/issues/298), also open.
+  2026-11-11). Some killed mutants may be ones no test had to catch.
 - Scores compare only at the same gremlins version, which each run below
   records. Dependabot updates gremlins with the other tools in
   `tools/go.mod`, and a release may change its default mutators or how it
