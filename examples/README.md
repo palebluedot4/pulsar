@@ -127,7 +127,8 @@ They do not prove:
 
 ## Running them by hand
 
-Start pulsar with this registry, as the main README describes, with
+Start pulsar with this registry, as
+[docs/operations.md](../docs/operations.md#starting-it) describes, with
 `PULSAR_ISSUER=http://localhost:8080` and
 `PULSAR_REGISTRY=examples/registry.json`: a browser keeps pulsar's `Secure`
 Login Session cookie over plain http only on `localhost`, and the web app's

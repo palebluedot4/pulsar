@@ -1,345 +1,158 @@
 # pulsar
 
-An OpenID Connect Provider in Go, built by AI agents under a harness in which
-every control names the evidence behind it. The provider is the artifact; the
-method is the subject. It is a reference implementation, not for production
-use. So far it serves liveness and readiness checks, its discovery document,
-its JWK Set, a login page that starts a Login Session, a consent page that
-remembers the scopes an End-User allows each Client, and the authorization
-code flow, with `prompt` and `max_age`, to an ID token and access token for
-Clients that authenticate with `client_secret_basic`, `client_secret_post` or
-`private_key_jwt`, and for public Clients, which must use PKCE with `S256`. A
-redirect URI must equal one the Client registered, character for character,
-but for the port of a public Client's loopback IP redirect URI such as
-`http://127.0.0.1/callback`, which a native app may name with any port, as
-RFC 8252 §7.3 requires; a `localhost` URI gets no such exception. A
-Client may send `response_mode=form_post` once, with an `http` or `https`
-redirect URI: every response pulsar sends to that URI, the code or an error,
-then arrives in the body of a POST, from a page that submits itself by a
-script its Content-Security-Policy allows by hash, with a button for a browser
-without script. A repeated `response_mode`, or `form_post` with a redirect URI
-of another scheme, is refused with `invalid_request` in the query. A
-`private_key_jwt` assertion must name pulsar's issuer as its sole audience, as
-RFC 10070 requires, so one naming the token endpoint is refused. A public
-Client cannot prove its identity, so the consent page asks for it every time
-rather than remembering. A public Client running in a browser on another
-origin can redeem its code and refresh tokens, and call UserInfo, from the
-origin of one of its redirect URIs. UserInfo answers any Client, confidential
-or public, from the origins of its own redirect URIs, and the JWK Set answers
-any origin. A confidential Client gets no such headers at the token endpoint,
-since a browser cannot keep its secret. RFC 10017 recommends a
-backend-for-frontend, a confidential Client on the server, over a Client that
-runs in the browser. UserInfo returns the End-User's `sub` and the claims of
-the `profile`, `email`, `address` and `phone` scopes granted, by GET or POST,
-with the access token in the `Authorization` header or the body; the `claims`
-parameter requests individual claims in the ID token or from UserInfo. A
-Client may ask, with one `resource` parameter (RFC 8707), for an access token
-for a Resource Server the registry lets it request, and for at least one of
-that Resource Server's scopes beside OpenID Connect's; the consent page lists
-them, with their descriptions, under its identifier. That access token's
-`aud` is the Resource Server's identifier and its `scope` holds only that
-Resource Server's scopes, so UserInfo refuses it; the ID token is unchanged.
-A refresh keeps the Resource Server. A `resource` other than the one
-authorized, not permitted, unregistered, malformed or repeated, or one
-without any of its scopes, gets `invalid_target`. Without `resource`, the
-access token is for UserInfo, as before. A machine Client, a confidential
-Client registered for the client credentials grant alone, gets an access
-token of its own, with no End-User (RFC 6749 §4.4): it authenticates at the
-token endpoint, names one Resource Server it may request with `resource`,
-and asks in `scope` for scopes of that Resource Server it is registered for.
-The access token's `aud` is that Resource Server's identifier, its `sub` and
-`client_id` are the Client's `client_id`, and it lives ten minutes; the
-response carries no refresh token or ID token, and UserInfo refuses the
-token. Neither `resource` nor `scope` has a default: a request without
-`resource` gets `invalid_target`, and one without `scope`, or for a scope
-the Client is not registered for, `invalid_scope`; a scope the Client is
-registered for, but of another Resource Server than `resource` names, gets
-`invalid_target`. A Client gets `unauthorized_client` for a grant the
-registry does not list for it. A
-request with `offline_access` and `prompt=consent` asks the End-User for
-offline access, and if they allow it, the token response carries a refresh
-token. The Client redeems it with the `refresh_token` grant, for a narrower
-scope if it asks, for a new access token, ID token and refresh token, for up
-to thirty days; each refresh token is redeemed once. A refresh token already
-redeemed, presented again by its own Client while its Refresh Token Family
-lives, revokes the whole family, with no grace period: its refresh tokens are
-refused from then on, and UserInfo refuses its access tokens. A second
-redemption of a code that is otherwise valid, by its own Client, with its
-redirect URI, and with a matching `code_verifier` exactly when the code has a
-challenge, revokes the access tokens issued from it and, for as long as the
-family lives, the Refresh Token Family it started. A Client may revoke a
-refresh token or access token issued to it at the revocation endpoint (RFC
-7009), authenticating as at the token endpoint. A refresh token revokes its
-whole Refresh Token Family and the access tokens issued in it; an access
-token revokes only itself. Revoking an access token takes effect at
-UserInfo; a Resource Server that verifies the JWT itself accepts it until
-it expires, at most ten minutes later. While an End-User is out of
-the registry, no code or refresh token issued for them is redeemed, and
-UserInfo refuses their access tokens; a Client out of the registry cannot
-authenticate, so it redeems neither. Removal revokes nothing, so one added
-back has the tokens not yet expired again. Every 15 minutes, each replica
-deletes the codes no longer kept for a second redemption to revoke, the
-expired access tokens, client assertions and Login Sessions, the ended Refresh
-Token Families with their refresh tokens, and the counts of login attempts
-forgotten a day after the last. `pulsar keys rotate` rotates the signing key.
-A Client may send the End-User to the logout endpoint, the
-`end_session_endpoint` of discovery, by GET or POST (OpenID Connect
-RP-Initiated Logout 1.0). pulsar asks the End-User to confirm every time,
-naming the Client when an `id_token_hint` or a `client_id` identifies it;
-confirming ends the Login Session, and declining keeps it. pulsar then
-returns the End-User to the `post_logout_redirect_uri`, with `state` and
-nothing else, only if the identified Client registered exactly that URI, and
-otherwise shows a page that says whether they are signed out. An
-`id_token_hint` must be an ID token pulsar issued to a registered Client,
-and a `client_id` sent with it must name that Client. The hint may have
-expired, and may be signed by a key that `pulsar keys rotate` replaced. That
-key leaves the JWK Set eleven minutes after the new key starts signing, but
-pulsar accepts hints it signed, and nothing else it signed, until ten hours
-and a minute after the new key started signing: the longest a Login Session
-in which the old key signed can last from then, plus a reload interval's
-margin. A hint refused, or a `client_id` that does not match it,
-gets an error page and logs no one out. The request is carried in
-the confirmation form's body, so no URL pulsar sends the browser to holds
-the hint. Logout revokes no refresh token and no access token.
-The OpenID conformance suite's Config OP, Basic OP, Form Post Basic and
-RP-Initiated Logout plans run against it in CI; on 2026-11-06, at commit
-`8d6ab47`, the first two finished with no failures, as
-[Checking conformance](#checking-conformance) details.
+[![CI](https://github.com/palebluedot4/pulsar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/palebluedot4/pulsar/actions/workflows/ci.yml?query=branch%3Amain)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/palebluedot4/pulsar/badge)](https://scorecard.dev/viewer/?uri=github.com/palebluedot4/pulsar)
 
-## Running it
+An OpenID Connect Provider in Go, built by AI agents under a harness in
+which every control names the evidence behind it. The provider is the
+artifact; the method is the subject. Each normative statement it
+implements is quoted under an ID, and a test cites the IDs it proves.
 
-pulsar keeps its state in PostgreSQL, in a database that must exist. It
-serves at once and meanwhile applies its migrations and loads its signing
-keys, generating the first one if the database holds none: `/readyz` and the
-JWK Set answer 503 until both are done, and pulsar exits if either fails.
-After that `/readyz` answers 200 while a ping through its connection pool
-succeeds, and 503 when one fails.
+> [!IMPORTANT]
+> pulsar is a reference implementation, not for production use. The scope
+> below is implemented, and development paused on 2026-11-11. Security
+> reports are welcome, as [SECURITY.md](SECURITY.md) describes.
 
-The private keys are stored encrypted under a key derived from
-`PULSAR_SECRET`, 32 random bytes in base64. Keep it: with another secret,
-pulsar cannot decrypt its keys, so it never becomes ready; it answers
-`/livez` until it has tried, and then exits with an error.
+## Evidence
 
-`pulsar keys rotate` stores a new signing key and exits; it reads the same
-environment as the server. Every replica publishes the key in its JWK Set at
-its next reload, within a minute, and signs with it two minutes after it is
-stored: one reload interval plus the JWK Set's one-minute cache lifetime, so
-that, provided every replica reloads on time and Clients honor
-`Cache-Control`, every replica, and every JWK Set a Client has cached, has
-the key first. The key it replaces stays in the JWK Set for eleven minutes more,
-the ten-minute token lifetime plus a reload interval, by when every token it
-signed has expired.
+- **Conformance.** CI runs four plans of the OpenID conformance suite
+  (`release-v5.3.4`) on every pull request and push to `main`. On 2026-11-11, at commit
+  `088d7d5` on `main`, all four finished with no unexpected result:
+  - Config OP: 1 module passed.
+  - Basic OP: 29 of 35 modules passed. One warned, since pulsar never
+    returns `acr`; one was skipped, since pulsar supports no request
+    objects; four ended in `REVIEW`.
+  - Form Post Basic: the same, but that the request-object module, which
+    puts `response_mode` only inside the request object, fails its
+    form-post checks before it skips.
+  - RP-Initiated Logout: 3 of 11 modules passed; eight ended in `REVIEW`.
 
-Run it only once every replica runs a release that has it, since an earlier
-release signs with a new key at once, and on a host whose clock agrees with
-the replicas'. It refuses a database pulsar has never started against, and
-a `PULSAR_SECRET` other than the one the keys are stored under. It does not
-revoke a key: a leaked key stays in the JWK Set, so Clients accept tokens
-signed with it, for at least thirteen minutes.
+  `REVIEW` leaves a page for a person to judge, and no person has yet
+  reviewed one. Every warning, skip and failure is accepted with its reason
+  in [conformance/](conformance/README.md). That is a result of the suite's
+  checks, not an OpenID certification.
 
-```sh
-# The same environment as the server's, PULSAR_SECRET included (below).
-PULSAR_ISSUER=http://localhost:8080 \
-  PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
-  PULSAR_REGISTRY=conformance/registry.json \
-  go run ./cmd/pulsar keys rotate
-```
+- **Requirements.** 265 normative statements of 21 specifications have IDs
+  in [docs/requirements/](docs/requirements/), each quoting its clause. The
+  gate fails on an ID no test cites.
+- **Mutation testing** of the security-critical packages, with every mutant
+  that lived classed by reading the code:
+  [docs/mutation-testing.md](docs/mutation-testing.md).
+- **Interoperability.** [examples/](examples/README.md) holds a web app, an
+  API, a command-line app and a worker that use `golang.org/x/oauth2`,
+  `go-oidc` and `go-jose` against pulsar over the network, in CI.
 
-Resource Servers, Clients and End-Users are listed in a registry file, a
-JSON document named by `PULSAR_REGISTRY` and read at startup; pulsar refuses
-to start if it is invalid. The comment of [internal/registry](internal/registry/registry.go)
-describes its form. Client secrets and passwords appear in it only as
-Argon2id hashes in the PHC string format. A Resource Server is registered by
-its identifier, an absolute URI without a fragment other than the issuer,
-with at least one scope, each with a description; none of its scopes may be
-one of OpenID Connect's or another Resource Server's. Each Client lists the
-Resource Servers it may request. A Client acts for End-Users, through the
-authorization code flow, unless its `grant_types` lists `client_credentials`
-alone; it is then a machine Client, which acts for itself. A machine Client
-is confidential, registers no redirect URIs, and lists in `scope` the scopes
-it may be granted, each of a Resource Server it may request; with no End-User
-to consent, the registry is what authorizes them. Its `client_id` is the
-`sub` of its access tokens, so no Client's `client_id` may be a UUID, the
-form of every End-User's Subject
-([ADR 0007](docs/adr/0007-a-machine-clients-sub-is-its-client-id.md)).
-Register a machine Client for `private_key_jwt`, as RFC 9700 §2.5 recommends
-asymmetric client authentication: the private key never leaves the Client,
-no secret is shared with pulsar or sent in a request, and each assertion is
-accepted once.
+## Quickstart
 
-`pulsar client-secret` generates a Client secret and prints it with its
-hash, so that the secret is generated by the authorization server, as
-RFC 6819 §5.1.4.2.2 has it. The secret is 256 bits from `crypto/rand` in
-unpadded base64url, which needs no escaping in `client_secret_basic`, and
-guessing cannot find it (RFC 6749 §10.10). The command reads no
-configuration, and the secret is shown only in its output: give
-`client_secret` to the Client and copy `client_secret_hash` into the
-registry file.
-
-```sh
-go run ./cmd/pulsar client-secret
-# {"client_secret":"…","client_secret_hash":"$argon2id$v=19$m=19456,t=2,p=1$…$…"}
-```
-
-pulsar cannot tell how a hash was made, so it also accepts one made
-elsewhere; the operator must then make the secret it hashes at least 256
-bits from a cryptographically strong random source. Logins are throttled
-per End-User; Client secrets are not, since anyone could hold up a
-Client whose failed attempts were counted
-([ADR 0005](docs/adr/0005-logins-throttled-per-end-user-by-delay.md)).
-
-The reference implementation's `argon2` command prints a password's
-hash:
-
-```sh
-# 2 passes over 32 MiB, one lane: above OWASP's minimum for Argon2id.
-read -rs password && printf %s "$password" | argon2 "$(openssl rand -hex 16)" -id -t 2 -m 15 -p 1 -e
-```
+With Go, openssl and a PostgreSQL database named `pulsar`:
 
 ```sh
 # Once per database; every later start needs the same value.
 export PULSAR_SECRET="$(openssl rand -base64 32)"
-# Listens on :8080; PULSAR_ADDR overrides. The issuer must be https, except
-# on a loopback host. conformance/registry.json lists only the conformance
-# suite's Clients, which redirect to the suite, and an End-User whose
-# password is published; name a registry of your own to sign anyone in.
 PULSAR_ISSUER=http://localhost:8080 \
   PULSAR_DATABASE_URL='postgres://localhost:5432/pulsar?sslmode=disable' \
   PULSAR_REGISTRY=conformance/registry.json \
   go run ./cmd/pulsar
+```
+
+Then, from another shell:
+
+```sh
 curl -i localhost:8080/.well-known/openid-configuration
 curl -i localhost:8080/jwks
 curl -i localhost:8080/readyz
 ```
 
-The login page is at `/login` under the issuer; an authorization request
-from an End-User without a Login Session is sent there and resumes after
-login. The logout endpoint is at `/logout`. The Login Session cookie is
-`Secure`, which browsers keep over plain http only on `localhost`.
+`conformance/registry.json` lists only the conformance suite's Clients,
+which redirect to the suite. To sign someone in, name a registry of your
+own ([configuration.md](docs/configuration.md#the-registry)), or follow
+[examples/](examples/README.md#running-them-by-hand).
 
-As with libpq, anything `PULSAR_DATABASE_URL` leaves out is taken from the
-`PG*` environment variables (`PGHOST`, `PGPASSWORD` and the rest), a
-`PGSERVICE` service file and the password file.
+## What it implements
 
-To serve TLS itself, pulsar takes a PEM certificate and key in
-`PULSAR_TLS_CERT` and `PULSAR_TLS_KEY`; give both or neither.
+| Specification                                                                                                  | What pulsar implements                                                                         | Requirements                                                                     |
+| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)                               | Authorization code flow, ID token, UserInfo, `prompt`, `max_age`, `claims`; no request objects | [core](docs/requirements/openid-connect-core-1.0.md)                             |
+| [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html)                     | The discovery document                                                                         | [discovery](docs/requirements/openid-connect-discovery-1.0.md)                   |
+| [RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html)                        | The logout endpoint, with confirmation every time                                              | [logout](docs/requirements/openid-connect-rpinitiated-1.0.md)                    |
+| [Form Post Response Mode](https://openid.net/specs/oauth-v2-form-post-response-mode-1_0.html)                  | `response_mode=form_post`                                                                      | [form post](docs/requirements/oauth-v2-form-post-response-mode-1.0.md)           |
+| [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749) OAuth 2.0                                                   | Authorization code, refresh token and client credentials grants                                | [rfc6749](docs/requirements/rfc6749.md)                                          |
+| [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750) Bearer Token Usage                                          | Bearer tokens at UserInfo, in the header or the body                                           | [rfc6750](docs/requirements/rfc6750.md)                                          |
+| [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009) Token Revocation                                            | The revocation endpoint                                                                        | [rfc7009](docs/requirements/rfc7009.md)                                          |
+| [RFC 7517](https://www.rfc-editor.org/rfc/rfc7517) JWK, [RFC 7518](https://www.rfc-editor.org/rfc/rfc7518) JWA | The JWK Set; RS256 signing                                                                     | [rfc7517](docs/requirements/rfc7517.md), [rfc7518](docs/requirements/rfc7518.md) |
+| [RFC 7521](https://www.rfc-editor.org/rfc/rfc7521), [RFC 7523](https://www.rfc-editor.org/rfc/rfc7523)         | `private_key_jwt` client authentication; no assertion grants                                   | [rfc7521](docs/requirements/rfc7521.md), [rfc7523](docs/requirements/rfc7523.md) |
+| [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591) Client Metadata                                             | The registry's Client metadata; no dynamic registration                                        | [rfc7591](docs/requirements/rfc7591.md)                                          |
+| [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636) PKCE                                                        | `S256`, required of public Clients                                                             | [rfc7636](docs/requirements/rfc7636.md)                                          |
+| [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) Native Apps                                                 | Any port on a loopback IP redirect URI                                                         | [rfc8252](docs/requirements/rfc8252.md)                                          |
+| [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) Resource Indicators                                         | One `resource` per request, for registered Resource Servers                                    | [rfc8707](docs/requirements/rfc8707.md)                                          |
+| [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725) JWT Best Current Practices                                  | Verifying client assertions                                                                    | [rfc8725](docs/requirements/rfc8725.md)                                          |
+| [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) JWT Access Tokens                                           | Access tokens as `at+jwt` JWTs                                                                 | [rfc9068](docs/requirements/rfc9068.md)                                          |
+| [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207) Issuer Identification                                       | `iss` in every authorization response                                                          | [rfc9207](docs/requirements/rfc9207.md)                                          |
+| [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700) OAuth 2.0 Security BCP                                      | The security baseline                                                                          | [rfc9700](docs/requirements/rfc9700.md)                                          |
+| [RFC 10017](https://www.rfc-editor.org/rfc/rfc10017) Browser-Based Apps                                        | Cross-origin requests from public Clients' origins                                             | [rfc10017](docs/requirements/rfc10017.md)                                        |
+| [RFC 10070](https://www.rfc-editor.org/rfc/rfc10070) JWT Client Authentication Updates                         | The issuer as a client assertion's sole audience                                               | [rfc10070](docs/requirements/rfc10070.md)                                        |
 
-## Verifying it
+Deliberately not implemented, each with its reason in
+[AGENTS.md](AGENTS.md#deliberately-not-doing): implicit and hybrid flows,
+Dynamic Client Registration, Client ID Metadata Documents, introspection,
+token exchange, PAR, DPoP, mTLS, Back-Channel and front-channel logout,
+session management, and signing algorithms other than RS256. There is no
+sign-up, password reset, MFA, social login, SAML or admin UI.
 
-With Go, Node.js, pnpm, jq and Claude Code installed, and a PostgreSQL server
-whose URL, for a role that may create databases, is in
-`PULSAR_TEST_DATABASE_URL`:
+## Documentation
 
-```sh
-make setup     # once per clone: pinned tools, git hooks, Claude Code plugins
-make verify    # what CI runs
+| Document                                       | Contents                                                                          |
+| ---------------------------------------------- | --------------------------------------------------------------------------------- |
+| [docs/behavior.md](docs/behavior.md)           | What each endpoint does, its error codes, and the lifetimes of what pulsar issues |
+| [docs/configuration.md](docs/configuration.md) | The environment variables and the registry of Clients and End-Users               |
+| [docs/operations.md](docs/operations.md)       | Starting it, rotating the signing key, making Client secrets, hashing passwords   |
+| [docs/adr/](docs/adr/)                         | Decisions, and the options considered                                             |
+| [GLOSSARY.md](GLOSSARY.md)                     | The terms these documents use                                                     |
+| [conformance/](conformance/README.md)          | How the conformance suite runs, and why each accepted result is accepted          |
+| [examples/](examples/README.md)                | The consumers, what their tests prove, and what they do not                       |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  browser["End-User's browser"] -- "login, consent, logout" --> pulsar
+  client["Client"] -- "token, UserInfo, revocation" --> pulsar
+  client -- "access token" --> rs["Resource Server"]
+  rs -- "JWK Set" --> pulsar
+  registry["Registry file"] -- "read at startup" --> pulsar
+  pulsar["pulsar replicas"] --> pg[("PostgreSQL")]
 ```
 
-### Checking conformance
+Replicas share state only through PostgreSQL
+([ADR 0004](docs/adr/0004-postgresql-is-the-only-shared-state.md)), and
+read Clients, End-Users and Resource Servers from a static file
+([ADR 0001](docs/adr/0001-clients-and-end-users-from-a-static-file.md)).
+Resource Servers verify access tokens themselves, against the JWK Set.
 
-With Docker (and Compose v2), openssl and jq installed:
-
-```sh
-make conformance
-```
-
-This runs pulsar and the
-[OpenID conformance suite](https://gitlab.com/openid/conformance-suite)
-at `release-v5.3.4` in Docker Compose, and four of the suite's plans:
-`oidcc-config-certification-test-plan`, which checks the discovery document
-and the JWK Set; `oidcc-basic-certification-test-plan`, which signs an
-End-User in through the authorization code flow with static Clients and
-discovery, and checks the responses of the authorization, token and
-UserInfo endpoints; and `oidcc-formpost-basic-certification-test-plan`,
-which runs the same modules with `response_mode=form_post` and checks that
-every authorization response, errors too, arrives by POST. The Form Post
-plan does not check `response_modes_supported`, the form-post page's
-headers, or a browser without script; only pulsar's own tests do. The
-Basic OP plan's `oidcc-refresh-token` module, which the Form Post plan
-repeats, redeems a refresh token once with `scope` and once without,
-checks the response, the refreshed ID token, and UserInfo with the new
-access token, and checks
-that another Client's refresh token is refused. It never presents a
-refresh token twice
-([research](docs/research/refresh-tokens.md#the-suites-oidcc-refresh-token-module)),
-so it tests neither rotation nor reuse detection: only pulsar's own tests
-check that each refresh token is redeemed once, and that one presented
-again, or a code replayed, revokes its Refresh Token Family. No plan in
-that release tests token revocation (RFC 7009); only pulsar's own tests
-do. The fourth
-plan, `oidcc-rp-initiated-logout-certification-test-plan`, signs the
-End-User in and sends them to the logout endpoint by GET, with only
-`id_token_hint`, `post_logout_redirect_uri` and `state`. Two of its modules
-check the redirect back and then that `prompt=none` fails; eight check only
-that pulsar does not redirect, and end in `REVIEW`
-([conformance/README.md](conformance/README.md#pages-a-person-would-review)).
-It never sends `client_id`, a POST or an expired hint, so pulsar's own
-tests alone check those. The suite's browser automation fills in the login
-and consent pages, and confirms the logout. The run exits
-non-zero on a failure, a warning or a skipped module that `conformance/`
-does not list with a reason, and leaves the results in
-`conformance/results/`. CI runs the same target on every pull request.
-
-[conformance/README.md](conformance/README.md) describes the files it uses.
-
-### Running the examples
-
-[examples/](examples/README.md) holds consumers of pulsar in a Go module of
-their own, which does not require pulsar's: a web app, a confidential
-Client on the server that keeps tokens from the browser; an API, a
-Resource Server that verifies pulsar's access tokens itself; a
-command-line public Client that signs in through a loopback redirect; and
-a worker, a machine Client that gets an access token of its own by the
-client credentials grant, authenticating with `private_key_jwt`. All three
-Clients call the API. They use only `golang.org/x/oauth2`,
-`github.com/coreos/go-oidc` and `github.com/go-jose/go-jose`. With Docker
-(and Compose v2), openssl and Go installed:
-
-```sh
-make examples
-```
-
-This runs pulsar in Docker Compose with the examples' registry, and the
-examples' tests against it, over the network. They show that those
-libraries work with pulsar: the web app signs in with its secret, calls
-the API, refreshes its access token twice, and at logout revokes its
-refresh token, which pulsar then refuses, and signs out at pulsar's logout
-endpoint, which asks the End-User to confirm and returns them with the
-web app's `state`. No response the browser receives holds an access or
-refresh token, and the ID token appears only as `id_token_hint`: in the
-`Location` of the web app's redirect to pulsar's logout endpoint, and in
-the form of pulsar's logout page. The CLI signs in with PKCE through a
-loopback redirect on a port the operating system chose, gets an access
-token for the API with `resource`, and calls the API, which accepts it.
-The worker signs a new client assertion for each token request, gets an
-access token for the API with no refresh token, whose `sub` and
-`client_id` are both `worker`, and calls the API, which accepts it and
-keeps the worker's notes apart from the End-User's. The API refuses no
-token, a token for UserInfo, a token at its `exp` by the API's clock, a
-changed or unsigned token and an ID token with 401, and a token without
-the route's scope with 403; and after `pulsar keys rotate` it accepts
-tokens signed with the new key. No browser runs: the tests act as one
-with Go's HTTP client.
-[examples/README.md](examples/README.md#what-the-tests-prove) lists what
-they do not prove. CI runs the same target on every pull request.
-
-On 2026-11-06, CI ran the Config OP and Basic OP plans against commit
-`8d6ab47`, on `main`, with no failures; the Form Post Basic and
-RP-Initiated Logout plans were added after that run, and no result of
-them is recorded here yet.
-Of the Basic OP plan's 35 modules, 28 passed; one ended in a warning,
-since pulsar never returns `acr`; two were skipped, since pulsar issues no
-refresh tokens and supports no request objects; and four ended in
-`REVIEW`, which the suite leaves for a person to judge from the page it
-records, and which no person has yet reviewed. That is a result of the
-suite's checks, not an OpenID certification.
-
-## How it is built
+## How it was built
 
 [AGENTS.md](AGENTS.md) is the map agents work from.
 [docs/harness.md](docs/harness.md) lists every control on them and the
 evidence for each, and [docs/research/](docs/research/) holds the dated
-surveys the decisions rest on.
+surveys the decisions rest on. Since #66, each pull request's description
+but Dependabot's records what its three reviews found, fixed and left
+unchanged. The one skill written here,
+[right-sizing](plugins/right-sizing/README.md), was evaluated before it was
+adopted; [its results](plugins/right-sizing/evals/results.md) record what
+it changed.
+
+## Verifying it
+
+With Go, Node.js, pnpm, jq and Claude Code installed, and a PostgreSQL
+server whose URL, for a role that may create databases, is in
+`PULSAR_TEST_DATABASE_URL`:
+
+```sh
+make setup        # once per clone: pinned tools, git hooks, Claude Code plugins
+make verify       # what CI runs
+make conformance  # the conformance suite, with Docker (Compose v2), openssl and jq
+make examples     # the examples' tests, with Docker (Compose v2), openssl and Go
+```
 
 ## About the name
 

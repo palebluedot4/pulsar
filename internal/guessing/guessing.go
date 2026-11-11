@@ -15,10 +15,10 @@
 // after another: more than five at once at one End-User wait, even if
 // each would succeed.
 //
-// Client secrets are not counted. The README requires each to be at least
-// 256 random bits, which guessing cannot find, and a count kept per
-// client_id, which is public, would let anyone hold up that Client's token
-// requests.
+// Client secrets are not counted. docs/operations.md requires each to be
+// at least 256 random bits, which guessing cannot find, and a count kept
+// per client_id, which is public, would let anyone hold up that Client's
+// token requests.
 package guessing
 
 import (
