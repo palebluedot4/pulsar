@@ -122,3 +122,27 @@ The plan's other modules,
 checked by the suite: the last two follow the redirect back, check `state`,
 and then check that `prompt=none` fails. All three pass, and no entry in
 the expected-results files names the logout plan.
+
+## What the plans do not check
+
+Each plan signs an End-User in through the suite's browser automation,
+which fills in the login and consent pages and confirms the logout. Some of
+pulsar's behavior no plan in `release-v5.3.4` reaches; only pulsar's own
+tests check it:
+
+- **Form post.** The Form Post Basic plan does not check
+  `response_modes_supported`, the form-post page's headers, or a browser
+  without script.
+- **Refresh tokens.** The Basic OP plan's `oidcc-refresh-token` module,
+  which the Form Post plan repeats, redeems a refresh token once with
+  `scope` and once without. It checks the response, the refreshed ID token,
+  and UserInfo with the new access token, and that another Client's refresh
+  token is refused. It never presents a refresh token twice
+  ([research](../docs/research/refresh-tokens.md#the-suites-oidcc-refresh-token-module)),
+  so it tests neither rotation nor reuse detection: that each refresh token
+  is redeemed once, and that one presented again, or a code replayed,
+  revokes its Refresh Token Family.
+- **Revocation.** No plan tests token revocation (RFC 7009).
+- **Logout.** The RP-Initiated Logout plan sends the End-User to the logout
+  endpoint by GET, with only `id_token_hint`, `post_logout_redirect_uri`
+  and `state`. It never sends `client_id`, a POST or an expired hint.

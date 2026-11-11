@@ -330,11 +330,12 @@ func (p *Provider) authenticateBasic(r *http.Request, params url.Values) (*regis
 }
 
 // authenticateSecret authenticates the Client whose client_id and secret
-// these are, if it registered method. The README requires a Client
-// secret of at least 256 random bits, so that guessing cannot find one, as
-// RFC 6749 §10.10 and RFC 6819 §5.1.4.2.2 have it, and its attempts are
-// not counted, as an End-User's are: a count would let anyone who knows a
-// client_id, which is public, hold up that Client's token requests (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
+// these are, if it registered method. docs/operations.md requires a
+// Client secret of at least 256 random bits, so that guessing cannot find
+// one, as RFC 6749 §10.10 and RFC 6819 §5.1.4.2.2 have it, and its
+// attempts are not counted, as an End-User's are: a count would let anyone
+// who knows a client_id, which is public, hold up that Client's token
+// requests (docs/adr/0005-logins-throttled-per-end-user-by-delay.md).
 //
 // No error code of RFC 6749 §5.2 is for a request refused for want of
 // capacity to check its secret, so it gets temporarily_unavailable, which
