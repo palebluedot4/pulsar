@@ -40,9 +40,9 @@ task), among "Common approaches that don't shine".
      works.", 2026-01-07: "If code touches auth, payments, secrets, or
      untrusted input", require "a human threat model review plus a security
      tool pass before merge". <https://addyosmani.com/blog/code-review-ai/>
-     His "Own the Outer Loop" (2026-07-15) goes further than this item:
-     agents may "choose, route, merge, and escalate safely inside a policy,
-     but they cannot inherit the consequences."
+     His "Own the Outer Loop" (2026-07-15) departs from this item's final
+     merge: "Agents can be asked to choose, route, merge, and escalate safely
+     inside a policy, but they cannot inherit the consequences."
      <https://addyosmani.com/blog/own-the-outer-loop/>
 3. **Enforce invariants mechanically; use prose only for guidance.**
    - Anthropic separates deterministic controls (hooks, deny rules, CI) from
@@ -75,8 +75,9 @@ task), among "Common approaches that don't shine".
      permission prompts by 84%.
      <https://www.anthropic.com/engineering/claude-code-sandboxing>
    - Aikido "PromptPwnd" (2025-12-04): prompt injection through issue and
-     pull request text into AI agents in CI. Gemini CLI's action leaked
-     secrets; for Claude Code's action, Aikido calls leaking a privileged
+     pull request text into AI agents in CI. Aikido made Gemini CLI's
+     action leak secrets, on a private fork with test credentials; for
+     Claude Code's action, Aikido calls leaking a privileged
      `GITHUB_TOKEN` "_almost_ always possible" only where untrusted users can
      trigger it (`allowed_non_write_users: "*"`), which the default forbids.
      <https://www.aikido.dev/blog/promptpwnd-github-actions-ai-agents>
@@ -352,11 +353,12 @@ lightest) and team rituals versus a single developer orchestrating agents.
 ## Contested or overhyped
 
 - Heavy spec-driven development: Böckeler warns "spec-as-source" combines
-  model-driven rigidity with LLM non-determinism (2025-10-15); Spec Kit and
-  OpenSpec are only _Assess_ on the Radar.
-- Ralph loops (_Assess_; its author recommends greenfield only) and coding
-  agent swarms (_Caution_, April 2026). "Dark factory" autonomy is not a
-  Radar blip; no Vol. 35 technique carries the name.
+  model-driven rigidity with LLM non-determinism (2025-10-15). On the
+  Radar, GitHub Spec Kit was _Assess_ in April 2026 and is not in Vol. 35;
+  OpenSpec moved from _Assess_ to _Trial_ in Vol. 35.
+- Ralph loops (_Assess_, April 2026; its author recommends greenfield only)
+  and coding agent swarms (_Caution_, April 2026). "Dark factory" autonomy is
+  not a Radar blip; no Vol. 35 technique carries the name.
 - Throughput as a productivity measure (_Caution_). METR (2026-02-24) calls
   the data from its new experiment, started in August 2025, "an unreliable
   signal" of AI tools' current productivity effect, because of selection
@@ -483,9 +485,11 @@ the same model; every source below was read again on 2026-11-11.
   job is still to prove it works." (2026-01-07).
 - **Canva.** The guide never says "red flag"; the three approaches sit under
   "Common approaches that don't shine".
-- **Radar rings.** Feedback flywheel and mutation testing were given their
-  April 2026 rings, _Assess_ and _Trial_, though Vol. 35 (2026-11-04), cited
-  further down this file, has them in _Trial_ and _Adopt_.
+- **Radar rings.** Feedback flywheel, mutation testing and OpenSpec were given
+  their April 2026 ring, _Assess_, _Trial_ and _Assess_, though Vol. 35
+  (2026-11-04) has them in _Trial_, _Adopt_ and _Trial_. Blips missing from
+  Vol. 35 (coding agent swarms, Spec Kit, Ralph loops) now carry the date of
+  their ring.
 - **Kent Beck.** Agents deleting tests to make them "pass" is Gergely
   Orosz's summary (Pragmatic Engineer, 2025-06-11), not Beck's words; his
   own are now quoted.
