@@ -172,10 +172,11 @@ consequences follow; neither is a sandbox setting.
 The official marketplace is frozen with `"autoUpdate": false`: plugins stay
 at whatever version was last installed, which is not a pin to a recorded
 version, and change only when updated on purpose, with a changelog entry.
-`autoUpdate` alone does not hold it: `claude plugin install` refreshes the
-marketplace it installs from whatever its `autoUpdate` says, unless
-`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set, as observed with
-Claude Code 2.1.319 and documented as read on 2026-11-11
+`autoUpdate` alone does not hold it: `claude plugin install
+name@marketplace`, the form `make setup` uses, refreshes that marketplace
+whatever its `autoUpdate` says. As observed with Claude Code 2.1.319, and
+documented as read on 2026-11-11,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` stops that refresh
 (`docs/research/code-review-tools.md`). `make setup` sets it, and fails if
 an install changes the copy of a marketplace with auto-update off anyway
 (#92).
@@ -478,6 +479,7 @@ None yet.
   file's controls. The refresh before a plugin install, which #92 recorded
   as observed and not documented, is documented as read on 2026-11-11,
   except for `DISABLE_UPDATES`. gremlins v0.6.0 counts a mutant that does
-  not compile as killed
-  ([gremlins#321](https://github.com/go-gremlins/gremlins/issues/321)), so
-  `docs/mutation-testing.md` now reads each test efficacy as an upper bound.
+  not compile as killed (gremlins
+  [#321](https://github.com/go-gremlins/gremlins/issues/321)), so
+  `docs/mutation-testing.md` now reads test efficacy and mutator coverage
+  as upper bounds.
