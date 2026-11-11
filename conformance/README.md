@@ -16,15 +16,15 @@ against pulsar. The Makefile target says how a run proceeds;
 | `expected-failures.json` | Conditions the runner is to accept as failures                                                                                                                                                                |
 | `expected-warnings.json` | Conditions the runner is to accept as warnings                                                                                                                                                                |
 | `expected-skips.json`    | Modules the runner is to accept as skipped                                                                                                                                                                    |
-| `runner/`                | The runner's image: `scripts/run-test-plan.py` from the suite, checksummed, and its hashed dependencies                                                                                                       |
+| `runner/`                | The runner's image: `scripts/run-test-plan.py` and the two modules it imports from the suite, checksummed, its hashed dependencies, and `run.sh`, which runs the four plans                                   |
 | `tls/`, `results/`       | Written by each run and ignored by git: pulsar's certificate and key; exported results and the logs of every service but the runner                                                                           |
 
 The credentials in `config-basic.json`, `config-formpost.json`,
 `config-logout.json` and `registry.json` are for this stack only and
 published deliberately (SECURITY.md): the secrets and the password in plain
-text in one, as the suite sends them, and as Argon2id hashes in the other,
-as pulsar reads them. `conformance-client`'s secret was made by
-`pulsar client-secret`. The logout plan's
+text in the three configurations, as the suite sends them, and as Argon2id
+hashes in `registry.json`, as pulsar reads them. `conformance-client`'s
+secret was made by `pulsar client-secret`. The logout plan's
 `oidcc-rp-initiated-logout-bad-id-token-hint` signs an HS256 hint with it,
 and the suite refuses a secret shorter than 32 bytes for that
 (`GenerateJWKsFromClientSecret` at `release-v5.3.4`).
@@ -37,7 +37,8 @@ then the RP-Initiated Logout plan, with `response_type=code` and
 itself. The Form Post Basic plan is the Basic OP plan's modules with
 `response_mode=form_post` on every authorization request; it checks that
 every response, errors too, arrives at the callback by POST. Its
-configuration is `config-basic.json` but for the browser automation:
+configuration is `config-basic.json` but for its `description` and the
+browser automation:
 pulsar's form-post page is at its authorization endpoint, which the
 consent task matches, so that task's click is optional. The suite's
 browser automation is HtmlUnit with JavaScript on
@@ -62,9 +63,9 @@ with any field but `test-name`, `variant`, `configuration-filename` and
 module that ends `FAILED` as the skip expected, though any condition that
 failed in it is still reported unless listed. The Basic OP and Form Post
 Basic plans run the same modules, so an entry for both names the
-configuration `*`, which the Config OP plan, running none of those
-modules, never matches; such an entry goes stale only once neither plan
-needs it. An entry looks like this:
+configuration `*`, which the Config OP and RP-Initiated Logout plans,
+running none of those modules, never match; such an entry goes stale only
+once neither plan needs it. An entry looks like this:
 
 ```json
 {
@@ -84,14 +85,14 @@ template for each unexpected result.
 ## Pages a person would review
 
 Four modules of the Basic OP plan, and the same four of the Form Post Basic
-plan, ask for a page to be reviewed rather than checked by the suite. `oidcc-prompt-login` and `oidcc-max-age-1` review
-the login page shown again for `prompt=login` and for `max_age=1`;
+plan, ask for a page to be reviewed rather than checked by the suite.
+`oidcc-prompt-login` and `oidcc-max-age-1` review the login page shown
+again for `prompt=login` and for `max_age=1`;
 `oidcc-ensure-registered-redirect-uri` and
 `oidcc-ensure-request-object-with-redirect-uri` review the error page
 pulsar shows for a redirect URI the Client did not register. Such a module
-ends in `REVIEW`, which the runner accepts.
-The browser automation in `config-basic.json` and `config-formpost.json`
-hands that page to the
+ends in `REVIEW`, which the runner accepts. The browser automation in
+`config-basic.json` and `config-formpost.json` hands that page to the
 suite, which records it in the module's log: any login page does so for a
 module waiting for one, and an override does so for each of the two
 modules that expect the error page. A module whose page never comes never
@@ -115,10 +116,9 @@ pulsar shows instead, which an override in `config-logout.json` hands it:
 | `oidcc-rp-initiated-logout-only-state`                              | `state` only                                                  | The signed-out page, after the automation confirms | The same, without a hint                                                                                                          |
 | `oidcc-rp-initiated-logout-no-params`                               | Nothing                                                       | The signed-out page, after the automation confirms | The same, with no parameters at all (REQ-LOGOUT-11)                                                                               |
 
-The plan's other modules, `oidcc-rp-initiated-logout-discovery-endpoint-verification`,
+The plan's other modules,
+`oidcc-rp-initiated-logout-discovery-endpoint-verification`,
 `oidcc-rp-initiated-logout` and `oidcc-rp-initiated-logout-no-state`, are
 checked by the suite: the last two follow the redirect back, check `state`,
-and then check that `prompt=none` fails. No entry in the expected-results
-files names the logout plan. The plan has not yet run against pulsar: it
-was wired up without Docker, by analogy with the Basic OP plan, so the
-first run may need its overrides or expected results adjusted.
+and then check that `prompt=none` fails. All three pass, and no entry in
+the expected-results files names the logout plan.

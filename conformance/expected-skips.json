@@ -3,6 +3,6 @@
     "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
     "variant": "*",
     "configuration-filename": "*",
-    "comment": "In the Basic OP and Form Post Basic plans; the Config OP plan has no such module. pulsar does not support request objects and answers the request parameter with request_not_supported (OpenID Connect Core 1.0 §6.1, REQ-CORE-8), on which the module skips."
+    "comment": "In the Basic OP and Form Post Basic plans; the Config OP and RP-Initiated Logout plans have no such module. pulsar does not support request objects and answers the request parameter with request_not_supported (OpenID Connect Core 1.0 §6.1, REQ-CORE-8), on which the module skips."
   }
 ]

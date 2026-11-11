@@ -6,7 +6,7 @@
     "current-block": "Verify authorization endpoint response",
     "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
     "expected-result": "warning",
-    "comment": "In the Basic OP and Form Post Basic plans; the Config OP plan has no such module. pulsar has one authentication level and never returns acr, since claiming one would be untrue (#11, REQ-CORE-26). acr_values requests acr as a Voluntary Claim, and the minimum support OpenID Connect Core 1.0 \u00a715.1 requires is that its use not result in an error, which the module checks first."
+    "comment": "In the Basic OP and Form Post Basic plans; the Config OP and RP-Initiated Logout plans have no such module. pulsar has one authentication level and never returns acr, since claiming one would be untrue (#11, REQ-CORE-26). acr_values requests acr as a Voluntary Claim, and the minimum support OpenID Connect Core 1.0 \u00a715.1 requires is that its use not result in an error, which the module checks first."
   },
   {
     "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",

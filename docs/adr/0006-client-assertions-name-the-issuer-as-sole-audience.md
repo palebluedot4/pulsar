@@ -40,10 +40,10 @@ Client had signed for it (CVE-2025-27370, CVE-2025-27371). The evidence is in
   instead authenticates at pulsar, but not at a server, such as Ory
   Hydra, that accepts only its token endpoint URL.
 - The OpenID conformance suite sends the token endpoint URL in its
-  OpenID Connect plans that use `private_key_jwt`. The Basic OP and
-  Config OP plans, which pulsar runs, use none, so their results do not
-  change; in the Dynamic OP plan, which pulsar does not run, those
-  assertions would be refused.
+  OpenID Connect plans that use `private_key_jwt`. The four plans pulsar
+  runs, Config OP, Basic OP, Form Post Basic and RP-Initiated Logout, use
+  none, so their results do not change; in the Dynamic OP plan, which
+  pulsar does not run, those assertions would be refused.
 - When the OpenID Foundation publishes errata set 3, or Connect 1.1, this
   decision is to be checked against it, in particular whether an array
   of one is still refused there.

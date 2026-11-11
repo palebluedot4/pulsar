@@ -19,17 +19,19 @@ The files in `conformance/` run the OpenID conformance suite against a
 throwaway pulsar on a Docker network that `make conformance` creates and
 removes. Any credential committed there is for that testing only and is
 published deliberately: never use one anywhere else. These are the Client
-secrets and the End-User password in `config-basic.json` and
-`config-logout.json`, and their Argon2id hashes in `registry.json`. The TLS key and
-`PULSAR_SECRET` of each run are generated for it and never committed. The
+secrets and the End-User password in `config-basic.json`,
+`config-formpost.json` and `config-logout.json`, and their Argon2id hashes
+in `registry.json`. The TLS key and `PULSAR_SECRET` of each run are
+generated for it and never committed. The
 suite runs in its development mode, whose API needs no authentication, so
 the stack publishes no port to the host.
 
 ## Example credentials
 
 `examples/registry.json` registers an End-User whose password,
-`examples-password`, is published in `examples/README.md` and
-`examples/examples_test.go`, and the web app example's Client, whose
+`examples-password`, is published in `examples/README.md`,
+`examples/examples_test.go` and `internal/registry/registry_test.go`, and
+the web app example's Client, whose
 secret is published in `examples/README.md`, `examples/webapp_test.go` and
 `internal/registry/registry_test.go`, with its Argon2id hash in the
 registry, and the worker example's Client, whose private key is
