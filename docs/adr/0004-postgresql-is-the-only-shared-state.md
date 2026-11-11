@@ -20,7 +20,7 @@ an OP, so the reasons are recorded here; the evidence is in
   and a replica that remembered its own redemptions would let the same code
   be redeemed on another; a revoked token must be refused by every replica.
 - Discovery and JWKS responses carry `Cache-Control`, so Clients and
-  resource servers do the caching.
+  Resource Servers do the caching.
 - Redis is reconsidered when measurement shows PostgreSQL to be a latency or
   connection bottleneck, or when a need cannot be met with PostgreSQL.
   Login throttling across replicas is met with it

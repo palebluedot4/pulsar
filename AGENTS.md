@@ -9,13 +9,13 @@ This file is a map. Detail lives where it is linked.
 
 ## Commands
 
-| Command            | What it does                                                                                                                                                                                                                              |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `make check`       | Tidy, stale generated query code, lint and formatting, spelling, requirement traceability, workflow lint, tests against PostgreSQL at `PULSAR_TEST_DATABASE_URL`. Runs when an agent stops, unless that working tree was already checked. |
-| `make verify`      | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                                                                                                        |
-| `make fmt`         | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                                                                                                      |
-| `make conformance` | The OpenID conformance suite's Config OP, Basic OP, Form Post Basic and RP-Initiated Logout plans against pulsar, in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.             |
-| `make examples`    | The examples' tests against pulsar in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.                                                                                            |
+| Command            | What it does                                                                                                                                                                                                                                               |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make check`       | Tidy, stale generated query code, Dockerfile lint, lint and formatting, spelling, requirement traceability, workflow lint, tests against PostgreSQL at `PULSAR_TEST_DATABASE_URL`. Runs when an agent stops, unless that working tree was already checked. |
+| `make verify`      | `check`, plus reachable vulnerabilities and a build. CI runs this.                                                                                                                                                                                         |
+| `make fmt`         | Formats Go, Markdown, YAML, JSON and shell in place.                                                                                                                                                                                                       |
+| `make conformance` | The OpenID conformance suite's Config OP, Basic OP, Form Post Basic and RP-Initiated Logout plans against pulsar, in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.                              |
+| `make examples`    | The examples' tests against pulsar in Docker Compose. CI runs it too. It cannot reach Docker inside the sandbox; ask the maintainer to run it.                                                                                                             |
 
 Work is not done until `make verify` passes. Run `make help` for the rest.
 Tools are installed by `make setup`, which the maintainer runs outside the
@@ -34,8 +34,8 @@ sandbox; if one is missing, say so rather than installing it.
 | `tools/go.mod`, `package.json` | Pinned Go and Node tools for the gates.                                                                      |
 | `examples/`                    | Consumers, a separate Go module that must not require pulsar; they reach it over the wire.                   |
 | `docs/research/`               | Dated surveys with sources. Decisions cite them.                                                             |
-| `docs/adr/`                    | Decisions, written through `/grill-with-docs`; created with the first one.                                   |
-| `docs/requirements/`           | Requirement IDs, see below; created with the first one.                                                      |
+| `docs/adr/`                    | Decisions, written through `/grill-with-docs`.                                                               |
+| `docs/requirements/`           | Requirement IDs, see below.                                                                                  |
 | `docs/exec-plans/`             | Plans for unattended runs; format in `docs/exec-plans/PLANS.md`.                                             |
 | `docs/harness.md`              | Every control in this harness, why it exists, and its evidence.                                              |
 | `docs/mutation-testing.md`     | How `make mutation` measures test strength, and the scores recorded.                                         |
@@ -119,7 +119,7 @@ result and human review time.
 | Implicit and hybrid flows, front-channel logout, session management                        | Never; discouraged by RFC 9700 or fragile in current browsers.                                                                                                                                                                                                            |
 | Dynamic Client Registration                                                                | MCP deprecated it for Client ID Metadata Documents.                                                                                                                                                                                                                       |
 | FAPI 2.0: PAR, DPoP, mTLS                                                                  | Never; it needs PAR and sender-constrained tokens, a large addition beyond the Basic OP profile. Not sender-constraining access tokens departs, deliberately, from RFC 9700 §2.2.1's SHOULD: a leaked access token is usable until it expires, at most ten minutes later. |
-| Introspection (RFC 7662)                                                                   | A consumer in `examples/` needs one; access tokens are JWTs that Resource Servers verify themselves, the worker's included.                                                                                                                                               |
+| Introspection (RFC 7662)                                                                   | A consumer in `examples/` needs one; access tokens are JWTs that Resource Servers verify themselves, including those issued to the worker.                                                                                                                                |
 | Signing with ES256 or EdDSA beside RS256                                                   | A consumer needs one, and for EdDSA, go-jose supports `Ed25519`; OpenID Connect Core §15.1 and RFC 9068 §2.1 require only RS256, and RFC 9864 deprecates `EdDSA` for `Ed25519`, which go-jose can neither sign nor verify; see `docs/research/signing-algorithms.md`.     |
 | Back-Channel Logout                                                                        | A Client must learn of a logout without the browser; it needs `sid` and calls from the OP to every Client.                                                                                                                                                                |
 | Client ID Metadata Documents, token exchange (RFC 8693), MCP authorization beyond RFC 8707 | A consumer needs one; Client ID Metadata Documents also depart from ADR 0001's static registry.                                                                                                                                                                           |
@@ -143,5 +143,5 @@ The five canonical triage roles use their default label names. See
 
 ### Domain docs
 
-Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root, each
-created with its first entry. See `docs/agents/domain.md`.
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See
+`docs/agents/domain.md`.

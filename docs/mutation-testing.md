@@ -23,11 +23,11 @@ make mutation MUTATION_PACKAGES=internal/login
 `MUTATION_PACKAGES` defaults to the packages that hold the security-critical
 code #5 names:
 
-| Package             | What it holds                                                                                        |
-| ------------------- | ---------------------------------------------------------------------------------------------------- |
-| `internal/oidc`     | The authorization, token, userinfo and revocation endpoints; PKCE; private_key_jwt client assertions |
-| `internal/registry` | Redirect URI matching; Client secret and End-User password verification                              |
-| `internal/signing`  | The signing keys tokens are signed with, and the JWKS                                                |
+| Package             | What it holds                                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/oidc`     | The authorization, token, userinfo, revocation, logout and discovery endpoints; form post; PKCE; private_key_jwt client assertions |
+| `internal/registry` | Redirect URI matching; Client secret and End-User password verification                                                            |
+| `internal/signing`  | The signing keys tokens are signed with, and the JWKS                                                                              |
 
 It measures the commit checked out, not uncommitted changes: it checks HEAD
 out into a working tree of its own and removes it afterwards. Each
@@ -83,8 +83,9 @@ ends in an unbroken line of kills is checked against the server's log.
   `loop/range_break`. Its negation
   of comparisons, `==` to `!=`, is written but not registered
   ([#55](https://github.com/avito-tech/go-mutesting/issues/55), open as of
-  2026-11-11). `internal/queries` is a package of its own, so it is not
-  mutated; sqlc generates it and `make sqlc-check` checks it.
+  2026-11-11). The query code under `internal/oidc/internal/queries` and
+  `internal/signing/internal/queries` is in packages of its own, so it is
+  not mutated; sqlc generates it and `make sqlc-check` checks it.
 
 ### Running one mutant again
 
@@ -307,8 +308,8 @@ step of a request: a trigger that raises on a write, or a lock held past
 `lock_timeout` for a read, as `internal/postgres/postgrestest` describes.
 The tests are in `internal/server/database_failure_test.go`, with
 `TestLoadDatabaseFailure`, `TestLoadDatabaseFailureOnSecondLook` and
-`TestRotateDatabaseFailure` in `internal/signing`. Each of the 48 was then run again by hand against
-them, and against `TestLogoutNotEnded`, `TestUserInfoServerError`,
+`TestRotateDatabaseFailure` in `internal/signing`. Each of the 48 was then
+run again by hand against them, and against `TestLogoutNotEnded`, `TestUserInfoServerError`,
 `TestConsentDecisionAfterFailure` and `TestRotateRefuses`: each classed
 below as now tested was killed, and each of the others lived.
 
