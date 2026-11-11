@@ -1,6 +1,6 @@
 module github.com/palebluedot4/pulsar
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
