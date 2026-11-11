@@ -215,33 +215,24 @@ func TestConsentDecisionExpires(t *testing.T) {
 // REQ-CORE-16, REQ-CORE-28, REQ-OAUTH-51: a decision is not left to
 // answer a later request when the request it was made for fails. The code
 // for a request with prompt=consent cannot be stored, so it gets
-// server_error; the same request sent again shows the consent page.
-//
-// The failure is made by renaming the table of authorization codes, and
-// naming it back, so that the request can then be sent again; the trigger
-// of postgrestest.FailOn stays until the test ends.
+// server_error; the same request sent again, once codes can be stored,
+// shows the consent page.
 func TestConsentDecisionAfterFailure(t *testing.T) {
 	t.Parallel()
 
-	pool := postgrestest.Open(t, postgrestest.NewDatabase(t))
-	b := &browser{t: t, handler: newFlowHandler(t, pool)}
+	databaseURL := postgrestest.NewDatabase(t)
+	b := &browser{t: t, handler: newFlowHandler(t, postgrestest.Open(t, databaseURL))}
 	wantCode(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "allow"), "first request")
 
 	params := requestWith(url.Values{"prompt": {"consent"}})
 	page := parseConsentPage(t, b.authorize(http.MethodGet, params))
 	next := location(t, b.submitConsent(page, url.Values{"decision": {"allow"}}, nil))
-	exec := func(sql string) {
-		t.Helper()
-		if _, err := pool.Exec(t.Context(), sql); err != nil {
-			t.Fatalf("Exec(%q) error = %v", sql, err)
-		}
-	}
-	exec("ALTER TABLE authorization_codes RENAME TO authorization_codes_away")
+	restore := postgrestest.FailOn(t, databaseURL, "INSERT", "authorization_codes")
 	want := url.Values{"error": {"server_error"}, "state": {"af0ifjsldkj"}, "iss": {loginIssuer}}
 	if diff := cmp.Diff(want, errorResponse(t, b.send(http.MethodGet, next.RequestURI(), nil))); diff != "" {
 		t.Errorf("request whose code cannot be stored: error response mismatch (-want +got):\n%s", diff)
 	}
-	exec("ALTER TABLE authorization_codes_away RENAME TO authorization_codes")
+	restore()
 
 	parseConsentPage(t, b.authorize(http.MethodGet, params))
 }

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -114,42 +115,55 @@ func TestUnreachableURL(t *testing.T) {
 }
 
 // FailOn makes one kind of statement on one table fail with an error
-// PostgreSQL raises, and leaves every other statement alone.
+// PostgreSQL raises, whether or not it changes a row, and leaves every
+// other statement alone until it is restored. The table is empty, so that
+// no statement changes a row.
 func TestFailOn(t *testing.T) {
 	t.Parallel()
 
-	const insert = "INSERT INTO consents (subject, client_id, scopes) VALUES ('s', 'c', '{openid}') ON CONFLICT DO NOTHING"
-	// In this order, so that, where a row was inserted before FailOn, the
-	// UPDATE and the DELETE find it, and a row trigger fires for each.
-	statements := []struct{ op, sql string }{
-		{op: "INSERT", sql: insert},
-		{op: "UPDATE", sql: "UPDATE consents SET scopes = '{openid}'"},
-		{op: "DELETE", sql: "DELETE FROM consents"},
+	statements := []struct {
+		sql        string
+		failsUnder []string // the ops of FailOn under which it fails
+	}{
+		{sql: "INSERT INTO consents (subject, client_id, scopes) VALUES ('s', 'c', '{openid}') ON CONFLICT DO NOTHING", failsUnder: []string{"INSERT"}},
+		{sql: "INSERT INTO consents (subject, client_id, scopes) VALUES ('s', 'c', '{openid}') ON CONFLICT (subject, client_id) DO UPDATE SET scopes = excluded.scopes", failsUnder: []string{"INSERT", "UPDATE"}},
+		{sql: "UPDATE consents SET scopes = '{openid}'", failsUnder: []string{"UPDATE"}},
+		{sql: "DELETE FROM consents", failsUnder: []string{"DELETE"}},
+		{sql: "INSERT INTO other VALUES (1)"},
+		{sql: "UPDATE other SET x = 2"},
+		{sql: "DELETE FROM other"},
 	}
-	for _, failing := range statements {
-		op := failing.op
+	for _, op := range []string{"INSERT", "UPDATE", "DELETE"} {
 		t.Run(op, func(t *testing.T) {
 			t.Parallel()
 			databaseURL := postgrestest.NewDatabase(t)
 			pool := postgrestest.Open(t, databaseURL)
-			if op != "INSERT" {
-				if _, err := pool.Exec(t.Context(), insert); err != nil {
+			if _, err := pool.Exec(t.Context(), "CREATE TABLE other (x int)"); err != nil {
+				t.Fatal(err)
+			}
+			restore := postgrestest.FailOn(t, databaseURL, op, "consents")
+			for _, s := range statements {
+				// Rolled back, so that each statement meets the empty tables.
+				tx, err := pool.Begin(t.Context())
+				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			postgrestest.FailOn(t, databaseURL, op, "consents")
-			for _, s := range statements {
-				_, err := pool.Exec(t.Context(), s.sql)
+				_, err = tx.Exec(t.Context(), s.sql)
+				_ = tx.Rollback(t.Context()) // Only the statement's error matters.
 				var pgErr *pgconn.PgError
+				fails := slices.Contains(s.failsUnder, op)
 				switch {
-				case s.op == op && (!errors.As(err, &pgErr) || pgErr.Code != postgrestest.RaiseException):
-					t.Errorf("after FailOn(%s, consents): %s error = %v, want SQLSTATE %s", op, s.op, err, postgrestest.RaiseException)
-				case s.op != op && err != nil:
-					t.Errorf("after FailOn(%s, consents): %s error = %v, want nil", op, s.op, err)
+				case fails && (!errors.As(err, &pgErr) || pgErr.Code != postgrestest.RaiseException):
+					t.Errorf("after FailOn(%s, consents): %s error = %v, want SQLSTATE %s", op, s.sql, err, postgrestest.RaiseException)
+				case !fails && err != nil:
+					t.Errorf("after FailOn(%s, consents): %s error = %v, want nil", op, s.sql, err)
 				}
 			}
-			if _, err := pool.Exec(t.Context(), "DELETE FROM login_sessions"); err != nil {
-				t.Errorf("after FailOn(%s, consents): DELETE on another table error = %v, want nil", op, err)
+			restore()
+			for _, s := range statements {
+				if _, err := pool.Exec(t.Context(), s.sql); err != nil {
+					t.Errorf("after FailOn(%s, consents) is restored: %s error = %v, want nil", op, s.sql, err)
+				}
 			}
 		})
 	}
@@ -186,8 +200,9 @@ func TestHoldFailsOnBadStatement(t *testing.T) {
 		return
 	}
 	out, err := runChild(t, "TestHoldFailsOnBadStatement", os.Getenv("PULSAR_TEST_DATABASE_URL"))
-	if err == nil || !strings.Contains(string(out), "--- FAIL") {
-		t.Errorf("Hold() with a table that does not exist: test error = %v, want it to fail:\n%s", err, out)
+	// The failure must be Hold's, not one of NewDatabase's.
+	if err == nil || !strings.Contains(string(out), `postgrestest: Hold("LOCK TABLE no_such_table")`) {
+		t.Errorf("Hold() with a table that does not exist: test error = %v, want it to fail in Hold:\n%s", err, out)
 	}
 }
 
