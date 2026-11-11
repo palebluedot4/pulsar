@@ -115,8 +115,8 @@ They do not prove:
   revoked, and accepts it until it expires, at most ten minutes later.
 - That the web app refuses a wrong `iss` or an ID token that fails
   verification, or ends its session when a refresh is refused: no test
-  makes pulsar send a wrong `iss`, an ID token that fails verification, or
-  a refused refresh.
+  makes pulsar send the web app a wrong `iss`, an ID token that fails
+  verification, or a refusal of its own refresh.
 - How pulsar answers a worker request it refuses: no test sends one;
   pulsar's own tests do.
 - That the examples are fit for production. They keep notes, and the web

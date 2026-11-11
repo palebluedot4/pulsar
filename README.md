@@ -70,8 +70,8 @@ curl -i localhost:8080/readyz
 ```
 
 `conformance/registry.json` lists only the conformance suite's Clients,
-which redirect to the suite. To sign someone in, name a registry of your
-own ([configuration.md](docs/configuration.md#the-registry)), or follow
+which redirect to the suite, and an End-User whose password is published.
+To sign someone in, name a registry of your own ([configuration.md](docs/configuration.md#the-registry)), or follow
 [examples/](examples/README.md#running-them-by-hand).
 
 ## What it implements
@@ -114,15 +114,15 @@ Deliberately not implemented, each with its reason in
 
 ## Documentation
 
-| Document                                       | Contents                                                                          |
-| ---------------------------------------------- | --------------------------------------------------------------------------------- |
-| [docs/behavior.md](docs/behavior.md)           | What each endpoint does, its error codes, and the lifetimes of what pulsar issues |
-| [docs/configuration.md](docs/configuration.md) | The environment variables and the registry of Clients and End-Users               |
-| [docs/operations.md](docs/operations.md)       | Starting it, rotating the signing key, making Client secrets, hashing passwords   |
-| [docs/adr/](docs/adr/)                         | Decisions, and the options considered                                             |
-| [GLOSSARY.md](GLOSSARY.md)                     | The terms these documents use                                                     |
-| [conformance/](conformance/README.md)          | How the conformance suite runs, and why each accepted result is accepted          |
-| [examples/](examples/README.md)                | The consumers, what their tests prove, and what they do not                       |
+| Document                                       | Contents                                                                               |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [docs/behavior.md](docs/behavior.md)           | What each endpoint does, its error codes, and the lifetimes of what pulsar issues      |
+| [docs/configuration.md](docs/configuration.md) | The environment variables, and the registry of Clients, End-Users and Resource Servers |
+| [docs/operations.md](docs/operations.md)       | Starting it, rotating the signing key, making Client secrets, hashing passwords        |
+| [docs/adr/](docs/adr/)                         | Decisions, and the options considered                                                  |
+| [GLOSSARY.md](GLOSSARY.md)                     | The terms these documents use                                                          |
+| [conformance/](conformance/README.md)          | How the conformance suite runs, and why each accepted result is accepted               |
+| [examples/](examples/README.md)                | The consumers, what their tests prove, and what they do not                            |
 
 ## Architecture
 
