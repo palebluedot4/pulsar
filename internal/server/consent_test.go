@@ -300,6 +300,19 @@ func wantCode(t *testing.T, resp response, what string) {
 	}
 }
 
+// REQ-CORE-28: a request the End-User denied ends with access_denied;
+// sent again, it shows the consent page again, rather than being denied
+// at once.
+func TestConsentDeniedAgain(t *testing.T) {
+	t.Parallel()
+
+	b := &browser{t: t, handler: newFlowHandler(t, postgrestest.Open(t, postgrestest.NewDatabase(t)))}
+	if got := errorResponse(t, b.decide(b.signIn(b.authorize(http.MethodGet, authorizationParams())), "deny")).Get("error"); got != "access_denied" {
+		t.Fatalf("denied request error = %q, want %q", got, "access_denied")
+	}
+	parseConsentPage(t, b.authorize(http.MethodGet, authorizationParams()))
+}
+
 // requestWith returns authorizationParams with each parameter of set set
 // to its values in set.
 func requestWith(set url.Values) url.Values {

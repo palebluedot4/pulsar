@@ -104,6 +104,18 @@ func TestClaimsParameter(t *testing.T) {
 			name: "sub from UserInfo with another value", scope: "openid", claims: `{"userinfo": {"sub": {"value": "` + bobSubject + `"}}}`,
 			wantIDToken: none, wantUserInfo: claimsOf(),
 		},
+		{
+			// The members are many, so that sub, in whichever order they
+			// are read, is seldom the last.
+			name: "sub with a value, and other claims", scope: "openid",
+			claims: `{"id_token": {"sub": {"value": "` + aliceSubject + `"}, "name": null, "given_name": null, "family_name": null,
+				"nickname": null, "website": null, "gender": null, "locale": null, "zoneinfo": null}}`,
+			wantIDToken: map[string]any{
+				"name": "Alice Smith", "given_name": "Alice", "family_name": "Smith", "nickname": "Ally",
+				"website": "https://alice.example", "gender": "female", "locale": "en-US", "zoneinfo": "Europe/Paris",
+			},
+			wantUserInfo: claimsOf(),
+		},
 		{name: "an empty object", scope: "openid", claims: `{}`, wantIDToken: none, wantUserInfo: claimsOf()},
 		{name: "null members", scope: "openid", claims: `{"userinfo": null, "id_token": null}`, wantIDToken: none, wantUserInfo: claimsOf()},
 	}
@@ -162,7 +174,8 @@ func TestClaimsParameterInvalid(t *testing.T) {
 // REQ-CORE-28, REQ-CORE-47: a claim requested through the claims
 // parameter is released only with the End-User's Consent to the scope
 // that requests it. The consent page asks for that scope, and allowing it
-// remembers it.
+// remembers it. A claim requested with an empty set of values, which no
+// value matches, asks for no scope.
 func TestClaimsParameterConsent(t *testing.T) {
 	t.Parallel()
 
@@ -179,6 +192,8 @@ func TestClaimsParameterConsent(t *testing.T) {
 	if diff := cmp.Diff([]string{"openid", "email"}, parseConsentPage(t, resp).scopes); diff != "" {
 		t.Errorf("consent page for email from UserInfo scopes mismatch (-want +got):\n%s", diff)
 	}
+	wantCode(t, b.authorize(http.MethodGet, requestWith(url.Values{"scope": {"openid"}, "claims": {`{"id_token": {"email": {"values": []}}}`}})),
+		"request for email in the ID token with an empty set of values")
 }
 
 // REQ-CORE-48: a request for the sub Claim in the ID token with a value
@@ -187,7 +202,8 @@ func TestClaimsParameterConsent(t *testing.T) {
 // in for the request. One for another End-User gets login_required, at
 // once with prompt=none, and otherwise once the End-User who signs in is
 // not the one it names. Combined with an id_token_hint that names another
-// End-User, it is invalid_request.
+// End-User, it is invalid_request. A request for the sub Claim without a
+// value names no End-User.
 func TestClaimsParameterSubValue(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +222,7 @@ func TestClaimsParameterSubValue(t *testing.T) {
 		want    url.Values // the error response; nil for a code
 	}{
 		{name: "alice's, prompt=none", set: url.Values{"claims": {subValue(aliceSubject)}, "prompt": {"none"}}, respond: unchanged},
+		{name: "no value, prompt=none", set: url.Values{"claims": {`{"id_token": {"sub": {"essential": true}}}`}, "prompt": {"none"}}, respond: unchanged},
 		{
 			name: "values, alice's among them", respond: unchanged,
 			set: url.Values{"claims": {`{"id_token": {"sub": {"values": ["` + bobSubject + `", "` + aliceSubject + `"]}}}`}},

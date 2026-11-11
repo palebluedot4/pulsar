@@ -401,7 +401,9 @@ func verify(t *testing.T, handler http.Handler, token string) jwt {
 // without a Login Session to the authorization endpoint, by GET or POST;
 // the End-User signs in and returns to it; the Client redeems the code
 // for an ID token that verifies against the JWK Set and an access token.
-// A second request from the signed-in browser skips the login page.
+// A second request from the signed-in browser skips the login page. No
+// cache may keep the redirect to the login page, which carries the
+// request's parameters, nor the response, which carries the code.
 func TestAuthorizationCodeFlow(t *testing.T) {
 	t.Parallel()
 
@@ -422,6 +424,9 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 					// A POST without the Login Session cookie is first
 					// sent back by GET (TestAuthorizationPOSTWithoutLoginSessionCookie).
 					resp = b.send(http.MethodGet, location(t, resp).RequestURI(), nil)
+				}
+				if got := resp.header.Get("Cache-Control"); got != "no-store" {
+					t.Errorf("redirect to the login page Cache-Control = %q, want %q", got, "no-store")
 				}
 				loginURL := location(t, resp)
 				if diff := cmp.Diff(params, loginURL.Query()); diff != "" {
@@ -521,8 +526,8 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 // REQ-CORE-4, REQ-CORE-14: an authorization request a Client sends by
 // POST from its own site arrives without the Login Session cookie, which
 // is SameSite=Lax. It is sent back to the authorization endpoint by GET,
-// once, with the same parameters, a navigation on which the browser sends
-// the cookie; that request is answered as any other. So a signed-in
+// once, with the same parameters, by a redirect no cache may keep, a
+// navigation on which the browser sends the cookie; that request is answered as any other. So a signed-in
 // End-User gets a code, with prompt=none too, and one not signed in is
 // sent to log in, or with prompt=none gets login_required.
 func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
@@ -553,7 +558,11 @@ func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
 			// The cross-site POST: the browser withholds the cookie.
 			b.session = nil
 			params := requestWith(tt.set)
-			next := location(t, b.authorize(http.MethodPost, params))
+			resp := b.authorize(http.MethodPost, params)
+			if got := resp.header.Get("Cache-Control"); got != "no-store" {
+				t.Errorf("POST %s without the cookie Cache-Control = %q, want %q", authorizationPath, got, "no-store")
+			}
+			next := location(t, resp)
 			if next.Path != authorizationPath {
 				t.Fatalf("POST %s without the cookie redirected to %q, want %q", authorizationPath, next, authorizationPath)
 			}
@@ -562,7 +571,7 @@ func TestAuthorizationPOSTWithoutLoginSessionCookie(t *testing.T) {
 			}
 
 			b.session = session
-			resp := b.send(http.MethodGet, next.RequestURI(), nil)
+			resp = b.send(http.MethodGet, next.RequestURI(), nil)
 			switch {
 			case tt.wantLogin:
 				if u := location(t, resp); u.Path != loginPath {
@@ -1010,7 +1019,8 @@ func TestTokenErrors(t *testing.T) {
 
 // REQ-OAUTH-6: the token endpoint treats a parameter without a value as if
 // it had not been sent, and reads parameters from the body only, so a
-// malformed query does not fail the request.
+// malformed query does not fail the request. A client_id in the body that
+// names the Client authenticated by HTTP Basic does not fail it either.
 func TestTokenParameters(t *testing.T) {
 	t.Parallel()
 
@@ -1023,6 +1033,7 @@ func TestTokenParameters(t *testing.T) {
 		{name: "empty client_secret", edit: func(v url.Values) { v.Set("client_secret", "") }},
 		{name: "empty repeat of code", edit: func(v url.Values) { v.Add("code", "") }},
 		{name: "malformed query", query: "?%zz"},
+		{name: "client_id of the authenticated Client", edit: func(v url.Values) { v.Set("client_id", "rp") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

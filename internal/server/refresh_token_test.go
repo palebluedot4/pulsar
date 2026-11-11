@@ -797,7 +797,8 @@ func TestRefreshTokenRegistryRemovals(t *testing.T) {
 // once the access token issued from it has expired, or, if it started a
 // Refresh Token Family, once the family has ended, whatever the code's own
 // expiry; or once the family has been revoked, by a refresh token
-// presented again or by the code redeemed again. A family is kept until it
+// presented again, by one revoked at the revocation endpoint, or by the
+// code redeemed again. A family is kept until it
 // ends, revoked or not, and then deleted, with its refresh tokens, the
 // first of which the test looks for. Issuing tokens deletes neither.
 func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
@@ -819,6 +820,7 @@ func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 		{name: "a second before the family ends", offline: true, wait: 30*day - time.Second, wantCode: true, wantFamily: true},
 		{name: "once the family ended", offline: true, wait: 30 * day},
 		{name: "once a refresh token is presented again", offline: true, revoke: presentRefreshTokenAgain, wantFamily: true},
+		{name: "once a refresh token is revoked", offline: true, revoke: revokeRefreshToken, wantFamily: true},
 		{name: "once the code is redeemed again", offline: true, revoke: redeemCodeAgain, wantFamily: true},
 	}
 	for _, tt := range tests {
@@ -870,6 +872,13 @@ func TestRedeemedCodeAndFamilyCleanup(t *testing.T) {
 			})
 		})
 	}
+}
+
+// revokeRefreshToken revokes the Refresh Token Family of first, rp's token
+// response for code, at the revocation endpoint.
+func revokeRefreshToken(t *testing.T, handler http.Handler, _ string, first tokenResponse) {
+	t.Helper()
+	wantRevocationOK(t, rpNoPKCE.revoke(t, handler, first.RefreshToken, "refresh_token"))
 }
 
 // presentRefreshTokenAgain revokes the Refresh Token Family of first, rp's

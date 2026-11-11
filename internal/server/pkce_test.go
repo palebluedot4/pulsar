@@ -158,6 +158,11 @@ func TestPKCETokenErrors(t *testing.T) {
 	short := pkceVerifier[1:]
 	long := strings.Repeat("a", 129)
 	plus := strings.Repeat("a", 42) + "+"
+	// The characters just past the end of each range of unreserved
+	// letters and digits.
+	afterUpper := strings.Repeat("a", 42) + "["
+	afterLower := strings.Repeat("a", 42) + "{"
+	afterDigit := strings.Repeat("a", 42) + ":"
 	tests := []struct {
 		name       string
 		client     pkceClient  // the Client the code is issued to
@@ -179,6 +184,18 @@ func TestPKCETokenErrors(t *testing.T) {
 		},
 		{
 			name: "verifier with a character that is not unreserved, matching its challenge", client: publicFor(plus), verifier: plus,
+			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
+		},
+		{
+			name: "verifier with the character after Z, matching its challenge", client: publicFor(afterUpper), verifier: afterUpper,
+			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
+		},
+		{
+			name: "verifier with the character after z, matching its challenge", client: publicFor(afterLower), verifier: afterLower,
+			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
+		},
+		{
+			name: "verifier with the character after 9, matching its challenge", client: publicFor(afterDigit), verifier: afterDigit,
 			wantStatus: http.StatusBadRequest, wantError: "invalid_grant",
 		},
 		{name: "confidential Client, wrong verifier", client: rpPKCE, verifier: wrongVerifier, wantStatus: http.StatusBadRequest, wantError: "invalid_grant"},

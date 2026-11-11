@@ -235,6 +235,12 @@ func TestTokenClientAuthenticationMethod(t *testing.T) {
 			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
 		},
 		{
+			name: "Basic and an assertion without its type", clientID: "rp", redirectURI: rpRedirectURI,
+			basic:      credentials{"rp", rpSecret},
+			body:       url.Values{"client_assertion": {"x"}},
+			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",
+		},
+		{
 			name: "the body and an assertion", clientID: "post", redirectURI: postRedirectURI,
 			body:       url.Values{"client_id": {"post"}, "client_secret": {postSecret}, "client_assertion_type": {jwtBearer}},
 			wantStatus: http.StatusUnauthorized, wantError: "invalid_client",

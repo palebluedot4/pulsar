@@ -310,3 +310,40 @@ func TestFormPostRequiresWebRedirectURI(t *testing.T) {
 		})
 	}
 }
+
+// REQ-FORMPOST-1, REQ-CORE-66: form_post is refused only for a redirect
+// URI a browser cannot POST to. It is accepted for an http one, such as a
+// loopback IP redirect URI (RFC 8252 §7.3); and a native app's redirect
+// URI, refused form_post, is accepted with the default Response Mode. Each
+// request is accepted: the End-User, not signed in, is sent to log in.
+func TestResponseModeAcceptedForRedirectURI(t *testing.T) {
+	t.Parallel()
+
+	reg, err := registry.Parse([]byte(`{"clients": [
+		{"client_id": "native", "token_endpoint_auth_method": "none", "redirect_uris": ["` + nativeRedirectURI + `"]},
+		{"client_id": "loopback", "token_endpoint_auth_method": "none", "redirect_uris": ["` + loopbackRedirectURI + `"]}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newFlowHandlerFor(t, postgrestest.Open(t, postgrestest.NewDatabase(t)), reg)
+
+	tests := []struct {
+		name   string
+		params url.Values
+	}{
+		{name: "native app, by query", params: url.Values{"client_id": {"native"}, "redirect_uri": {nativeRedirectURI}}},
+		{name: "loopback, by form_post", params: withFormPost(url.Values{"client_id": {"loopback"}, "redirect_uri": {loopbackRedirectURI}})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			params := requestWith(tt.params)
+			withPKCE(params)
+			b := &browser{t: t, handler: handler}
+			if u := location(t, b.authorize(http.MethodGet, params)); u.Path != loginPath {
+				t.Errorf("GET %s redirected to %q, want the login page %q", authorizationPath, u, loginPath)
+			}
+		})
+	}
+}
