@@ -149,8 +149,8 @@ func TestTokenDatabaseFailure(t *testing.T) {
 	t.Parallel()
 
 	c := rpNoPKCE
-	// Each returns the token request that fails, once the steps before it
-	// have been taken.
+	// Each takes the steps before the one that fails, and returns a func
+	// that sends the token request whose step fails.
 	redeemCode := func(t *testing.T, handler http.Handler) func() response {
 		t.Helper()
 		form := c.form(c.code(t, handler), "")
@@ -180,28 +180,28 @@ func TestTokenDatabaseFailure(t *testing.T) {
 	}
 	tests := []struct {
 		name      string
-		before    func(t *testing.T, handler http.Handler) func() response
+		setUp     func(t *testing.T, handler http.Handler) (send func() response)
 		breakStep breakStep
 	}{
-		{name: "code not redeemed", before: redeemCode, breakStep: failOn("UPDATE", "authorization_codes")},
-		{name: "access token not recorded", before: redeemCode, breakStep: failOn("INSERT", "access_tokens")},
-		{name: "Refresh Token Family not started", before: redeemOfflineCode, breakStep: failOn("INSERT", "refresh_token_families")},
-		{name: "refresh token not recorded", before: redeemOfflineCode, breakStep: failOn("INSERT", "refresh_tokens")},
-		{name: "code presented again not locked", before: redeemCodeAgain, breakStep: hold(lockCodes)},
-		{name: "tokens of a code presented again not revoked", before: redeemCodeAgain, breakStep: failOn("DELETE", "access_tokens")},
-		{name: "Refresh Token Family not locked", before: refresh, breakStep: hold(lockFamilies)},
-		{name: "refresh token not marked used", before: refresh, breakStep: failOn("UPDATE", "refresh_tokens")},
-		{name: "replacement refresh token not recorded", before: refresh, breakStep: failOn("INSERT", "refresh_tokens")},
-		{name: "access token of a refresh not recorded", before: refresh, breakStep: failOn("INSERT", "access_tokens")},
-		{name: "family of a refresh token presented again not revoked", before: refreshAgain, breakStep: failOn("UPDATE", "refresh_token_families")},
+		{name: "code not redeemed", setUp: redeemCode, breakStep: failOn("UPDATE", "authorization_codes")},
+		{name: "access token not recorded", setUp: redeemCode, breakStep: failOn("INSERT", "access_tokens")},
+		{name: "Refresh Token Family not started", setUp: redeemOfflineCode, breakStep: failOn("INSERT", "refresh_token_families")},
+		{name: "refresh token not recorded", setUp: redeemOfflineCode, breakStep: failOn("INSERT", "refresh_tokens")},
+		{name: "code presented again not locked", setUp: redeemCodeAgain, breakStep: hold(lockCodes)},
+		{name: "tokens of a code presented again not revoked", setUp: redeemCodeAgain, breakStep: failOn("DELETE", "access_tokens")},
+		{name: "Refresh Token Family not locked", setUp: refresh, breakStep: hold(lockFamilies)},
+		{name: "refresh token not marked used", setUp: refresh, breakStep: failOn("UPDATE", "refresh_tokens")},
+		{name: "replacement refresh token not recorded", setUp: refresh, breakStep: failOn("INSERT", "refresh_tokens")},
+		{name: "access token of a refresh not recorded", setUp: refresh, breakStep: failOn("INSERT", "access_tokens")},
+		{name: "family of a refresh token presented again not revoked", setUp: refreshAgain, breakStep: failOn("UPDATE", "refresh_token_families")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			handler, databaseURL := newFailingFlowHandler(t)
-			request := tt.before(t, handler)
+			send := tt.setUp(t, handler)
 			tt.breakStep(t, databaseURL)
-			if got := tokenErrorCode(t, request(), http.StatusInternalServerError); got != "server_error" {
+			if got := tokenErrorCode(t, send(), http.StatusInternalServerError); got != "server_error" {
 				t.Errorf("POST %s with the %s: error = %q, want %q", tokenPath, tt.name, got, "server_error")
 			}
 		})

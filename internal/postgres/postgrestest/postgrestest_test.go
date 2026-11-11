@@ -119,8 +119,8 @@ func TestFailOn(t *testing.T) {
 	t.Parallel()
 
 	const insert = "INSERT INTO consents (subject, client_id, scopes) VALUES ('s', 'c', '{openid}') ON CONFLICT DO NOTHING"
-	// In this order, so that the row the UPDATE and the DELETE act on is
-	// still there when each runs, and a row trigger fires.
+	// In this order, so that, where a row was inserted before FailOn, the
+	// UPDATE and the DELETE find it, and a row trigger fires for each.
 	statements := []struct{ op, sql string }{
 		{op: "INSERT", sql: insert},
 		{op: "UPDATE", sql: "UPDATE consents SET scopes = '{openid}'"},
@@ -142,8 +142,8 @@ func TestFailOn(t *testing.T) {
 				_, err := pool.Exec(t.Context(), s.sql)
 				var pgErr *pgconn.PgError
 				switch {
-				case s.op == op && (!errors.As(err, &pgErr) || pgErr.Code != raiseException):
-					t.Errorf("after FailOn(%s, consents): %s error = %v, want SQLSTATE %s", op, s.op, err, raiseException)
+				case s.op == op && (!errors.As(err, &pgErr) || pgErr.Code != postgrestest.RaiseException):
+					t.Errorf("after FailOn(%s, consents): %s error = %v, want SQLSTATE %s", op, s.op, err, postgrestest.RaiseException)
 				case s.op != op && err != nil:
 					t.Errorf("after FailOn(%s, consents): %s error = %v, want nil", op, s.op, err)
 				}
@@ -154,14 +154,6 @@ func TestFailOn(t *testing.T) {
 		})
 	}
 }
-
-// raiseException is the SQLSTATE of an exception PL/pgSQL raises without
-// naming one.
-const raiseException = "P0001"
-
-// lockNotAvailable is the SQLSTATE of a statement that waited for a lock
-// longer than lock_timeout.
-const lockNotAvailable = "55P03"
 
 // Hold keeps a lock that a statement of a pool opened with WithLockTimeout
 // gives up waiting for, until it is released.
@@ -175,8 +167,8 @@ func TestHold(t *testing.T) {
 	var n int
 	err := pool.QueryRow(t.Context(), query).Scan(&n)
 	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != lockNotAvailable {
-		t.Errorf("%s while the lock is held: error = %v, want SQLSTATE %s", query, err, lockNotAvailable)
+	if !errors.As(err, &pgErr) || pgErr.Code != postgrestest.LockNotAvailable {
+		t.Errorf("%s while the lock is held: error = %v, want SQLSTATE %s", query, err, postgrestest.LockNotAvailable)
 	}
 	release()
 	if err := pool.QueryRow(t.Context(), query).Scan(&n); err != nil {

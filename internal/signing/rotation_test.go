@@ -310,29 +310,7 @@ func TestRotateRefuses(t *testing.T) {
 func TestRotateDatabaseFailure(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		breakStep func(t *testing.T, databaseURL string)
-		want      string // the SQLSTATE of Rotate's error
-	}{
-		{
-			name: "key not stored",
-			breakStep: func(t *testing.T, databaseURL string) {
-				t.Helper()
-				postgrestest.FailOn(t, databaseURL, "INSERT", "signing_keys")
-			},
-			want: raiseException,
-		},
-		{
-			name: "keys not read",
-			breakStep: func(t *testing.T, databaseURL string) {
-				t.Helper()
-				postgrestest.Hold(t, databaseURL, "LOCK TABLE signing_keys IN ACCESS EXCLUSIVE MODE")
-			},
-			want: lockNotAvailable,
-		},
-	}
-	for _, tt := range tests {
+	for _, tt := range keyStorageFailures {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			databaseURL := postgrestest.NewDatabase(t)

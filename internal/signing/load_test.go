@@ -9,6 +9,8 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -199,43 +201,52 @@ func sqlState(err error) string {
 	return pgErr.Code
 }
 
-// The SQLSTATEs of the failures postgrestest makes: an exception a trigger
-// raises, and a statement that waited for a lock past lock_timeout.
-const (
-	raiseException   = "P0001"
-	lockNotAvailable = "55P03"
-)
+// databaseFailure makes PostgreSQL fail at one step of Load or Rotate, in
+// the database at databaseURL (postgrestest).
+type databaseFailure struct {
+	name      string
+	breakStep func(t *testing.T, databaseURL string)
+	want      string // the SQLSTATE of the error that follows
+}
+
+// keyStorageFailures are the failures both Load and Rotate meet: a key
+// that is not stored, and keys that are not read.
+var keyStorageFailures = []databaseFailure{
+	{
+		name: "key not stored",
+		breakStep: func(t *testing.T, databaseURL string) {
+			t.Helper()
+			postgrestest.FailOn(t, databaseURL, "INSERT", "signing_keys")
+		},
+		want: postgrestest.RaiseException,
+	},
+	{
+		name: "keys not read",
+		breakStep: func(t *testing.T, databaseURL string) {
+			t.Helper()
+			postgrestest.Hold(t, databaseURL, "LOCK TABLE signing_keys IN ACCESS EXCLUSIVE MODE")
+		},
+		want: postgrestest.LockNotAvailable,
+	},
+}
 
 // Load fails when PostgreSQL does, and its error is PostgreSQL's, which
 // the operator reads to learn why the replica did not start: not that the
-// database holds no key, when the key could not be stored or the keys
-// could not be read. It cites no requirement: no clause in scope says how
-// an OP stores its keys.
+// database holds no key, when the first key could not be stored or the
+// keys could not be read, nor that a transaction was aborted, when the
+// lock that key generation is under could not be taken. It cites no
+// requirement: no clause in scope says how an OP stores its keys.
 func TestLoadDatabaseFailure(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		breakStep func(t *testing.T, databaseURL string)
-		want      string // the SQLSTATE of Load's error
-	}{
-		{
-			name: "first key not stored",
-			breakStep: func(t *testing.T, databaseURL string) {
-				t.Helper()
-				postgrestest.FailOn(t, databaseURL, "INSERT", "signing_keys")
-			},
-			want: raiseException,
+	tests := append(slices.Clone(keyStorageFailures), databaseFailure{
+		name: "key generation lock not taken",
+		breakStep: func(t *testing.T, databaseURL string) {
+			t.Helper()
+			postgrestest.Hold(t, databaseURL, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", signing.GenerationLockID))
 		},
-		{
-			name: "keys not read",
-			breakStep: func(t *testing.T, databaseURL string) {
-				t.Helper()
-				postgrestest.Hold(t, databaseURL, "LOCK TABLE signing_keys IN ACCESS EXCLUSIVE MODE")
-			},
-			want: lockNotAvailable,
-		},
-	}
+		want: postgrestest.LockNotAvailable,
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
