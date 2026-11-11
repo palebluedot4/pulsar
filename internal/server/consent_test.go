@@ -217,8 +217,9 @@ func TestConsentDecisionExpires(t *testing.T) {
 // with prompt=consent cannot be stored, so it gets server_error; the same
 // request sent again shows the consent page.
 //
-// The failure is made by renaming the table of authorization codes, the
-// one way to fail that request alone through a real database.
+// The failure is made by renaming the table of authorization codes, and
+// naming it back, so that the request can then be sent again; the trigger
+// of postgrestest.FailOn stays until the test ends.
 func TestConsentDecisionAfterFailure(t *testing.T) {
 	t.Parallel()
 

@@ -301,6 +301,52 @@ func TestRotateRefuses(t *testing.T) {
 	})
 }
 
+// A rotation whose key PostgreSQL does not store, or that cannot read the
+// keys stored, fails with PostgreSQL's error: it neither reports a key
+// rotated in that no replica will load, nor says the database holds no
+// key, which would tell the operator to start pulsar against a database
+// it has started against. It cites no requirement, as TestRotateRefuses
+// does not.
+func TestRotateDatabaseFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		breakStep func(t *testing.T, databaseURL string)
+		want      string // the SQLSTATE of Rotate's error
+	}{
+		{
+			name: "key not stored",
+			breakStep: func(t *testing.T, databaseURL string) {
+				t.Helper()
+				postgrestest.FailOn(t, databaseURL, "INSERT", "signing_keys")
+			},
+			want: raiseException,
+		},
+		{
+			name: "keys not read",
+			breakStep: func(t *testing.T, databaseURL string) {
+				t.Helper()
+				postgrestest.Hold(t, databaseURL, "LOCK TABLE signing_keys IN ACCESS EXCLUSIVE MODE")
+			},
+			want: lockNotAvailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			databaseURL := postgrestest.NewDatabase(t)
+			pool := postgrestest.Open(t, postgrestest.WithLockTimeout(t, databaseURL))
+			load(t, pool)
+			tt.breakStep(t, databaseURL)
+			rotated, err := signing.New(pool, secret).Rotate(t.Context())
+			if got := sqlState(err); got != tt.want {
+				t.Errorf("Rotate() with the %s = %+v, %v, want an error with SQLSTATE %s", tt.name, rotated, err, tt.want)
+			}
+		})
+	}
+}
+
 // A key stored by a replica of a release before rotation, which knows no
 // activates_at, signs from when it was generated: such a replica may store
 // the first key while a rolling deploy runs. The test clears the column of
