@@ -240,11 +240,13 @@ func TestRevocationDatabaseFailure(t *testing.T) {
 	}
 }
 
-// REQ-LOGOUT-8: a logout request, or the End-User's answer to it, whose
-// Login Session cannot be read, stored or ended gets 500: no confirmation
-// page, and no redirect to the Client or page that says the End-User is
-// signed out, or still signed in, when that is not what was stored. A
-// Login Session that cannot be ended is still signed in.
+// A logout request, or the End-User's answer to it, whose Login Session
+// cannot be read or stored gets 500: no confirmation page, and no
+// redirect to the Client or page that says the End-User is signed out, or
+// still signed in, when that is not what was stored. It cites no
+// requirement: RP-Initiated Logout 1.0 does not say how an OP answers a
+// failure of its own. TestLogoutNotEnded is the case of a Login Session
+// that cannot be ended.
 func TestLogoutDatabaseFailure(t *testing.T) {
 	t.Parallel()
 
@@ -254,14 +256,10 @@ func TestLogoutDatabaseFailure(t *testing.T) {
 		// if the request that fails is the logout request itself.
 		answer    string
 		breakStep breakStep
-		// stillSignedIn is whether to check, after the failure, that the
-		// End-User is still signed in.
-		stillSignedIn bool
 	}{
 		{name: "Login Session not read", breakStep: hold(lockLoginSessions)},
 		{name: "Login Session not saved", breakStep: failOn("INSERT", "login_sessions")},
 		{name: "Login Session not read for the confirmation", answer: confirmLogout, breakStep: hold(lockLoginSessions)},
-		{name: "Login Session not ended", answer: confirmLogout, breakStep: failOn("DELETE", "login_sessions"), stillSignedIn: true},
 		{name: "Login Session not saved for staying signed in", answer: declineLogout, breakStep: failOn("INSERT", "login_sessions")},
 	}
 	for _, tt := range tests {
@@ -269,22 +267,41 @@ func TestLogoutDatabaseFailure(t *testing.T) {
 			t.Parallel()
 			handler, databaseURL := newFailingFlowHandler(t)
 			b, hint := signedInWithHint(t, handler)
-			params := url.Values{"id_token_hint": {hint}, "post_logout_redirect_uri": {rpSignedOutURI}}
-			var resp response
-			if tt.answer == "" {
-				tt.breakStep(t, databaseURL)
-				resp = b.logout(http.MethodGet, params)
-			} else {
-				page := b.logout(http.MethodGet, params)
-				tt.breakStep(t, databaseURL)
-				resp = b.answerLogout(page, tt.answer)
-			}
+			resp := failedLogout(b, hint, tt.answer, func() { tt.breakStep(t, databaseURL) })
 			if resp.status != http.StatusInternalServerError {
 				t.Errorf("logout with the %s: status = %d, want %d; Location %q", tt.name, resp.status, http.StatusInternalServerError, resp.header.Get("Location"))
 			}
-			if tt.stillSignedIn {
-				wantSignedIn(t, b, "after a logout whose Login Session was not ended")
-			}
 		})
 	}
+}
+
+// failedLogout sends the browser b, signed in, to the logout endpoint with
+// hint and rp's post-logout redirect URI, and answers the confirmation
+// page with answer unless it is "". It calls breakStep before the last of
+// those requests, and returns that request's response.
+func failedLogout(b *browser, hint, answer string, breakStep func()) response {
+	b.t.Helper()
+	params := url.Values{"id_token_hint": {hint}, "post_logout_redirect_uri": {rpSignedOutURI}}
+	if answer == "" {
+		breakStep()
+		return b.logout(http.MethodGet, params)
+	}
+	page := b.logout(http.MethodGet, params)
+	breakStep()
+	return b.answerLogout(page, answer)
+}
+
+// REQ-LOGOUT-8: an End-User who says yes is logged out, so one whose Login
+// Session cannot be ended is not told so: the answer gets 500, and they
+// are still signed in.
+func TestLogoutNotEnded(t *testing.T) {
+	t.Parallel()
+
+	handler, databaseURL := newFailingFlowHandler(t)
+	b, hint := signedInWithHint(t, handler)
+	resp := failedLogout(b, hint, confirmLogout, func() { postgrestest.FailOn(t, databaseURL, "DELETE", "login_sessions") })
+	if resp.status != http.StatusInternalServerError {
+		t.Errorf("confirmed logout whose Login Session is not ended: status = %d, want %d; Location %q", resp.status, http.StatusInternalServerError, resp.header.Get("Location"))
+	}
+	wantSignedIn(t, b, "after a logout whose Login Session was not ended")
 }

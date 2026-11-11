@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -259,4 +260,55 @@ func TestLoadDatabaseFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Load fails with PostgreSQL's error too when only its second look for a
+// stored key fails, the one it takes once it holds the lock that key
+// generation is under: not with the error of the transaction that look
+// aborts. The test holds that lock, so that Load waits for it; once Load
+// waits, it locks the table of keys, and frees the lock, so that the
+// second look waits for the table, and gives up.
+func TestLoadDatabaseFailureOnSecondLook(t *testing.T) {
+	t.Parallel()
+
+	databaseURL := postgrestest.NewDatabase(t)
+	// Long enough for the test to lock the table while Load waits for the
+	// generation lock, however loaded the machine.
+	u, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("lock_timeout", "2s")
+	u.RawQuery = q.Encode()
+	pool := postgrestest.Open(t, u.String())
+
+	releaseGeneration := postgrestest.Hold(t, databaseURL, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", signing.GenerationLockID))
+	loaded := make(chan error, 1)
+	go func() { loaded <- signing.New(pool, secret).Load(t.Context()) }()
+	waitForLockWait(t, databaseURL, "advisory")
+	postgrestest.Hold(t, databaseURL, "LOCK TABLE signing_keys IN ACCESS EXCLUSIVE MODE")
+	releaseGeneration()
+	if err := <-loaded; sqlState(err) != postgrestest.LockNotAvailable {
+		t.Errorf("Load() whose second look for a key fails: error = %v, want one with SQLSTATE %s", err, postgrestest.LockNotAvailable)
+	}
+}
+
+// waitForLockWait returns once a backend of the database at databaseURL
+// waits for a lock of the type event names, as pg_stat_activity's
+// wait_event does, and fails the test if none does within 10 seconds.
+func waitForLockWait(t *testing.T, databaseURL, event string) {
+	t.Helper()
+	pool := postgrestest.Open(t, databaseURL)
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		var waiting bool
+		err := pool.QueryRow(t.Context(), "SELECT EXISTS (SELECT FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND wait_event = $1)", event).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("looking for a backend waiting on a lock: %v", err)
+		}
+		if waiting {
+			return
+		}
+	}
+	t.Fatalf("no backend waited on an %s lock within 10s", event)
 }

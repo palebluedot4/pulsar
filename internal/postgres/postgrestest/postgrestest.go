@@ -20,8 +20,9 @@
 // tests, succeed.
 //
 //   - [FailOn] makes every INSERT, UPDATE or DELETE on one table fail, by a
-//     trigger that raises an exception ([RaiseException]). The failure is
-//     immediate. An INSERT ... ON CONFLICT DO UPDATE fails under INSERT.
+//     statement-level trigger that raises an exception ([RaiseException]),
+//     until it is restored. The failure is immediate. An INSERT ... ON
+//     CONFLICT DO UPDATE fails under INSERT and under UPDATE.
 //   - [Hold] holds a lock, taken by a LOCK TABLE, SELECT ... FOR UPDATE or
 //     pg_advisory_xact_lock statement, on a connection of its own; a pool
 //     opened on the URL that [WithLockTimeout] returns gives up waiting for
@@ -38,9 +39,9 @@
 // Other ways were set aside. A role without a privilege needs a role on
 // the server, and binds no superuser, which the role of
 // PULSAR_TEST_DATABASE_URL may be. Closing the pool, or renaming a table,
-// fails every later step that uses it, not one. A pgx tracer that cancels
-// a query fails it in pgx, without PostgreSQL, so the transaction is not
-// aborted as a failure of PostgreSQL's would be.
+// fails every later step that uses it, of every kind, not one. A pgx
+// tracer that cancels a query fails it in pgx, without PostgreSQL, so the
+// transaction is not aborted as a failure of PostgreSQL's would be.
 package postgrestest
 
 import (
@@ -157,6 +158,14 @@ func UnreachableURL(tb testing.TB) string {
 	return "postgres://pulsar@127.0.0.1:1/pulsar?sslmode=disable&connect_timeout=1"
 }
 
+// The SQLSTATEs of the failures FailOn and Hold make: the exception the
+// trigger raises, and a statement that waited for a lock longer than
+// lock_timeout.
+const (
+	RaiseException   = "P0001"
+	LockNotAvailable = "55P03"
+)
+
 // failFunction is the trigger function FailOn installs: it raises an
 // exception that names the statement and the table.
 const failFunction = `CREATE OR REPLACE FUNCTION postgrestest_fail() RETURNS trigger
@@ -167,41 +176,39 @@ END
 $$`
 
 // FailOn makes every statement of kind op, "INSERT", "UPDATE" or "DELETE",
-// on table in the database at databaseURL fail from now until the test
-// ends, with an exception that a trigger raises before the row changes.
+// on table in the database at databaseURL fail, whether or not it would
+// change a row, from now until restore is called or the test ends. A
+// trigger raises the exception before the statement changes anything.
 // Other statements on table, and statements on other tables, are not
 // affected.
-func FailOn(tb testing.TB, databaseURL, op, table string) {
+func FailOn(tb testing.TB, databaseURL, op, table string) (restore func()) {
 	tb.Helper()
 	switch op {
 	case "INSERT", "UPDATE", "DELETE":
 	default:
 		tb.Fatalf("postgrestest: FailOn(%q): op must be INSERT, UPDATE or DELETE", op)
 	}
-	ctx, cancel := context.WithTimeout(tb.Context(), setupTimeout)
-	defer cancel()
-	trigger := "postgrestest_fail_" + strings.ToLower(op)
-	err := execOn(ctx, databaseURL,
-		failFunction,
-		"CREATE TRIGGER "+ident(trigger)+" BEFORE "+op+" ON "+ident(table)+" FOR EACH ROW EXECUTE FUNCTION postgrestest_fail()",
-	)
-	if err != nil {
-		tb.Fatalf("postgrestest: FailOn(%s, %s): %v", op, table, err)
+	trigger := ident("postgrestest_fail_" + strings.ToLower(op))
+	run := func(statements ...string) {
+		tb.Helper()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), setupTimeout)
+		defer cancel()
+		if err := execOn(ctx, databaseURL, "the test's database", statements...); err != nil {
+			tb.Fatalf("postgrestest: FailOn(%s, %s): %v", op, table, err)
+		}
 	}
+	// A statement-level trigger, so that a statement that changes no row
+	// fails too.
+	run(failFunction, "CREATE TRIGGER "+trigger+" BEFORE "+op+" ON "+ident(table)+" FOR EACH STATEMENT EXECUTE FUNCTION postgrestest_fail()")
+	return sync.OnceFunc(func() {
+		run("DROP TRIGGER " + trigger + " ON " + ident(table))
+	})
 }
 
 // lockTimeout is how long a pool opened on the URL WithLockTimeout returns
 // waits for a lock: long enough for a lock that pulsar's own transactions
 // hold, each until it commits within a request, and short enough to keep a
 // test that waits for Hold's quick.
-
-// The SQLSTATEs of the failures FailOn and Hold make: the exception the
-// trigger raises, and a statement that waited for a lock longer than
-// lock_timeout.
-const (
-	RaiseException   = "P0001"
-	LockNotAvailable = "55P03"
-)
 const lockTimeout = 200 * time.Millisecond
 
 // WithLockTimeout returns databaseURL with lock_timeout set, so that each
@@ -214,7 +221,8 @@ func WithLockTimeout(tb testing.TB, databaseURL string) string {
 		tb.Fatalf("postgrestest: parse database URL: %v", err)
 	}
 	q := u.Query()
-	// pgx sends a parameter it does not know itself to PostgreSQL as a run-time parameter when it connects.
+	// pgx sends a parameter it does not know itself to PostgreSQL as a
+	// run-time parameter when it connects.
 	q.Set("lock_timeout", fmt.Sprintf("%dms", lockTimeout.Milliseconds()))
 	u.RawQuery = q.Encode()
 	return u.String()
@@ -222,7 +230,8 @@ func WithLockTimeout(tb testing.TB, databaseURL string) string {
 
 // Hold runs statement, which takes a lock, in a transaction on a
 // connection of its own to the database at databaseURL, and holds the lock
-// until release is called or the test ends.
+// until release is called or the test ends. Once release returns, the
+// lock is free.
 func Hold(tb testing.TB, databaseURL, statement string) (release func()) {
 	tb.Helper()
 	ctx := context.WithoutCancel(tb.Context())
@@ -241,7 +250,10 @@ func Hold(tb testing.TB, databaseURL, statement string) (release func()) {
 		tb.Fatalf("postgrestest: Hold(%q): %v", statement, err)
 	}
 	release = sync.OnceFunc(func() {
-		// Closing the connection ends the transaction, and its locks with it.
+		// ROLLBACK returns once the server has ended the transaction, and
+		// its locks with it; closing the connection alone would not wait.
+		// Should it fail, closing ends the transaction all the same.
+		_ = tx.Rollback(ctx)
 		_ = conn.Close(ctx)
 	})
 	tb.Cleanup(release)
@@ -275,36 +287,40 @@ func withDatabase(server *url.URL, name string) string {
 	return u.String()
 }
 
-// withServer runs f on a new connection to server's maintenance database,
-// and closes the connection afterwards.
-func withServer(ctx context.Context, server *url.URL, f func(*pgx.Conn) error) error {
-	conn, err := pgx.Connect(ctx, server.String())
+// withConn runs f on a new connection to the database at databaseURL,
+// which name describes in an error to connect, and closes the connection
+// afterwards.
+func withConn(ctx context.Context, databaseURL, name string, f func(*pgx.Conn) error) error {
+	conn, err := pgx.Connect(ctx, databaseURL)
 	if err != nil {
-		return fmt.Errorf("connect to %s: %w", envURL, err)
+		return fmt.Errorf("connect to %s: %w", name, err)
 	}
 	defer conn.Close(ctx) //nolint:errcheck // Closing after use; a failure loses nothing, and ends the session's locks.
 	return f(conn)
 }
 
+// withServer runs f on a new connection to server's maintenance database,
+// and closes the connection afterwards.
+func withServer(ctx context.Context, server *url.URL, f func(*pgx.Conn) error) error {
+	return withConn(ctx, server.String(), envURL, f)
+}
+
 // exec runs each statement in turn on a new connection to server.
 func exec(ctx context.Context, server *url.URL, statements ...string) error {
-	return execOn(ctx, server.String(), statements...)
+	return execOn(ctx, server.String(), envURL, statements...)
 }
 
 // execOn runs each statement in turn on a new connection to the database
-// at databaseURL.
-func execOn(ctx context.Context, databaseURL string, statements ...string) error {
-	conn, err := pgx.Connect(ctx, databaseURL)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx) //nolint:errcheck // Closing after use; a failure loses nothing.
-	for _, sql := range statements {
-		if _, err := conn.Exec(ctx, sql); err != nil {
-			return err
+// at databaseURL, which name describes.
+func execOn(ctx context.Context, databaseURL, name string, statements ...string) error {
+	return withConn(ctx, databaseURL, name, func(conn *pgx.Conn) error {
+		for _, sql := range statements {
+			if _, err := conn.Exec(ctx, sql); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // create clones tmpl into a new database, dropped when the test ends, and

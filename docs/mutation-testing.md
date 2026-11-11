@@ -306,9 +306,9 @@ Database or I/O failure, classed again below:
 step of a request: a trigger that raises on a write, or a lock held past
 `lock_timeout` for a read, as `internal/postgres/postgrestest` describes.
 The tests are in `internal/server/database_failure_test.go`, with
-`TestLoadDatabaseFailure` and `TestRotateDatabaseFailure` in
-`internal/signing`. Each of the 48 was then run again by hand against
-them, and against `TestUserInfoServerError`,
+`TestLoadDatabaseFailure`, `TestLoadDatabaseFailureOnSecondLook` and
+`TestRotateDatabaseFailure` in `internal/signing`. Each of the 48 was then run again by hand against
+them, and against `TestLogoutNotEnded`, `TestUserInfoServerError`,
 `TestConsentDecisionAfterFailure` and `TestRotateRefuses`: each classed
 below as now tested was killed, and each of the others lived.
 
@@ -321,14 +321,13 @@ pgx's report that the commit rolled back, rather than the statement's,
 which PostgreSQL's own log still records. Such a mutant is classed
 equivalent where that is all it changes for a request; where the error
 is what the operator reads to learn why a replica did not start, at
-`signing.go:394`, it is not.
+`signing.go:394` and `397`, it is not.
 
-| Class                          | `internal/oidc` | `internal/signing` |
-| ------------------------------ | --------------: | -----------------: |
-| Needs a test, now tested       |              25 |                  5 |
-| Equivalent                     |               8 |                  1 |
-| Needs a test, none can kill it |               0 |                  1 |
-| Cannot fail                    |               8 |                  0 |
+| Class                    | `internal/oidc` | `internal/signing` |
+| ------------------------ | --------------: | -----------------: |
+| Needs a test, now tested |              25 |                  6 |
+| Equivalent               |               8 |                  1 |
+| Cannot fail              |               8 |                  0 |
 
 Needs a test, now tested, with what the mutant answered instead:
 
@@ -351,8 +350,9 @@ Needs a test, now tested, with what the mutant answered instead:
   database holds no key, when the first key was not stored; 227: a key
   `Rotate` reports as stored, which was not; 394: an error of `Load` that
   says a transaction was aborted, when the lock that key generation is
-  under was not taken; 445: an error of `Rotate` that says the database
-  holds no key, when the keys were not read
+  under was not taken; 397: the same, when the second look for a stored
+  key, once that lock is held, failed; 445: an error of `Rotate` that
+  says the database holds no key, when the keys were not read
 
 Equivalent. A case of `TestTokenDatabaseFailure`, `TestUserInfoServerError`
 or `TestLoadDatabaseFailure` makes each statement fail:
@@ -368,13 +368,6 @@ or `TestLoadDatabaseFailure` makes each statement fail:
 | `internal/oidc/token.go:828`      | revoking a Refresh Token Family         | As above                                                                                |
 | `internal/oidc/userinfo.go:263`   | reading an access token's record        | The claims read are then nil, which do not decode, so UserInfo answers 500 all the same |
 | `internal/signing/signing.go:372` | looking for a stored key                | `Load` looks again in its transaction, which fails the same way                         |
-
-Needs a test, none can kill it: at `signing.go:397`, `err != nil`
-replaced with `false` ignores the error of looking for a stored key again,
-inside the transaction. Like the mutant at 394, it makes `Load` fail with
-SQLSTATE 25P02 rather than the read's error, so it would need a test; but
-no test can make that read fail and not the same read at line 370 just
-before it, which returns first.
 
 Cannot fail:
 
