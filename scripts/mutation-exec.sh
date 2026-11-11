@@ -12,7 +12,10 @@
 # skipped. Two more, which go-mutesting counts as errors and this script
 # names on its output, are neither killed nor lived: 3 a test timed out, 4
 # a test found PostgreSQL out of connections (SQLSTATE 53300), because
-# something else used the test database meanwhile.
+# something else used the test database meanwhile. Any other failure counts
+# as a kill, so make mutation first runs the suite once unmutated: a suite
+# that fails without a mutant, for want of a database for instance, would
+# count every mutant killed.
 #
 # The mutant is written over the source file and the original put back on
 # exit, so make mutation runs it in a working tree of its own.

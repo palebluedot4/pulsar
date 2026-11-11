@@ -319,26 +319,36 @@ eval: ## Run a plugin's evals (PLUGIN=right-sizing); uses plan usage or API cred
 # lived. It is a measurement, never a gate: the default packages took almost
 # six hours. The mutants are written over the source, so they run in a
 # working tree of their own, checked out at HEAD and removed afterwards; and
-# one at a time, since nothing else may use the test database meanwhile. Why,
+# one at a time, since nothing else may use the test database meanwhile. The
+# suite runs once unmutated first: the exec counts any failure as a kill, so
+# a suite that fails without a mutant would count every mutant killed. Why,
 # what the scores mean, and those recorded so far: docs/mutation-testing.md.
-# Each package's report and log go to mutation/. The exec runs the go first
-# on PATH, so $(GO)'s goes first.
+# Each package's report and log go to mutation/, and its counts to the
+# console, from the report: go-mutesting's own score counts mutants that did
+# not compile as killed. The exec runs the go first on PATH, so $(GO)'s goes
+# first, with its GOROOT, which a GOROOT set for another release, as gvm
+# sets one, would override.
 MUTATION_PACKAGES ?= internal/oidc internal/registry internal/signing
 
 mutation: ## Mutation testing of the security-critical packages at HEAD; slow, not a gate
 	@mkdir -p mutation
-	@set -e; PATH="$$($(GO) env GOROOT)/bin:$$PATH"; export PATH; \
+	@set -e; GOROOT="$$($(GO) env GOROOT)"; PATH="$$GOROOT/bin:$$PATH"; export GOROOT PATH; \
 	out=$$(pwd)/mutation; tree=$$(mktemp -d "$${TMPDIR:-/tmp}/pulsar-mutation.XXXXXX"); \
 	trap 'git worktree remove --force "$$tree"' EXIT; \
+	trap 'exit 130' INT; trap 'exit 143' TERM; \
 	git worktree add --quiet --detach "$$tree" HEAD; \
 	echo "mutating $$(git rev-parse --short HEAD)"; \
+	(cd "$$tree" && $(GO) test -count=1 ./... >"$$out/baseline.log" 2>&1) \
+		|| { echo "the tests fail without a mutant; see mutation/baseline.log" >&2; exit 1; }; \
 	for p in $(MUTATION_PACKAGES); do \
 		name=$$(basename "$$p"); \
 		echo "$$(date +%H:%M) go-mutesting $$p"; \
 		(cd "$$tree" && $(TOOL) go-mutesting --config=scripts/go-mutesting.yml \
 			--exec=scripts/mutation-exec.sh "./$$p" >"$$out/$$name.log" 2>&1 \
-			&& mv report.json "$$out/$$name.json"); \
-		tail -n 1 "$$out/$$name.log"; \
+			&& mv report.json "$$out/$$name.json") \
+			|| { echo "go-mutesting failed on $$p; the end of mutation/$$name.log:" >&2; tail -n 20 "$$out/$$name.log" >&2; exit 1; }; \
+		jq -r '.stats | "killed \(.killedCount), lived \(.escapedCount), did not compile \(.skippedCount), timed out or database \(.errorCount)"' \
+			"$$out/$$name.json"; \
 	done; \
 	echo "$$(date +%H:%M) done"
 

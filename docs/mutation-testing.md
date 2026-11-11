@@ -31,7 +31,9 @@ code #5 names:
 
 It measures the commit checked out, not uncommitted changes: it checks HEAD
 out into a working tree of its own and removes it afterwards. Each
-package's results go to `mutation/`, which git ignores: `<package>.json`,
+package's results go to `mutation/`, which git ignores, and its counts to
+the console, from the report rather than go-mutesting's own score, which
+counts mutants that did not compile as killed: `<package>.json`,
 go-mutesting's report of every mutant with its mutator, its source before
 and after and its status, and `<package>.log`, which gives each mutant that
 lived, timed out or met a full database with its diff.
@@ -41,7 +43,11 @@ suite held up to about 70 of PostgreSQL's default 100 connections, so a
 second run alongside, another session's `make check` or a Stop hook, can
 fail tests with SQLSTATE 53300 ("too many clients already"). The exec
 script reports such a mutant as `DATABASE FULL`, neither killed nor lived;
-run it again alone (below).
+run it again alone (below). It counts any other failure as a kill, so the
+target runs the suite once unmutated first, and stops if it fails, as it
+does without a database. A database that stops during the run is not
+caught: every mutant after it would count as killed, so a run whose log
+ends in an unbroken line of kills is checked against the server's log.
 
 ## How it is configured, and why
 
@@ -66,10 +72,15 @@ run it again alone (below).
   database above is why it matters.
 - **`$(GO)`'s toolchain first on `PATH`.** The script runs the `go` it finds
   there.
-- **Mutators.** All that go-mutesting registers: removing a statement or
-  the body of an `if`, `else` or `case`; replacing a term of `&&` or `||`
-  with `true` or `false`; boundary changes to comparisons; arithmetic;
-  integer increments and decrements; `break` and `continue`. Its negation
+- **Mutators.** All that go-mutesting registers, as
+  `go-mutesting --list-mutators` names them: `statement/remove`,
+  `branch/if`, `branch/else` and `branch/case`, which remove a statement or
+  a body; `expression/remove`, which replaces a term of `&&` or `||` with
+  `true` or `false`; `expression/comparison`, boundary changes;
+  `arithmetic/base`, `arithmetic/bitwise`, `arithmetic/assignment` and
+  `arithmetic/assign_invert`; `numbers/incrementer` and
+  `numbers/decrementer`; and `loop/break`, `loop/condition` and
+  `loop/range_break`. Its negation
   of comparisons, `==` to `!=`, is written but not registered
   ([#55](https://github.com/avito-tech/go-mutesting/issues/55), open as of
   2026-11-11). `internal/queries` is a package of its own, so it is not
@@ -95,9 +106,9 @@ full database.
 - **Test efficacy** is killed / (killed + lived): of the mutants that
   compile, the share the tests catch. Mutants that do not compile and
   those that timed out count in neither.
-- go-mutesting's summary also counts as duplicated the mutants whose
-  source is the same as an earlier one's; they are among the counts
-  below.
+- go-mutesting's summary counts as duplicated the mutants whose source is
+  the same as an earlier one's, and does not run them; the counts below
+  leave them out.
 - A lived mutant is not always a missing test. Google, which runs mutation
   testing at code review, does not aim to kill every mutant
   ([Practical Mutation Testing at Scale](https://ar5iv.labs.arxiv.org/html/2102.11378)):
@@ -167,11 +178,28 @@ arise.
 | `internal/signing/signing.go:261`   | the error of `Active` ignored           | The zero key that follows makes signing fail with an error all the same                               |
 | `internal/signing/signing.go:527`   | the PKCS #8 decoding error ignored      | The nil key that follows is refused as not an RSA key                                                 |
 
-Where a line appears in two classes, its mutants differ. At
-`internal/oidc/authorize.go:624`, `max_age > 1` is tested; `>= 0` and
-`> -1` change only `max_age=0`, which `needsLogin` handles apart. At
-`internal/oidc/token.go:116`, `>= 0` and `> -1` are tested, `> 1` is in
-the table above.
+Where a line appears in more than one class, its mutants differ:
+
+| Line                                | Mutant                                      | Class                                                        |
+| ----------------------------------- | ------------------------------------------- | ------------------------------------------------------------ |
+| `internal/oidc/authorize.go:217`    | the `if` body, its log and its 500, removed | Database or I/O failure                                      |
+| `internal/oidc/authorize.go:217`    | the log call alone removed                  | Log or capacity only                                         |
+| `internal/oidc/authorize.go:225`    | as at 217, after saving the Login Session   | Database or I/O failure; Log or capacity only                |
+| `internal/oidc/authorize.go:346`    | as at 217, after writing the consent page   | Database or I/O failure; Log or capacity only                |
+| `internal/oidc/authorize.go:624`    | `max_age > 1`                               | Needs a test                                                 |
+| `internal/oidc/authorize.go:624`    | `>= 0`, `> -1`                              | Equivalent: they change only `max_age=0`, handled apart      |
+| `internal/oidc/issuer.go:81`        | `ip != nil && true`                         | Needs a test                                                 |
+| `internal/oidc/issuer.go:81`        | `true && ip.IsLoopback()`                   | Equivalent: a nil IP is not loopback                         |
+| `internal/oidc/token.go:116`        | `>= 0`, `> -1`                              | Needs a test                                                 |
+| `internal/oidc/token.go:116`        | `> 1`                                       | Equivalent (table above)                                     |
+| `internal/oidc/userinfo.go:122`     | the `if` body, its log and its 500, removed | Cannot fail: the claims always encode                        |
+| `internal/oidc/userinfo.go:122`     | the log call alone removed                  | Log or capacity only                                         |
+| `internal/registry/argon2.go:99`    | the `return` removed                        | Needs a test                                                 |
+| `internal/registry/argon2.go:99`    | `0` returned as `1` with the error          | Equivalent: no caller reads the value beside an error        |
+| `internal/registry/registry.go:293` | `end < -1`                                  | Needs a test                                                 |
+| `internal/registry/registry.go:293` | `end <= 0`, `end < 1`                       | Equivalent: `end` is 0 only with no host, refused either way |
+| `internal/registry/registry.go:823` | `!k.IsPublic()` replaced with `false`       | Needs a test                                                 |
+| `internal/registry/registry.go:823` | `!k.Valid()` replaced with `false`          | Equivalent (table above)                                     |
 
 | Class                   | `internal/oidc` | `internal/registry` | `internal/signing` |
 | ----------------------- | --------------: | ------------------: | -----------------: |
