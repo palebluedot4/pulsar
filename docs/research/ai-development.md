@@ -5,7 +5,7 @@ Google, then AWS, with IETF/OpenID specifications governing the product itself.
 Anything not confirmed against a primary source is marked **UNVERIFIED**.
 Five claims were corrected on 2026-11-09, after `docs/research/evals.md`
 rechecked them against their sources, and more on 2026-11-11, listed under
-"Corrected 2026-11-11" at the end.
+"Corrected 2026-11-11" below.
 
 ## The one-line consensus
 
@@ -41,8 +41,8 @@ task), among "Common approaches that don't shine".
      untrusted input", require "a human threat model review plus a security
      tool pass before merge". <https://addyosmani.com/blog/code-review-ai/>
      His "Own the Outer Loop" (2026-07-15) goes further than this item:
-     agents may "choose, route, merge, and escalate safely inside a policy",
-     while a person owns the consequences.
+     agents may "choose, route, merge, and escalate safely inside a policy,
+     but they cannot inherit the consequences."
      <https://addyosmani.com/blog/own-the-outer-loop/>
 3. **Enforce invariants mechanically; use prose only for guidance.**
    - Anthropic separates deterministic controls (hooks, deny rules, CI) from
@@ -242,14 +242,18 @@ identities.
   a session's first message); others do not. `enabledPlugins` cannot pin a
   version; a marketplace entry can pin `sha`. `code-review` sets
   `"version": "1.0.1"` in its manifest since 2026-10-26; `mattpocock-skills`
-  is pinned by SHA in the catalog. `DISABLE_AUTOUPDATER`, `DISABLE_UPDATES`
-  and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turn off the background
-  update pass unless `FORCE_AUTOUPDATE_PLUGINS=1` is set. They do not freeze
-  every update: `claude plugin install name@marketplace` refreshes that
+  is pinned by SHA in the catalog.
+- `DISABLE_AUTOUPDATER`, `DISABLE_UPDATES` and
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` each turn off the background
+  update pass, unless `FORCE_AUTOUPDATE_PLUGINS=1` is set. A second path is
+  separate: `claude plugin install name@marketplace` refreshes that
   marketplace first, and that refresh "doesn't depend on the marketplace's
-  auto-update setting or on `DISABLE_AUTOUPDATER`"; it is skipped under
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, or within 30 seconds of the
-  last refresh.
+  auto-update setting or on `DISABLE_AUTOUPDATER`". Of the three variables,
+  only `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is among the cases that
+  skip it, with a refresh in the last 30 seconds and some kinds of
+  marketplace source. The page does not name `DISABLE_UPDATES` there; that
+  it does not stop the refresh is observed only
+  (`docs/research/code-review-tools.md`).
   <https://code.claude.com/docs/en/plugins/loading.md>
 - Consequence for evals: record the Claude Code version, model IDs and plugin
   SHAs with every result, and freeze updates while running a comparison.

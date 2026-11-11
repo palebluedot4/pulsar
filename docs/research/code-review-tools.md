@@ -241,7 +241,9 @@ mattpocock-skills@claude-plugins-official --scope project` moved the copy
   before a `name@marketplace` install "doesn't depend on the marketplace's
   auto-update setting or on `DISABLE_AUTOUPDATER`", and it is skipped when
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set or the marketplace was
-  refreshed within the last 30 seconds, the throttle above. It does not
+  refreshed within the last 30 seconds, the throttle above, among other
+  cases (local and settings sources, seed directories, marketplaces
+  blocked by managed settings). It does not
   name `DISABLE_UPDATES`, so that variable's part is still observed only,
   in 2.1.319. <https://code.claude.com/docs/en/plugins/loading>
 
